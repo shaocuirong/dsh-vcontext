@@ -74,9 +74,12 @@ test('session route accepts exactly one boolean and rejects everything else', as
 
 test('dashboard route is read only and passes the event window through', async () => {
   const stub = transport({ dashboard: input => ({ budget: 2048, events: input.events }) });
-  const handler = createHandler(CONFIG, stub);
+  let reads = 0;
+  const handler = createHandler(CONFIG, stub, { read(session) { assert.equal(session, 's-1'); return { revision: ++reads }; } });
   const ok = await invoke(handler, 'GET', `${ROUTE_PREFIX}dashboard?session=s-1&events=120`);
   assert.equal(ok.status, 200);
+  assert.equal(ok.body.dashboard.live_context.revision, 1);
+  assert.equal((await invoke(handler, 'GET', `${ROUTE_PREFIX}dashboard?session=s-1`)).body.dashboard.live_context.revision, 2);
   assert.deepEqual(stub.calls[0], { session: 's-1', operation: 'dashboard', input: { events: 120 } });
   assert.equal(ok.body.dashboard.events, 120);
   assert.equal((await invoke(handler, 'GET', `${ROUTE_PREFIX}dashboard?session=s-1&events=0`)).status, 400);

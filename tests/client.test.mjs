@@ -85,6 +85,17 @@ test('the client half registers the switch, the two panels and the settings page
   assert.equal(typeof find('conversation.view').options.label(), 'string');
 });
 
+test('only the main dashboard contributes composer suppression, including its disabled hint', async () => {
+  const { module } = await loadClient();
+  const { find } = mount(module);
+  const main = find('conversation.view').component({ sessionId: 'visibility-test' });
+  const rule = findNode(main, node => node.type === 'style');
+  assert.ok(rule);
+  assert.match(text(rule), /data-vctx-main-view/);
+  assert.match(text(rule), /> \[data-composer-seat\]/);
+  assert.equal(findNode(find('sidebar.right.pane.tab').component({ sessionId: 'visibility-test' }), n => n.type === 'style'), undefined);
+});
+
 test('the composer switch renders in the off state and toggles the session on click', async () => {
   const { module } = await loadClient();
   const { find } = mount(module);

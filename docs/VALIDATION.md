@@ -12,7 +12,7 @@ python -m unittest discover -s tests -v
 npm test
 ```
 
-结果：**57 项 Python 测试和 24 项 Node 测试通过，无跳过**。Node 测试包含真实 Cordis / Harness SDK，通过插件原生入口完成工具执行与上下文组装。
+结果：**57 项 Python 测试和 28 项 Node 测试通过，无跳过**。Node 测试包含真实 Cordis / Harness SDK，通过插件原生入口完成工具执行与上下文组装。
 
 覆盖范围包括：
 
@@ -62,3 +62,6 @@ README 截图来自这个独立演示环境，使用演示页面内容，不包�
 - 未做多租户部署、Safari / Firefox 矩阵或超大数据库性能评估。
 - CI 配置包含 Windows 与 Ubuntu；以仓库 Actions 的实际结果为准。
 - 存储文本作为不可信数据传入模型；这不构成完整的提示词注入防护。
+## 实时上下文与输入框回归
+
+新增原生 SessionStore 测试，验证消息追加后立即可读、surface replacement 后旧消息移除；Cordis 事件测试验证每次 LLM 调用更新独立请求快照、会话隔离、预览限制及私有数据过滤。真实 Chrome 预览验证：新增回复自动出现、主看板隐藏输入框、切回聊天恢复、右侧面板保留输入框，浏览器异常为零。此项为隔离浏览器与原生 SDK 验证，未重启用户正在使用的桌面端。

@@ -47,7 +47,7 @@ function sessionOf(url) {
   return session && session.length <= 256 ? session : null;
 }
 
-export function createHandler(config, transport) {
+export function createHandler(config, transport, liveContext) {
   const settings = validateConfig(config);
   return async function handle(request, response) {
     let url;
@@ -124,6 +124,7 @@ export function createHandler(config, transport) {
         return send(response, 400, { ok: false, error: 'events must be 1..2000' });
       try {
         const dashboard = await transport.call(session, 'dashboard', { events });
+        dashboard.live_context = liveContext?.read(session) ?? { current: null, last_request: null, source: 'unavailable' };
         return send(response, 200, { ok: true, namespace: settings.namespace, session, dashboard });
       } catch (error) {
         // A session with no vcontext pages yet is normal, not a route failure.
@@ -136,7 +137,7 @@ export function createHandler(config, transport) {
   };
 }
 
-export function mountRoutes(ctx, config, transport) {
+export function mountRoutes(ctx, config, transport, liveContext) {
   const webServer = ctx.get('webServer');
   // The shipped web and desktop profiles always carry the HTTP carrier. A CLI
   // or SDK-only composition has none, and then there is simply no route to
@@ -144,5 +145,5 @@ export function mountRoutes(ctx, config, transport) {
   // service-resolution waterfall and can corrupt the value other plugins read,
   // which is exactly what the real-SDK test caught.
   if (!webServer || typeof webServer.register !== 'function') return () => {};
-  return webServer.register({ kind: 'prefix', path: ROUTE_PREFIX.slice(0, -1), handler: createHandler(config, transport) });
+  return webServer.register({ kind: 'prefix', path: ROUTE_PREFIX.slice(0, -1), handler: createHandler(config, transport, liveContext) });
 }
