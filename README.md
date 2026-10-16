@@ -1,5 +1,7 @@
 # dsh-vcontext
 
+当前版本：**[v0.2.0](https://github.com/shaocuirong/dsh-vcontext/releases/tag/v0.2.0)** · [更新日志](CHANGELOG.md)
+
 **DeepSeek Harness 上下文缓存插件**：持久记忆、按需换页、可配置替换策略与会话内看板。
 
 [![Tests](https://github.com/shaocuirong/dsh-vcontext/actions/workflows/test.yml/badge.svg)](https://github.com/shaocuirong/dsh-vcontext/actions/workflows/test.yml)
