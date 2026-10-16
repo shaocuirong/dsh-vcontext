@@ -1,0 +1,60 @@
+{
+  "name": "dsh-virtual-context",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "description": "Persistent virtual context, configurable paging and in-session dashboards for DeepSeek Harness",
+  "repository": { "type": "git", "url": "git+https://github.com/shaocuirong/dsh-vcontext.git" },
+  "homepage": "https://github.com/shaocuirong/dsh-vcontext#readme",
+  "bugs": { "url": "https://github.com/shaocuirong/dsh-vcontext/issues" },
+  "keywords": ["deepseek-harness", "dsh", "virtual-context", "memory", "sqlite", "context-cache"],
+  "main": "index.mjs",
+  "exports": {
+    ".": "./index.mjs",
+    "./client": "./lib/client.js"
+  },
+  "files": [
+    "index.mjs",
+    "adapter",
+    "vcontext",
+    "lib",
+    "cordis.patch.yml",
+    "README.md",
+    "docs",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-sidebar-right",
+        "@deepseek-ai/dsh-client-ui-settings"
+      ],
+      "platform": "web"
+    }
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "test:python": "python -m unittest discover -s tests -v",
+    "demo": "python -m examples.demo"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-tools": ">=0.2.0-rc.2 <0.3.0"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "@deepseek-ai/cordis": "4.0.4",
+    "@deepseek-ai/dsh-agent": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-host-webserver": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-scope": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-system-prompt": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-tools": "0.2.0-rc.2"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

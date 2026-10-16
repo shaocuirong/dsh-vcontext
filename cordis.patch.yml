@@ -1,0 +1,10 @@
+# Defaults are resolved relative to DSH_HOME (or ~/.dsh).
+# Put optional absolute dbPath/python overrides in your local profile patch.
+- insert:
+    - id: dsh-virtual-context
+      name: dsh-virtual-context
+      config:
+        namespace: dsh-vcontext
+        budget: 8192
+        transport: service
+        timeoutMs: 30000
