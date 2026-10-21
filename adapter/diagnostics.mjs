@@ -2,6 +2,18 @@ import { createHash } from 'node:crypto';
 
 const LEVELS = { debug: 0, info: 1, warn: 2, error: 3, silent: 4 };
 const safeOperation = value => typeof value === 'string' && /^[a-z_]{1,64}$/.test(value) ? value : 'invalid';
+function errorCode(error, signal) {
+  if (signal?.aborted) return 'CANCELLED';
+  const message = String(error?.message ?? '');
+  if (error?.code === 'ENOENT') return 'RUNTIME_NOT_FOUND';
+  if (/timed out/.test(message)) return 'TIMEOUT';
+  if (/busy:|pending request/.test(message)) return 'BUSY';
+  if (/database is locked/.test(message)) return 'DB_LOCKED';
+  if (/response exceeds/.test(message)) return 'RESPONSE_LIMIT';
+  if (/unparsable response|invalid response envelope/.test(message)) return 'WORKER_PROTOCOL';
+  if (/service exited|EPIPE/.test(message)) return 'WORKER_EXIT';
+  return 'OPERATION_FAILED';
+}
 
 /** Bounded, metadata-only diagnostics. Never retain input, output or raw errors. */
 export function createDiagnostics({ logger, logLevel = 'info', diagnosticLimit = 200, slowOperationMs = 1000 } = {}) {
@@ -17,7 +29,7 @@ export function createDiagnostics({ logger, logLevel = 'info', diagnosticLimit =
   function record(event, level = 'info', fields = {}) {
     // Copy a whitelist, never caller-controlled diagnostic payloads.
     const row = { at: new Date().toISOString(), event, level };
-    for (const key of ['request_id', 'operation', 'session_hash', 'duration_ms', 'outcome', 'error_type'])
+    for (const key of ['request_id', 'operation', 'session_hash', 'duration_ms', 'outcome', 'error_type', 'error_code'])
       if (fields[key] !== undefined) row[key] = fields[key];
     events.push(row);
     if (events.length > diagnosticLimit) events.shift();
@@ -41,10 +53,12 @@ export function createDiagnostics({ logger, logLevel = 'info', diagnosticLimit =
       const started = performance.now();
       let outcome = 'ok';
       let errorType;
+      let code;
       try { return await body(); }
       catch (error) {
         outcome = signal?.aborted ? 'cancelled' : 'error';
         errorType = ['Error', 'TypeError', 'RangeError', 'AbortError', 'SyntaxError'].includes(error?.name) ? error.name : 'Error';
+        code = errorCode(error, signal);
         totals.failed++; count.failed++;
         if (outcome === 'cancelled') totals.cancelled++;
         throw error;
@@ -53,7 +67,7 @@ export function createDiagnostics({ logger, logLevel = 'info', diagnosticLimit =
         totals.inflight--; count.duration_ms += elapsed;
         if (elapsed >= slowOperationMs) totals.slow++;
         record('operation.completed', outcome !== 'ok' || elapsed >= slowOperationMs ? 'warn' : 'debug',
-          { ...fields, duration_ms: elapsed, outcome, error_type: errorType });
+          { ...fields, duration_ms: elapsed, outcome, error_type: errorType, error_code: code });
       }
     },
     snapshot() { return structuredClone({ totals, operations, events }); },
