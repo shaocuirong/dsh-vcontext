@@ -1,6 +1,6 @@
 # dsh-vcontext
 
-当前版本：**[v0.3.0](https://github.com/shaocuirong/dsh-vcontext/releases/tag/v0.3.0)** · [更新日志](CHANGELOG.md) · [优化与审查节点](docs/OPTIMIZATION-0.3.0.md)
+当前版本：**[v0.3.1](https://github.com/shaocuirong/dsh-vcontext/releases/tag/v0.3.1)** · [更新日志](CHANGELOG.md) · [优化与审查节点](docs/OPTIMIZATION-0.3.0.md) · [补丁验证](docs/VALIDATION.md)
 
 **DeepSeek Harness 上下文缓存插件**：持久记忆、按需换页、可配置替换策略与会话内看板。
 
@@ -16,7 +16,7 @@
 - **dsh-context 联动**：可选读取公开会话投影，展示上下文组成、压缩次数和供应商累计用量；优先使用宿主 token-meter，无数据时明确显示估算或未连接状态。
 - **运行诊断**：有界结构化日志、请求编号、耗时、错误分类、慢调用与健康检查；不记录正文或原始错误内容。
 - **内核恢复**：回滚时清除未提交缓存、复用页面序列化、限制 RPC 缓冲和排队数量，异常服务可重新启动；存储不可用时保留上次快照并允许宿主继续生成。
-- **实时上下文**：重新读取宿主当前派生消息，并展示插件加载后最近一次 LLM 调用的独立快照；默认每 2 秒刷新。
+- **实时上下文**：读取活跃会话或只读还原磁盘上的已有多轮会话，无需新发消息；展示插件加载后最近一次 LLM 调用的独立快照，默认每 2 秒刷新。
 - **专用看板**：主看板隐藏输入框，回到聊天自动恢复；右侧面板不影响聊天输入。
 - **分层记忆**：`core` 核心页常驻；`working` 工作页按需换出；`archive` 归档页可检索恢复。
 - **四种替换模式**：手动、每 N 轮、达到占用阈值、轮次或阈值任一满足。
@@ -114,6 +114,8 @@ npm run bench
 `VCTX_PYTHON` 可指定测试使用的 Python；`VCTX_SDK_ROOT` 可指定独立 SDK 安装目录。官方 SDK 测试缺少依赖时会明确跳过，不应把跳过当成验证成功。仓库 CI 在 Windows / Ubuntu 上运行 Python 和 Node 测试。
 
 0.3.0 在本机通过 41 项 Node/SDK 测试和 63 项 Python 测试；包含真实 `dsh-context@0.74.0` 注册、上下文替换与卸载验证。另使用本机 Harness `0.2.1-rc.2` 的隔离 profile 检查设置、开关及演示会话投影；本轮未进行供应商模型生成测试。详见 [优化与可用性审查](docs/OPTIMIZATION-0.3.0.md)。
+
+0.3.1 修复已有会话开启面板后读不到历史上下文的问题：本机 47 项 Node、63 项 Python 测试通过；真实 Harness JSONL 三轮会话在开启面板后、宿主重启后均能直接读取，读取前后日志 SHA256 一致。历史读取不会自动创建 Agent、写入缓存页或构造“最近模型请求”。
 
 ## 可选启用 dsh-context 联动
 

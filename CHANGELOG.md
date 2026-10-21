@@ -2,6 +2,21 @@
 
 版本规则：重大功能更新升级次版本号（例如 0.1.0 → 0.2.0），修复升级补丁号（例如 0.2.0 → 0.2.1）。不兼容变更需明确标注；进入 1.0 后按语义化版本升级主版本号。每次发布同步版本元数据、更新日志、Git 标签和 GitHub Release。
 
+## [0.3.1] - 2026-10-21
+
+### 修复
+
+- 已有多轮会话仅从历史记录浏览、尚未恢复为活跃 Agent 时，开启面板后也能立即读取上下文；不再只查询内存活跃会话。
+- 使用宿主 sessionQuery.observeSession 只读接口和脱离活跃注册的 Session 还原消息、系统提示与工具定义，遵循压缩、替换及消息投影，不自动发消息或写入缓存页。
+- 看板等待异步历史读取完成；合并同会话并发读取、串行处理冷历史，并在成功或失败后释放观测租约。
+- 明确区分历史接口缺失、会话不存在、读取失败与队列繁忙，支持刷新重试。
+
+### 升级与验证
+
+- 重启 Harness 后生效；不修改数据库 schema、不重建或覆盖已有对话与配置。最近模型请求仍只来自插件加载后的真实调用。
+- 47 项 Node/SDK 测试、63 项 Python 测试通过，无跳过。新增 6 项历史读取回归。
+- 本机 Harness 0.2.1-rc.2 + 原生 JSONL：三轮已结束、未激活会话开启面板后立即读取到 6 条消息；重启宿主后仍通过，磁盘日志 SHA256 不变。
+
 ## [0.3.0] - 2026-10-21
 
 ### 新增
@@ -58,4 +73,5 @@
 
 [0.2.0]: https://github.com/shaocuirong/dsh-vcontext/releases/tag/v0.2.0
 [0.3.0]: https://github.com/shaocuirong/dsh-vcontext/releases/tag/v0.3.0
+[0.3.1]: https://github.com/shaocuirong/dsh-vcontext/releases/tag/v0.3.1
 [0.1.0]: https://github.com/shaocuirong/dsh-vcontext/tree/78ec92e3ce20bd4de9d98ece84b3f95109d56898

@@ -165,3 +165,9 @@ with ContextStore('semantic.db', 'session-1', embedder=embedder,
 服务请求帧最多 2,000,000 字节（包括 JSON 信封和换行），响应行最多 8,000,000 字节。超限或协议损坏会终止该进程并拒绝关联调用；下一次请求可启动新进程。写入取消或超时可能已经提交，必须先检查状态，不可盲目重试。
 
 HTTP 路由适用于本机单用户宿主，并拒绝跨来源浏览器请求；session 参数是隔离键，不是认证凭据。不要将原始路由直接暴露给不可信网络或多租户。
+
+### 已有会话读取（0.3.1）
+
+看板查询优先派生活跃会话；未激活时，通过宿主 sessionQuery.observeSession（projectionMode=none）读取完整持久化日志，再用宿主 SessionStore.prepare 只读还原模型可见表面。不会注册、激活会话或修改历史；消息投影、压缩和替换仍由宿主处理。观测租约在查询完成后释放，同会话并发请求合并，不同会话的冷读取串行执行，待处理会话最多 32 个。
+
+`dashboard.live_context.source` 为 session.deriveMessages 或 sessionQuery.observeSession；失败时为 unavailable，并返回 read_error：HISTORY_UNAVAILABLE、HISTORY_NOT_FOUND、HISTORY_READ_FAILED 或 HISTORY_BUSY。刷新可以重试。历史页面和最近模型请求是两个概念；没有新调用时，last_request 仍可为空。

@@ -18,7 +18,7 @@ test('native dsh-context 0.74 projection connects, follows replacement and unloa
   try {
     const first = session.append('user/message', { id: 'one', role: 'user', source: { kind: 'user' },
       content: [{ type: 'text', text: 'PRIVATE_CONTENT'.repeat(100) }] }, { surfaceOp: 'append' });
-    const connected = live.read(session.id).dsh_context;
+    const connected = (await live.read(session.id)).dsh_context;
     assert.equal(connected.status, 'connected', JSON.stringify(connected));
     assert.ok(connected.composition.user > 0);
     assert.equal(connected.pressure.source, 'dsh-context-estimate');
@@ -27,11 +27,11 @@ test('native dsh-context 0.74 projection connects, follows replacement and unloa
       content: [{ type: 'text', text: 'summary' }] }, {
       surfaceOp: { op: 'replace', startSeq: first.seq, endSeq: first.seq }, sourceEventSeqs: [first.seq],
     });
-    const replaced = live.read(session.id).dsh_context;
+    const replaced = (await live.read(session.id)).dsh_context;
     assert.ok(replaced.composition.user < connected.composition.user);
     assert.equal(replaced.as_of_seq, session.seq - 1);
     await fiber.dispose();
-    assert.equal(live.read(session.id).dsh_context.status, 'plugin-unavailable');
+    assert.equal((await live.read(session.id)).dsh_context.status, 'plugin-unavailable');
   } finally { live.dispose(); await root.fiber.dispose(); }
 });
 

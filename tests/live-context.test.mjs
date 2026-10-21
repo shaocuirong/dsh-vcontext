@@ -13,22 +13,22 @@ test('reads current derived history each time and captures each request separate
   } : undefined });
   const live = createLiveContext(root);
   try {
-    assert.equal(live.read('alice').current.message_count, 2);
+    assert.equal((await live.read('alice')).current.message_count, 2);
     const send = () => root.waterfall('llm/stream', { sessionId: 'alice', messages, apiKey: 'DO_NOT_EXPOSE' }, () => 'stream');
     assert.equal(send(), 'stream');
-    const first = live.read('alice').last_request;
+    const first = (await live.read('alice')).last_request;
     messages = [...messages, { role: 'assistant', content: 'new reply' }];
-    assert.equal(live.read('alice').current.message_count, 3);
-    assert.equal(live.read('alice').last_request.message_count, 2);
+    assert.equal((await live.read('alice')).current.message_count, 3);
+    assert.equal((await live.read('alice')).last_request.message_count, 2);
     send();
-    assert.equal(live.read('alice').last_request.message_count, 3);
-    assert.notEqual(live.read('alice').last_request.fingerprint, first.fingerprint);
+    assert.equal((await live.read('alice')).last_request.message_count, 3);
+    assert.notEqual((await live.read('alice')).last_request.fingerprint, first.fingerprint);
     // A surface replacement must discard the previous history, not append it.
     messages = [{ role: 'user', content: 'compacted summary' }];
-    assert.doesNotMatch(live.read('alice').current.preview, /first|new reply/);
-    assert.equal(live.read('bob').current, null);
-    assert.equal(live.read('bob').last_request, null);
-    assert.doesNotMatch(JSON.stringify(live.read('alice')), /DO_NOT_EXPOSE/);
+    assert.doesNotMatch((await live.read('alice')).current.preview, /first|new reply/);
+    assert.equal((await live.read('bob')).current, null);
+    assert.equal((await live.read('bob')).last_request, null);
+    assert.doesNotMatch(JSON.stringify((await live.read('alice'))), /DO_NOT_EXPOSE/);
   } finally { live.dispose(); await root.fiber.dispose(); }
 });
 
@@ -40,13 +40,13 @@ test('native SessionStore append and surface compaction are reflected without re
   const user = (id, text) => ({ id, role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text }] });
   try {
     const first = session.append('user/message', user('one', 'original'), { surfaceOp: 'append' });
-    assert.equal(live.read('native-live').current.message_count, 1);
+    assert.equal((await live.read('native-live')).current.message_count, 1);
     const second = session.append('user/message', user('two', 'new message'), { surfaceOp: 'append' });
-    assert.equal(live.read('native-live').current.message_count, 2);
+    assert.equal((await live.read('native-live')).current.message_count, 2);
     session.append('user/message', user('summary', 'compacted summary'), {
       surfaceOp: { op: 'replace', startSeq: first.seq, endSeq: second.seq }, sourceEventSeqs: [first.seq, second.seq],
     });
-    const current = live.read('native-live').current;
+    const current = (await live.read('native-live')).current;
     assert.equal(current.message_count, 1);
     assert.match(current.preview, /compacted summary/);
     assert.doesNotMatch(current.preview, /original|new message/);
