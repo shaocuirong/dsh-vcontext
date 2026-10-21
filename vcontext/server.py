@@ -65,7 +65,19 @@ class Service:
         self._order.remove(scope)
         self._order.append(scope)
 
+    def close(self):
+        """Idempotently release every SQLite connection, including on EOF."""
+        self.closed = True
+        try:
+            for store in self._stores.values():
+                store.close()
+        finally:
+            self._stores.clear()
+            self._order.clear()
+
     def handle(self, request):
+        if self.closed:
+            raise ContextError('service is closed')
         if not isinstance(request, dict):
             raise ContextError('request must be an object')
         request_id = request.get('id')
@@ -95,8 +107,14 @@ def encode(payload):
 
 
 def serve(service, stdin, stdout):
-    for line in stdin:
+    while True:
+        # readline(size) bounds allocation even for an unterminated request.
+        line = stdin.readline(MAX_REQUEST_BYTES + 1)
+        if not line:
+            break
         if len(line) > MAX_REQUEST_BYTES:
+            while line and not line.endswith(b'\n'):
+                line = stdin.readline(MAX_REQUEST_BYTES + 1)
             stdout.write(encode(dict(id=-1, ok=False, error=dict(type='ContextError', message='request too large'))))
             stdout.flush()
             continue
