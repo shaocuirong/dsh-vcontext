@@ -801,12 +801,15 @@ class ContextStore:
         if not force and not new_turn and previous.get('epoch') == self._epoch_now() and previous.get('policy') == policy:
             triggered = False
         result = dict(triggered=bool(triggered), evicted=[], before=before, after=before,
-                      target=int(self.budget * policy['target_pct'] / 100), turns=turns, runs=runs)
+                      target=int(self.budget * policy['target_pct'] / 100), turns=turns, runs=runs,
+                      outcome='unchanged', noop_reason='not_triggered')
         if triggered:
             reason = 'manual' if force else 'threshold' if threshold and policy['mode'] != 'turns' else 'turns'
             candidates = [r for r in rows if r['tier'] == 'working']
             recent = {r['id'] for r in sorted(candidates, key=lambda r: (-r['touched'], -r['seq']))[:policy['keep_recent']]}
+            working_count = len(candidates)
             candidates = [r for r in candidates if r['id'] not in recent]
+            result.update(working_pages=working_count, protected_pages=len(recent), eligible_pages=len(candidates))
             if policy['strategy'] == 'lru':
                 candidates.sort(key=lambda r: (r['touched'], r['seq']))
             else:
@@ -821,7 +824,11 @@ class ContextStore:
                 self._record_residency(victim['id'], 'working', 'archive', 'policy_replace', reason, victim)
                 result['evicted'].append(victim['id'])
                 result['after'] = self.count(self._text(self._all(resident=True)))
-            runs += 1
+            if result['evicted']:
+                runs += 1
+            result.update(outcome='replaced' if result['evicted'] else 'unchanged',
+                          noop_reason=None if result['evicted'] else 'no_working_pages' if not working_count
+                          else 'protected_pages' if not candidates else 'below_target')
             turns = 0
             result.update(reason=reason, runs=runs, turns=turns,
                           target_reached=result['after'] <= result['target'], updated=time.time(), policy=policy,

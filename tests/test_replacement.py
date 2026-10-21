@@ -27,6 +27,21 @@ class ReplacementTests(unittest.TestCase):
         self.assertFalse(result['triggered'])
         self.assertEqual(result['evicted'], [])
 
+    def test_empty_session_explains_noop_and_does_not_count_a_replacement(self):
+        result = self.store.policy_tick(force=True)
+        self.assertEqual(result['noop_reason'], 'no_working_pages')
+        self.assertEqual(result['outcome'], 'unchanged')
+        self.assertEqual(result['runs'], 0)
+        self.assertEqual(result['working_pages'], 0)
+
+    def test_protected_and_below_target_are_distinct_noop_reasons(self):
+        self.store.write('small working page', tier='working')
+        self.assertEqual(self.store.policy_tick(force=True)['noop_reason'], 'protected_pages')
+        self.store.set_policy(keep_recent=0)
+        result = self.store.policy_tick(force=True)
+        self.assertEqual(result['noop_reason'], 'below_target')
+        self.assertEqual(result['runs'], 0)
+
     def test_interval_deduplicates_steps_persists_and_preserves_content(self):
         core, working = self.pages()
         self.store.set_policy(mode='turns', every_n=2, target_pct=20)
