@@ -20,7 +20,13 @@ export function validateConfig(config) {
     throw new Error('model must be a model name or local directory');
   if (config.transport !== undefined && !['service', 'process'].includes(config.transport))
     throw new Error("transport must be 'service' or 'process'");
-  return { ...config, budget, timeoutMs, python: config.python ?? 'python' };
+  const maxPending = config.maxPending ?? 128;
+  const maxScopes = config.maxScopes ?? 32;
+  if (!Number.isSafeInteger(maxPending) || maxPending < 1 || maxPending > 4096)
+    throw new Error('maxPending must be in 1..4096');
+  if (!Number.isSafeInteger(maxScopes) || maxScopes < 1 || maxScopes > 256)
+    throw new Error('maxScopes must be in 1..256');
+  return { ...config, budget, timeoutMs, maxPending, maxScopes, python: config.python ?? 'python' };
 }
 
 export class Bridge {
