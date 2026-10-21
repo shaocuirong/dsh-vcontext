@@ -1,13 +1,25 @@
 {
   "name": "dsh-virtual-context",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "private": true,
   "description": "Persistent virtual context, configurable paging and in-session dashboards for DeepSeek Harness",
-  "repository": { "type": "git", "url": "git+https://github.com/shaocuirong/dsh-vcontext.git" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/shaocuirong/dsh-vcontext.git"
+  },
   "homepage": "https://github.com/shaocuirong/dsh-vcontext#readme",
-  "bugs": { "url": "https://github.com/shaocuirong/dsh-vcontext/issues" },
-  "keywords": ["deepseek-harness", "dsh", "virtual-context", "memory", "sqlite", "context-cache"],
+  "bugs": {
+    "url": "https://github.com/shaocuirong/dsh-vcontext/issues"
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "virtual-context",
+    "memory",
+    "sqlite",
+    "context-cache"
+  ],
   "main": "index.mjs",
   "exports": {
     ".": "./index.mjs",
