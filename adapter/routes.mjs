@@ -47,7 +47,7 @@ function sessionOf(url) {
   return session && session.length <= 256 ? session : null;
 }
 
-export function createHandler(config, transport, liveContext, diagnostics) {
+export function createHandler(config, transport, liveContext, diagnostics, replacement) {
   const settings = validateConfig(config);
   return async function handle(request, response) {
     let url;
@@ -65,6 +65,22 @@ export function createHandler(config, transport, liveContext, diagnostics) {
     }
     if (foreignOrigin || request.headers?.['sec-fetch-site'] === 'cross-site')
       return send(response, 403, { ok: false, error: 'same-origin request required' });
+
+    if (url.pathname === `${ROUTE_PREFIX}compact`) {
+      if (!replacement) return send(response, 503, { ok: false, error: '宿主上下文替换服务尚未就绪。' });
+      try {
+        if (request.method === 'GET') {
+          const session = sessionOf(url);
+          if (!session) throw new Error('session required');
+          return send(response, 200, { ok: true, job: replacement.read(session) });
+        }
+        if (request.method !== 'POST') return send(response, 405, { ok: false, error: 'GET or POST only' });
+        const body = JSON.parse(await readBody(request));
+        if (typeof body?.session !== 'string' || !body.session || body.session.length > 256 || Object.keys(body).some(key => key !== 'session'))
+          throw new Error('session required');
+        return send(response, 202, { ok: true, job: replacement.start(body.session) });
+      } catch (error) { return send(response, 400, { ok: false, error: String(error.message ?? error) }); }
+    }
 
     if (url.pathname === `${ROUTE_PREFIX}health`) {
       if (request.method !== 'GET') return send(response, 405, { ok: false, error: 'GET only' });
@@ -140,6 +156,7 @@ export function createHandler(config, transport, liveContext, diagnostics) {
       try {
         const dashboard = await transport.call(session, 'dashboard', { events });
         dashboard.live_context = await liveContext?.read(session) ?? { current: null, last_request: null, source: 'unavailable' };
+        dashboard.context_replacement = replacement?.read(session) ?? null;
         if (diagnostics) dashboard.diagnostics = diagnostics.snapshot();
         return send(response, 200, { ok: true, namespace: settings.namespace, session, dashboard });
       } catch (error) {
@@ -153,7 +170,7 @@ export function createHandler(config, transport, liveContext, diagnostics) {
   };
 }
 
-export function mountRoutes(ctx, config, transport, liveContext, diagnostics) {
+export function mountRoutes(ctx, config, transport, liveContext, diagnostics, replacement) {
   const webServer = ctx.get('webServer');
   // The shipped web and desktop profiles always carry the HTTP carrier. A CLI
   // or SDK-only composition has none, and then there is simply no route to
@@ -161,5 +178,5 @@ export function mountRoutes(ctx, config, transport, liveContext, diagnostics) {
   // service-resolution waterfall and can corrupt the value other plugins read,
   // which is exactly what the real-SDK test caught.
   if (!webServer || typeof webServer.register !== 'function') return () => {};
-  return webServer.register({ kind: 'prefix', path: ROUTE_PREFIX.slice(0, -1), handler: createHandler(config, transport, liveContext, diagnostics) });
+  return webServer.register({ kind: 'prefix', path: ROUTE_PREFIX.slice(0, -1), handler: createHandler(config, transport, liveContext, diagnostics, replacement) });
 }
