@@ -1,5 +1,6 @@
 import { createTransport } from './transport.mjs';
 import { isMutating } from './operations.mjs';
+import { createDiagnostics } from './diagnostics.mjs';
 
 export const guidance = `Use vctx to manage durable context pages in this session.
 Store useful results with write/ingest before host compaction; archive is the default tier.
@@ -24,7 +25,8 @@ compact {"page_id":"id","summary":"short fact","expected_version":1}.
 Check the installation's API.md for full argument fields. Avoid storing secrets.`;
 
 export function mount(ctx, config, defineTool) {
-  const transport = createTransport(config);
+  const diagnostics = createDiagnostics({ ...config, logger: ctx.logger });
+  const transport = createTransport(config, diagnostics);
   const attached = new Map();
   let disposed = false;
   function attach(agent) {
@@ -53,7 +55,7 @@ export function mount(ctx, config, defineTool) {
       const sourceKind = event?.data?.source?.kind;
       if (event?.type === 'user/message' && (!sourceKind || sourceKind === 'user') && Number.isSafeInteger(event.seq)) {
         Promise.resolve(transport.call(agent.id, 'policy_tick', { turn_id: String(event.seq) }))
-          .catch(error => { if (ctx.logger?.warn) ctx.logger.warn(`上下文缓存自动替换失败：${error.message}`); });
+          .catch(() => {}); // Failure is recorded by the instrumented transport.
       }
       const usage = event?.type === 'assistant/message' ? event.data?.usage : null;
       if (!usage) return;
@@ -125,5 +127,5 @@ export function mount(ctx, config, defineTool) {
     attached.clear();
     await transport.dispose();
   });
-  return { transport, bridge: transport, refresh };
+  return { transport, bridge: transport, refresh, diagnostics };
 }

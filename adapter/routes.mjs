@@ -47,7 +47,7 @@ function sessionOf(url) {
   return session && session.length <= 256 ? session : null;
 }
 
-export function createHandler(config, transport, liveContext) {
+export function createHandler(config, transport, liveContext, diagnostics) {
   const settings = validateConfig(config);
   return async function handle(request, response) {
     let url;
@@ -57,6 +57,13 @@ export function createHandler(config, transport, liveContext) {
       return send(response, 400, { ok: false, error: 'bad url' });
     }
     if (!url.pathname.startsWith(ROUTE_PREFIX)) return send(response, 404, { ok: false, error: 'unknown route' });
+
+    if (url.pathname === `${ROUTE_PREFIX}health`) {
+      if (request.method !== 'GET') return send(response, 405, { ok: false, error: 'GET only' });
+      if (!sessionOf(url)) return send(response, 400, { ok: false, error: 'session required' });
+      return send(response, 200, { ok: true, worker: transport.health ?? null,
+        diagnostics: diagnostics?.snapshot() ?? null });
+    }
 
     if (url.pathname === `${ROUTE_PREFIX}policy`) {
       try {
@@ -125,6 +132,7 @@ export function createHandler(config, transport, liveContext) {
       try {
         const dashboard = await transport.call(session, 'dashboard', { events });
         dashboard.live_context = liveContext?.read(session) ?? { current: null, last_request: null, source: 'unavailable' };
+        if (diagnostics) dashboard.diagnostics = diagnostics.snapshot();
         return send(response, 200, { ok: true, namespace: settings.namespace, session, dashboard });
       } catch (error) {
         // A session with no vcontext pages yet is normal, not a route failure.
@@ -137,7 +145,7 @@ export function createHandler(config, transport, liveContext) {
   };
 }
 
-export function mountRoutes(ctx, config, transport, liveContext) {
+export function mountRoutes(ctx, config, transport, liveContext, diagnostics) {
   const webServer = ctx.get('webServer');
   // The shipped web and desktop profiles always carry the HTTP carrier. A CLI
   // or SDK-only composition has none, and then there is simply no route to
@@ -145,5 +153,5 @@ export function mountRoutes(ctx, config, transport, liveContext) {
   // service-resolution waterfall and can corrupt the value other plugins read,
   // which is exactly what the real-SDK test caught.
   if (!webServer || typeof webServer.register !== 'function') return () => {};
-  return webServer.register({ kind: 'prefix', path: ROUTE_PREFIX.slice(0, -1), handler: createHandler(config, transport, liveContext) });
+  return webServer.register({ kind: 'prefix', path: ROUTE_PREFIX.slice(0, -1), handler: createHandler(config, transport, liveContext, diagnostics) });
 }
