@@ -139,7 +139,7 @@ export function createHandler(config, transport, liveContext, diagnostics) {
         return send(response, 400, { ok: false, error: 'events must be 1..2000' });
       try {
         const dashboard = await transport.call(session, 'dashboard', { events });
-        dashboard.live_context = liveContext?.read(session) ?? { current: null, last_request: null, source: 'unavailable' };
+        dashboard.live_context = await liveContext?.read(session) ?? { current: null, last_request: null, source: 'unavailable' };
         if (diagnostics) dashboard.diagnostics = diagnostics.snapshot();
         return send(response, 200, { ok: true, namespace: settings.namespace, session, dashboard });
       } catch (error) {
