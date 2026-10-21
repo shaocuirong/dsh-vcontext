@@ -147,7 +147,7 @@ with ContextStore('semantic.db', 'session-1', embedder=embedder,
 
 - `replacement_policy`：读取同 namespace 的策略。
 - `set_policy`：接受 `mode`（manual / turns / threshold / either）、`every_n`（1–100）、`threshold_pct`（10–100）、`target_pct`（5–95 且小于阈值）、`strategy`（value / lru）、`keep_recent`（0–20）。
-- `policy_tick`：可选 `turn_id` 用于新用户消息序号去重；`force=true` 仅由用户点击手动操作提交。返回 `triggered`、`evicted`、`before/after/target`、`turns/runs`；触发时还返回原因、目标是否达到和时间。
+- `policy_tick`：可选 `turn_id` 用于新用户消息序号去重；`force=true` 仅由用户点击手动操作提交。返回 `triggered`、`evicted`、`before/after/target`、`turns/runs`；触发时还返回原因、目标是否达到和时间。0.4.0 起增加 outcome（replaced / unchanged）与 noop_reason（not_triggered / no_working_pages / protected_pages / below_target）；runs 只在实际归档后递增，旧计数保留。
 - `dashboard` 额外返回 `replacement.policy` 和 `replacement.state`，包含持久轮次与最近执行结果。
 
 完整行为和边界见 [中文使用说明](USAGE.zh-CN.md)。
@@ -171,3 +171,11 @@ HTTP 路由适用于本机单用户宿主，并拒绝跨来源浏览器请求；
 看板查询优先派生活跃会话；未激活时，通过宿主 sessionQuery.observeSession（projectionMode=none）读取完整持久化日志，再用宿主 SessionStore.prepare 只读还原模型可见表面。不会注册、激活会话或修改历史；消息投影、压缩和替换仍由宿主处理。观测租约在查询完成后释放，同会话并发请求合并，不同会话的冷读取串行执行，待处理会话最多 32 个。
 
 `dashboard.live_context.source` 为 session.deriveMessages 或 sessionQuery.observeSession；失败时为 unavailable，并返回 read_error：HISTORY_UNAVAILABLE、HISTORY_NOT_FOUND、HISTORY_READ_FAILED 或 HISTORY_BUSY。刷新可以重试。历史页面和最近模型请求是两个概念；没有新调用时，last_request 仍可为空。
+
+### 会话上下文替换（0.4.0）
+
+`POST /vctx/compact` 仅接受 `{"session":"会话id"}`，返回 HTTP 202 和 `job`（id、status=running、started_at）。后端按会话合并正在执行的任务，不自动重试变更。`GET /vctx/compact?session=<id>` 返回当前任务或 null；dashboard.context_replacement 同步返回它。状态为 running / completed / failed，时间单位毫秒，完成后包含 before/after（messages、bytes）、outcome（replaced / noop）、shadowed_items、shadowed_tokens 和可读 message；失败包含 error_code。会话不存在或被其他 writer 占用等恢复拒绝统一为 inactive。
+
+服务调用公开 sessionController.resolveAgent，由宿主拥有恢复后的 Agent 生命周期；优先通过 agentPresets.serviceFor 读取隔离服务，兼容 agent.ctx 与全局服务。实际替换调用 compactNow，保留原日志，通过宿主追加摘要与 surface replacement 事件实现。原始历史仍占磁盘，模型可见上下文减少；可能调用宿主摘要模型。生成中或摘要、提交、持久化失败不会伪报成功。
+
+任务结果只保留在进程内，最多 128 个会话；满时淘汰已完成记录，不淘汰运行中任务。重启后不能追溯任务状态，必须先检查当前上下文和宿主日志，再决定是否重试。卸载会取消并等待任务结束。诊断事件为 context.replace.started / completed / failed，不包含正文或原始异常。`POST /vctx/replace` 继续只归档插件工作页，与本接口互不替代。

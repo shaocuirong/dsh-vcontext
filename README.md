@@ -1,18 +1,19 @@
 # dsh-vcontext
 
-当前版本：**[v0.3.1](https://github.com/shaocuirong/dsh-vcontext/releases/tag/v0.3.1)** · [更新日志](CHANGELOG.md) · [优化与审查节点](docs/OPTIMIZATION-0.3.0.md) · [补丁验证](docs/VALIDATION.md)
+当前版本：**[v0.4.0](https://github.com/shaocuirong/dsh-vcontext/releases/tag/v0.4.0)** · [更新日志](CHANGELOG.md) · [优化与审查节点](docs/OPTIMIZATION-0.3.0.md) · [替换修复节点](docs/REPLACEMENT-0.4.0.md) · [验证记录](docs/VALIDATION.md)
 
 **DeepSeek Harness 上下文缓存插件**：持久记忆、按需换页、可配置替换策略与会话内看板。
 
 [![Tests](https://github.com/shaocuirong/dsh-vcontext/actions/workflows/test.yml/badge.svg)](https://github.com/shaocuirong/dsh-vcontext/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-默认离线运行，使用 SQLite 保存页面原文与修订，不需要额外的模型 API Key。适用于本地、单用户 Harness 环境。
+默认页面存储离线运行，使用 SQLite 保存页面原文与修订，不需要额外的模型 API Key。手动“会话上下文替换”使用 Harness 配置的摘要模型，可能产生模型调用。适用于本地、单用户 Harness 环境。
 
 > 仓库名为 `dsh-vcontext`；安装包名和插件标识保留 `dsh-virtual-context`，兼容既有配置。界面统一显示“上下文缓存”。
 
 ## 功能
 
+- **会话上下文替换**：通过 Harness 官方压缩服务将旧历史替换为摘要，保留原始日志；兼容隔离预设及未激活会话，显示运行状态、替换数量和前后大小。
 - **dsh-context 联动**：可选读取公开会话投影，展示上下文组成、压缩次数和供应商累计用量；优先使用宿主 token-meter，无数据时明确显示估算或未连接状态。
 - **运行诊断**：有界结构化日志、请求编号、耗时、错误分类、慢调用与健康检查；不记录正文或原始错误内容。
 - **内核恢复**：回滚时清除未提交缓存、复用页面序列化、限制 RPC 缓冲和排队数量，异常服务可重新启动；存储不可用时保留上次快照并允许宿主继续生成。
@@ -46,7 +47,7 @@
 
 ## 安装到 Harness 桌面端
 
-要求：DeepSeek Harness `0.2.0-rc.2`、Python 3.10+、Node.js 22+。当前原生 SDK 验证基于 `0.2.0-rc.2`；其他版本需自行验证兼容性。
+要求：DeepSeek Harness、Python 3.10+、Node.js 22+。基础 SDK 回归基于 `0.2.0-rc.2`，会话上下文替换已在本机 Harness `0.2.1-rc.2` 验证，需要宿主提供 `compactNow` 及会话恢复服务；缺少能力时显示原因，成功替换由宿主追加日志事件并保留原始历史。
 
 先完全退出桌面端，包括系统托盘，再安装：
 
@@ -79,6 +80,7 @@ dsh plugin --profile desktop add "link:$((Get-Location).Path)"
 
 4. 换题时使用 `recall` 检索已归档内容；需要原文时使用 `read`。
 5. 在“设置 → 上下文缓存”选择替换模式，点击“保存替换策略”。显示偏好会自动保存。
+6. 减少完整聊天上下文时，点击看板“立即替换会话上下文”；“仅归档插件工作页”和自动策略只管理 vctx 工作页。生成中的会话需等待结束后再替换。
 
 工具的 `input` 字段实际接受 JSON 字符串：
 
