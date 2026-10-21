@@ -6,6 +6,7 @@ import math
 import sqlite3
 import time
 import uuid
+from collections import OrderedDict, deque
 from pathlib import Path
 
 from .embedding import LexicalEmbedder, cosine, normalize, terms
@@ -73,7 +74,7 @@ OUTLINE_LIMIT = 32
 MUTATING_OPERATIONS = frozenset({
     'write', 'ingest', 'page_in', 'page_out', 'unpin', 'recall', 'restore',
     'compact', 'organize', 'prepare_task', 'render', 'checkpoint', 'fold',
-    'set_policy', 'policy_tick', 'set_session_enabled'})
+    'set_policy', 'policy_tick', 'set_session_enabled', 'record_usage'})
 
 
 def atomic(method):
@@ -88,6 +89,10 @@ def atomic(method):
             return result
         except BaseException:
             self.db.rollback()
+            # A render made inside a failed transaction must never survive its
+            # rolled-back epoch (a later writer can reuse that same number).
+            self._cache = None
+            self._row_cache.clear()
             raise
     return run
 
@@ -120,6 +125,7 @@ class ContextStore:
         # In-process render cache. Safe because the scope's ledger epoch in the
         # database is re-read on every snapshot, so another writer invalidates it.
         self._cache = None
+        self._row_cache = OrderedDict()
         Path(path).absolute().parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(str(path), timeout=15, isolation_level=None)
         self.db.row_factory = sqlite3.Row
@@ -239,9 +245,9 @@ class ContextStore:
         true byte prefix of `text`, because every core page is dumped before any
         working page and page ids are sorted inside each segment.
         """
-        head = ([pack_sorted(self._view(r)) for r in self._ordered(rows, 'core', False)] +
+        head = ([self._row_text(r) for r in self._ordered(rows, 'core', False)] +
                 [self._outline_row(r) for r in self._ordered(rows, 'core', True)])
-        working = [pack_sorted(self._view(r)) for r in self._ordered(rows, 'working', False)]
+        working = [self._row_text(r) for r in self._ordered(rows, 'working', False)]
         prefix = HEAD + ','.join(head)
         text = HEAD + ','.join(head + working) + TAIL
         return text, len(prefix.encode('utf-8')), prefix
@@ -270,7 +276,20 @@ class ContextStore:
                                 seq=row['seq'], title=data['title'], summary=data['summary']))
 
     def _row_text(self, row):
-        return self._outline_row(row) if row['outline'] else pack_sorted(self._view(row))
+        # Cache immutable strings only; callers can freely mutate returned page
+        # dictionaries without corrupting subsequent renders. Residency is part
+        # of the key because the serialized full page contains its tier.
+        key = (row['id'], row['version'], row['tier'], row['outline'], row['seq'])
+        text = self._row_cache.get(key)
+        if text is None:
+            text = self._outline_row(row) if row['outline'] else pack_sorted(self._view(row))
+            if len(text) <= 32768:
+                self._row_cache[key] = text
+                while len(self._row_cache) > 128:
+                    self._row_cache.popitem(last=False)
+        else:
+            self._row_cache.move_to_end(key)
+        return text
 
     def _page_bytes(self, row):
         return len(self._row_text(row).encode('utf-8'))
@@ -305,7 +324,7 @@ class ContextStore:
         The database epoch is always re-read, so a concurrent writer in another
         connection or process invalidates the cache instead of serving stale text.
         """
-        row = self.db.execute('''SELECT epoch,generation,text,core_end,core_sha,sha
+        row = self.db.execute('''SELECT epoch,generation,core_end,core_sha,sha
             FROM render_state WHERE scope=?''', (self.scope,)).fetchone()
         epoch = row['epoch'] if row is not None else 0
         cache = self._cache
@@ -324,7 +343,9 @@ class ContextStore:
             if row is None:
                 invalidated, intact = len(data), 1
             else:
-                common = common_prefix_length(row['text'].encode('utf-8'), data)
+                previous = self.db.execute('SELECT text FROM render_state WHERE scope=?',
+                                           (self.scope,)).fetchone()[0]
+                common = common_prefix_length(previous.encode('utf-8'), data)
                 invalidated = len(data) - common
                 intact = 1 if common >= min(row['core_end'], core_end) else 0
             self.db.execute('''INSERT INTO prefix_events(scope,created,generation,epoch,core_sha,
@@ -353,8 +374,8 @@ class ContextStore:
             value = (2*relevance.get(row['id'], 0) + data['importance']
                      + 0.2/(1+age/3600) + 0.1*math.log1p(row['hits']))
             return value / max(1, self.count(self._row_text(row)))
-        candidates = sorted((r for r in rows if r['tier'] == 'working' and r['id'] not in protect),
-                            key=lambda r: (utility(r), r['touched'], r['id']))
+        candidates = deque(sorted((r for r in rows if r['tier'] == 'working' and r['id'] not in protect),
+                                  key=lambda r: (utility(r), r['touched'], r['id'])))
         if self._additive:
             # Cost is the sum of page dumps plus the fixed skeleton, so each
             # eviction is priced once instead of re-rendering the snapshot.
@@ -366,7 +387,7 @@ class ContextStore:
             while total > self.budget:
                 if not candidates:
                     raise ContextError('context budget exceeded by core/protected pages; shorten pages or increase budget')
-                victim = candidates.pop(0)
+                victim = candidates.popleft()
                 self.db.execute("UPDATE pages SET tier='archive' WHERE id=? AND scope=?", (victim['id'], self.scope))
                 self._record_residency(victim['id'], 'working', 'archive', operation, 'evicted', victim)
                 total -= costs[victim['id']] + (separator if resident > 1 else 0)
@@ -376,7 +397,7 @@ class ContextStore:
         while self.count(self._text(rows)) > self.budget:
             if not candidates:
                 raise ContextError('context budget exceeded by core/protected pages; shorten pages or increase budget')
-            victim = candidates.pop(0)
+            victim = candidates.popleft()
             self.db.execute("UPDATE pages SET tier='archive' WHERE id=? AND scope=?", (victim['id'], self.scope))
             self._record_residency(victim['id'], 'working', 'archive', operation, 'evicted', victim)
             victim['tier'] = 'archive'
@@ -636,17 +657,27 @@ class ContextStore:
                 for r in self.db.execute('SELECT * FROM usage_events WHERE scope=? ORDER BY id DESC LIMIT ?',
                                          (self.scope, limit))]
         rows.reverse()
-        billed = sum(r['input_tokens']+r['cache_read_tokens']+r['cache_write_tokens'] for r in rows)
-        reads = sum(r['cache_read_tokens'] for r in rows)
+        # The window bounds detail rows only; cumulative accounting must not
+        # silently forget older provider calls after the 200th step.
+        aggregate = self.db.execute('''SELECT COUNT(*) AS calls,
+            COALESCE(SUM(input_tokens),0) AS uncached,
+            COALESCE(SUM(cache_read_tokens),0) AS reads,
+            COALESCE(SUM(cache_write_tokens),0) AS writes,
+            COALESCE(SUM(output_tokens),0) AS output,
+            COALESCE(SUM(source != 'provider'),0) AS simulated
+            FROM usage_events WHERE scope=?''', (self.scope,)).fetchone()
+        billed = aggregate['uncached'] + aggregate['reads'] + aggregate['writes']
+        reads = aggregate['reads']
         return dict(
             steps=[dict(**r, billed_input=r['input_tokens']+r['cache_read_tokens']+r['cache_write_tokens'])
                    for r in rows],
-            totals=dict(calls=len(rows), billed_input=billed,
-                        uncached_input=sum(r['input_tokens'] for r in rows),
-                        cache_read=reads, cache_write=sum(r['cache_write_tokens'] for r in rows),
-                        output=sum(r['output_tokens'] for r in rows),
+            window=dict(limit=limit, returned=len(rows)),
+            totals=dict(calls=aggregate['calls'], billed_input=billed,
+                        uncached_input=aggregate['uncached'],
+                        cache_read=reads, cache_write=aggregate['writes'],
+                        output=aggregate['output'],
                         hit_ratio=round(reads/billed, 4) if billed else None,
-                        simulated=sum(1 for r in rows if r['source'] != 'provider')))
+                        simulated=aggregate['simulated']))
 
     @atomic
     def usage(self, limit=200):

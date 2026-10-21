@@ -10,7 +10,18 @@ import { Service } from './service.mjs';
  * several hosts share one database or when a deployment must not keep a local
  * process alive between calls.
  */
-export function createTransport(config = {}) {
+export function createTransport(config = {}, diagnostics) {
   const resolved = validateConfig(config);
-  return resolved.transport === 'process' ? new Bridge(resolved) : new Service(resolved);
+  const worker = resolved.transport === 'process' ? new Bridge(resolved) : new Service(resolved);
+  if (!diagnostics) return worker;
+  return {
+    get health() { return worker.health ?? { mode: resolved.transport, running: null }; },
+    call(session, operation, input = {}, signal) {
+      return diagnostics.track(session, operation, () => worker.call(session, operation, input, signal), signal);
+    },
+    async dispose() {
+      await worker.dispose();
+      diagnostics.record('plugin.disposed');
+    },
+  };
 }

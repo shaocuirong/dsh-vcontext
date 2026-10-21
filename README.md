@@ -1,6 +1,6 @@
 # dsh-vcontext
 
-当前版本：**[v0.2.0](https://github.com/shaocuirong/dsh-vcontext/releases/tag/v0.2.0)** · [更新日志](CHANGELOG.md)
+当前版本：**[v0.3.0](https://github.com/shaocuirong/dsh-vcontext/releases/tag/v0.3.0)** · [更新日志](CHANGELOG.md) · [优化与审查节点](docs/OPTIMIZATION-0.3.0.md)
 
 **DeepSeek Harness 上下文缓存插件**：持久记忆、按需换页、可配置替换策略与会话内看板。
 
@@ -13,6 +13,9 @@
 
 ## 功能
 
+- **dsh-context 联动**：可选读取公开会话投影，展示上下文组成、压缩次数和供应商累计用量；优先使用宿主 token-meter，无数据时明确显示估算或未连接状态。
+- **运行诊断**：有界结构化日志、请求编号、耗时、错误分类、慢调用与健康检查；不记录正文或原始错误内容。
+- **内核恢复**：回滚时清除未提交缓存、复用页面序列化、限制 RPC 缓冲和排队数量，异常服务可重新启动；存储不可用时保留上次快照并允许宿主继续生成。
 - **实时上下文**：重新读取宿主当前派生消息，并展示插件加载后最近一次 LLM 调用的独立快照；默认每 2 秒刷新。
 - **专用看板**：主看板隐藏输入框，回到聊天自动恢复；右侧面板不影响聊天输入。
 - **分层记忆**：`core` 核心页常驻；`working` 工作页按需换出；`archive` 归档页可检索恢复。
@@ -100,12 +103,29 @@ dsh plugin --profile desktop add "link:$((Get-Location).Path)"
 
 ```sh
 npm ci --ignore-scripts
+npm run doctor
+npm run check:release
 python -m unittest discover -s tests -v
 npm test
 python -m examples.demo
+npm run bench
 ```
 
 `VCTX_PYTHON` 可指定测试使用的 Python；`VCTX_SDK_ROOT` 可指定独立 SDK 安装目录。官方 SDK 测试缺少依赖时会明确跳过，不应把跳过当成验证成功。仓库 CI 在 Windows / Ubuntu 上运行 Python 和 Node 测试。
+
+0.3.0 在本机通过 41 项 Node/SDK 测试和 63 项 Python 测试；包含真实 `dsh-context@0.74.0` 注册、上下文替换与卸载验证。另使用本机 Harness `0.2.1-rc.2` 的隔离 profile 检查设置、开关及演示会话投影；本轮未进行供应商模型生成测试。详见 [优化与可用性审查](docs/OPTIMIZATION-0.3.0.md)。
+
+## 可选启用 dsh-context 联动
+
+完全退出 Harness 后，在同一 profile 安装：
+
+```powershell
+dsh plugin --profile desktop add dsh-context@0.74.0
+```
+
+在该 profile 的 `dsh.profile.bundles` 中保留原有项目，并确保同时包含 `dsh-context` 和 `dsh-virtual-context`，然后重启。联动通过宿主 `sessionProjections.snapshot()` 读取公开数据，不导入上游内部实现，不共享数据库，也不会代替宿主压缩历史。未安装上游插件仍可使用全部缓存功能。
+
+若要关闭联动，可在既有本地插件配置中追加 `contextIntegration: false`。上游接口与本插件预算的口径见 [API 与诊断配置](docs/API.md)。
 
 已进行独立浏览器交互检查，以及授权历史消息的本地回放：552 页原文完整性、归档检索、轮次去重、阈值触发、核心页保护和预算上限均通过。只发布汇总结果，不包含真实对话或数据库。见 [验证记录](docs/VALIDATION.md)。
 

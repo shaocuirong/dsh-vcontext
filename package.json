@@ -1,13 +1,25 @@
 {
   "name": "dsh-virtual-context",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "private": true,
   "description": "Persistent virtual context, configurable paging and in-session dashboards for DeepSeek Harness",
-  "repository": { "type": "git", "url": "git+https://github.com/shaocuirong/dsh-vcontext.git" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/shaocuirong/dsh-vcontext.git"
+  },
   "homepage": "https://github.com/shaocuirong/dsh-vcontext#readme",
-  "bugs": { "url": "https://github.com/shaocuirong/dsh-vcontext/issues" },
-  "keywords": ["deepseek-harness", "dsh", "virtual-context", "memory", "sqlite", "context-cache"],
+  "bugs": {
+    "url": "https://github.com/shaocuirong/dsh-vcontext/issues"
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "virtual-context",
+    "memory",
+    "sqlite",
+    "context-cache"
+  ],
   "main": "index.mjs",
   "exports": {
     ".": "./index.mjs",
@@ -22,6 +34,7 @@
     "README.md",
     "CHANGELOG.md",
     "docs",
+    "scripts",
     "LICENSE"
   ],
   "dsh": {
@@ -41,6 +54,9 @@
   "scripts": {
     "test": "node --test tests/*.test.mjs",
     "test:python": "python -m unittest discover -s tests -v",
+    "check:release": "node scripts/check-release.mjs",
+    "doctor": "node scripts/doctor.mjs",
+    "bench": "node examples/bench-service.mjs",
     "demo": "python -m examples.demo"
   },
   "peerDependencies": {
@@ -48,12 +64,20 @@
   },
   "license": "MIT",
   "devDependencies": {
+    "dsh-context": "0.74.0",
     "@deepseek-ai/cordis": "4.0.4",
     "@deepseek-ai/dsh-agent": "0.2.0-rc.2",
     "@deepseek-ai/dsh-host-webserver": "0.2.0-rc.2",
     "@deepseek-ai/dsh-scope": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-session": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-session-projection": "0.2.0-rc.2",
     "@deepseek-ai/dsh-system-prompt": "0.2.0-rc.2",
     "@deepseek-ai/dsh-tools": "0.2.0-rc.2"
+  },
+  "overrides": {
+    "dsh-context": {
+      "@deepseek-ai/dsh-session": "$@deepseek-ai/dsh-session"
+    }
   },
   "engines": {
     "node": ">=22"

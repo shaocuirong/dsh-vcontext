@@ -56,6 +56,22 @@ test('configuration rejects ambiguous paths and invalid budgets', () => {
   assert.throws(()=>new Bridge({dbPath:join(tmpdir(),'x'),namespace:'p',budget:-1}),/budget/);
 });
 
+test('worker outages leave host steps available while explicit tools report failure', async t => {
+  const handlers = new Map(), cleanups = [], tools = new Map();
+  const ctx = { tools: { register: tool => tools.set(tool.name, tool) },
+    systemPrompt: { section() {} }, on: (event, handler) => handlers.set(event, handler),
+    effect: factory => cleanups.push(factory()) };
+  const agent = { id: 'outage', ctx: { systemPrompt: { variable: () => () => {}, context: () => () => {} } } };
+  const mounted = mount(ctx, { dbPath: join(tmpdir(), 'unused.db'), namespace: 'test', python: 'nonexistent-executable-12345' }, x => x);
+  t.after(async () => { for (const cleanup of cleanups) await cleanup(); });
+  const signal = new AbortController().signal;
+  await handlers.get('agent/created')({ agent, signal });
+  const decision = { kind: 'accept', messages: [] };
+  assert.equal(await handlers.get('agent/pre-step')({ agent, signal }, async () => decision), decision);
+  await assert.rejects(tools.get('vctx').execute({ operation: 'read', input: '{}' }, { agent, signal }), /ENOENT/);
+  assert.ok(mounted.diagnostics.snapshot().totals.failed >= 3);
+});
+
 test('adapter contract: tool execution, per-agent snapshots, resume, cleanup', async t => {
   // The mounted transport owns a resident process that holds the database file,
   // so this test owns the directory and disposes the transport before removing it.

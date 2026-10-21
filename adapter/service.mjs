@@ -20,31 +20,38 @@ export class Service {
   #buffer = '';
   #stderr = '';
   #disposed = false;
+  #stopping = null;
 
-  constructor(config) {
+  constructor(config, { spawnProcess = spawn } = {}) {
     this.config = validateConfig(config);
+    this.spawnProcess = spawnProcess;
   }
 
   get running() {
     return this.#child !== null;
   }
 
+  get health() {
+    return { running: this.running, pending: this.#pending.size, disposed: this.#disposed };
+  }
+
   #start() {
     const argv = ['-m', 'vcontext.server', '--db', this.config.dbPath,
-      '--budget', String(this.config.budget)];
+      '--budget', String(this.config.budget), '--max-scopes', String(this.config.maxScopes)];
     if (this.config.model) argv.push('--model', this.config.model);
     // No shell and no model-controlled paths, environment, executable, or scope.
-    const child = spawn(this.config.python, argv, {
+    const child = this.spawnProcess(this.config.python, argv, {
       cwd: root, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env, PYTHONUTF8: '1' },
     });
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
     child.stdout.on('data', chunk => this.#receive(child, chunk));
+    child.stdin.on('error', error => this.#fail(child, error));
     child.stderr.on('data', chunk => { this.#stderr = (this.#stderr + chunk).slice(-4096); });
     child.on('error', error => this.#fail(child, error));
     child.on('close', code => this.#fail(child,
-      new Error(`virtual-context service exited with code ${code}${this.#stderr ? ` (${this.#stderr})` : ''}`)));
+      new Error(`virtual-context service exited with code ${code}`)));
     this.#child = child;
     this.#buffer = '';
     this.#stderr = '';
@@ -52,7 +59,11 @@ export class Service {
   }
 
   #fail(child, error) {
-    if (this.#child === child) this.#child = null;
+    if (this.#child === child) {
+      this.#child = null;
+      this.#buffer = '';
+      child.kill();
+    }
     for (const [id, entry] of [...this.#pending]) {
       if (entry.child !== child) continue;
       this.#pending.delete(id);
@@ -62,18 +73,27 @@ export class Service {
   }
 
   #receive(child, chunk) {
+    if (child !== this.#child) return;
     this.#buffer += chunk;
     let index;
     while ((index = this.#buffer.indexOf('\n')) >= 0) {
       const line = this.#buffer.slice(0, index);
       this.#buffer = this.#buffer.slice(index + 1);
+      if (Buffer.byteLength(line) > 8000000) {
+        this.#fail(child, new Error('worker response exceeds 8 MB'));
+        return;
+      }
       if (!line.trim()) continue;
       let response;
       try {
         response = JSON.parse(line);
       } catch {
-        this.#fail(child, new Error(`virtual-context service wrote an unparsable response: ${line.slice(0, 200)}`));
-        continue;
+        this.#fail(child, new Error('virtual-context service wrote an unparsable response'));
+        return;
+      }
+      if (!response || typeof response !== 'object' || !Number.isSafeInteger(response.id) || typeof response.ok !== 'boolean') {
+        this.#fail(child, new Error('virtual-context service wrote an invalid response envelope'));
+        return;
       }
       const entry = this.#pending.get(response.id);
       if (!entry || entry.child !== child) continue;
@@ -82,32 +102,39 @@ export class Service {
       if (response.ok) entry.resolve(response.result);
       else entry.reject(new Error(response.error?.message ?? 'virtual-context operation failed'));
     }
+    if (Buffer.byteLength(this.#buffer) > 8000000)
+      this.#fail(child, new Error('worker response exceeds 8 MB'));
   }
 
   async #stop(reason) {
+    if (this.#stopping) return this.#stopping;
     const child = this.#child;
     if (!child) return;
-    this.#child = null;
     const exited = child.exitCode === null && child.signalCode === null
       ? new Promise(resolve => child.once('close', resolve))
       : Promise.resolve();
+    this.#stopping = exited;
     this.#fail(child, reason);
-    child.kill();
-    await exited;
+    try { await exited; }
+    finally { this.#stopping = null; }
   }
 
   async call(sessionId, operation, input = {}, signal) {
+    if (this.#stopping) await this.#stopping;
     if (this.#disposed) throw new Error('virtual-context plugin has been disposed');
     signal?.throwIfAborted();
     if (typeof sessionId !== 'string' || !sessionId || sessionId.length > 256)
       throw new Error('a stable calling agent id is required');
     if (typeof operation !== 'string' || !/^[a-z_]+$/.test(operation))
       throw new Error('invalid operation');
-    const raw = JSON.stringify(input);
-    if (Buffer.byteLength(raw) > 2000000) throw new Error('request too large');
+    if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('input must be an object');
+    if (this.#pending.size >= this.config.maxPending) throw new Error('virtual-context service busy: pending request limit reached');
     const scope = JSON.stringify([this.config.namespace, sessionId]);
-    const child = this.#child ?? this.#start();
+    if (scope.length > 512) throw new Error('encoded scope exceeds 512 characters');
     const id = ++this.#sequence;
+    const payload = `${JSON.stringify({ id, scope, op: operation, args: input })}\n`;
+    if (Buffer.byteLength(payload) > 2000000) throw new Error('request too large');
+    const child = this.#child ?? this.#start();
     return new Promise((resolve, reject) => {
       const entry = { child, timer: null, resolve: null, reject: null };
       const cleanup = () => {
@@ -137,8 +164,8 @@ export class Service {
         signal.addEventListener('abort', abort, { once: true });
         if (signal.aborted) return abort();
       }
-      child.stdin.write(`${JSON.stringify({ id, scope, op: operation, args: input })}\n`, error => {
-        if (error && this.#pending.delete(id)) failcall(error);
+      child.stdin.write(payload, error => {
+        if (error) this.#fail(child, error);
       });
     });
   }

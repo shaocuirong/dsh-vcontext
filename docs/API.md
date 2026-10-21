@@ -131,7 +131,13 @@ with ContextStore('semantic.db', 'session-1', embedder=embedder,
 | `budget` | 128..1000000，默认 8192，CLI/插件使用 UTF-8 字节单位 |
 | `timeoutMs` | 100..600000，默认 30000，每次 Python 操作的截止时间 |
 | `model` | 可选 sentence-transformers 模型目录或名称，必须匹配数据库后端 |
-| `transport` | `service`（默认，常驻进程，每步快照 p95 < 1 ms）或 `process`（每次操作一个解释器，最强隔离） |
+| `transport` | `service`（默认，常驻进程）或 `process`（每次操作一个解释器） |
+| `maxPending` | 1..4096，默认 128，未完成请求上限，达到后返回 BUSY，不自动重试 |
+| `maxScopes` | 1..256，默认 32，常驻 SQLite 连接数上限，按 LRU 关闭空闲作用域 |
+| `contextIntegration` | 布尔值，默认 true，可选读取 dsh-context 公开投影 |
+| `logLevel` | debug / info（默认）/ warn / error / silent；成功调用为 debug，失败与慢调用为 warn |
+| `diagnosticLimit` | 1..2000，默认 200，内存诊断记录数上限 |
+| `slowOperationMs` | 1..600000，默认 1000，慢调用阈值 |
 
 插件仅注册一个 `vctx` 工具，固定提示词和工具定义有额外 token 成本。全量正文由动态 user-role runtime context 提供，使用 `interpolate:false` 原样渲染，避免把 `{{...}}` 当成宿主变量。旧快照是否继续占用真实上下文由宿主 compaction 决定。
 
@@ -145,3 +151,17 @@ with ContextStore('semantic.db', 'session-1', embedder=embedder,
 - `dashboard` 额外返回 `replacement.policy` 和 `replacement.state`，包含持久轮次与最近执行结果。
 
 完整行为和边界见 [中文使用说明](USAGE.zh-CN.md)。
+
+## 健康与联动（0.3.0）
+
+`GET /vctx/health?session=<id>` 返回传输状态（是否运行、排队数、是否已释放）和插件级 `diagnostics`。无需启动 Python 即可读取；running=false 也可能表示尚未首次使用。诊断包含所有会话操作的累计计数，但会话只保留 SHA-256 摘要前 12 位；环形记录有上限，重启清空，不是持久审计日志。
+
+错误代码包括 `RUNTIME_NOT_FOUND`、`TIMEOUT`、`BUSY`、`DB_LOCKED`、`RESPONSE_LIMIT`、`WORKER_PROTOCOL`、`WORKER_EXIT`、`CANCELLED` 和 `OPERATION_FAILED`。宿主 logger 接收 JSON 结构化行；仅保留元数据，不输出原始异常、请求正文、响应正文或文件路径。宿主自行决定日志落盘和轮转。
+
+`dashboard.live_context.dsh_context` 返回 status、as_of_seq、composition、counts、pressure、usage。它读取 `contextTimeline`、`contextPressure`、`tokenUsage` 的公开投影。token-meter 优先；只有启发式估算时 source=`dsh-context-estimate`。上游完整 requests/events/surface、原始内容和私有连接数据不复制进此对象。
+
+`usage`、`record_usage` 与看板的 usage.totals 覆盖该会话全部调用；steps 仅为最近明细，window 返回 limit/returned。与上游累计用量并列展示，不重复导入数据库。
+
+服务请求帧最多 2,000,000 字节（包括 JSON 信封和换行），响应行最多 8,000,000 字节。超限或协议损坏会终止该进程并拒绝关联调用；下一次请求可启动新进程。写入取消或超时可能已经提交，必须先检查状态，不可盲目重试。
+
+HTTP 路由适用于本机单用户宿主，并拒绝跨来源浏览器请求；session 参数是隔离键，不是认证凭据。不要将原始路由直接暴露给不可信网络或多租户。
