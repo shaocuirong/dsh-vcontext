@@ -57,6 +57,14 @@ export function createHandler(config, transport, liveContext, diagnostics) {
       return send(response, 400, { ok: false, error: 'bad url' });
     }
     if (!url.pathname.startsWith(ROUTE_PREFIX)) return send(response, 404, { ok: false, error: 'unknown route' });
+    const origin = request.headers?.origin;
+    let foreignOrigin = false;
+    if (origin) {
+      try { foreignOrigin = new URL(origin).host !== request.headers.host; }
+      catch { foreignOrigin = true; }
+    }
+    if (foreignOrigin || request.headers?.['sec-fetch-site'] === 'cross-site')
+      return send(response, 403, { ok: false, error: 'same-origin request required' });
 
     if (url.pathname === `${ROUTE_PREFIX}health`) {
       if (request.method !== 'GET') return send(response, 405, { ok: false, error: 'GET only' });

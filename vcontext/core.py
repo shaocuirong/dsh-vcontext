@@ -657,17 +657,27 @@ class ContextStore:
                 for r in self.db.execute('SELECT * FROM usage_events WHERE scope=? ORDER BY id DESC LIMIT ?',
                                          (self.scope, limit))]
         rows.reverse()
-        billed = sum(r['input_tokens']+r['cache_read_tokens']+r['cache_write_tokens'] for r in rows)
-        reads = sum(r['cache_read_tokens'] for r in rows)
+        # The window bounds detail rows only; cumulative accounting must not
+        # silently forget older provider calls after the 200th step.
+        aggregate = self.db.execute('''SELECT COUNT(*) AS calls,
+            COALESCE(SUM(input_tokens),0) AS uncached,
+            COALESCE(SUM(cache_read_tokens),0) AS reads,
+            COALESCE(SUM(cache_write_tokens),0) AS writes,
+            COALESCE(SUM(output_tokens),0) AS output,
+            COALESCE(SUM(source != 'provider'),0) AS simulated
+            FROM usage_events WHERE scope=?''', (self.scope,)).fetchone()
+        billed = aggregate['uncached'] + aggregate['reads'] + aggregate['writes']
+        reads = aggregate['reads']
         return dict(
             steps=[dict(**r, billed_input=r['input_tokens']+r['cache_read_tokens']+r['cache_write_tokens'])
                    for r in rows],
-            totals=dict(calls=len(rows), billed_input=billed,
-                        uncached_input=sum(r['input_tokens'] for r in rows),
-                        cache_read=reads, cache_write=sum(r['cache_write_tokens'] for r in rows),
-                        output=sum(r['output_tokens'] for r in rows),
+            window=dict(limit=limit, returned=len(rows)),
+            totals=dict(calls=aggregate['calls'], billed_input=billed,
+                        uncached_input=aggregate['uncached'],
+                        cache_read=reads, cache_write=aggregate['writes'],
+                        output=aggregate['output'],
                         hit_ratio=round(reads/billed, 4) if billed else None,
-                        simulated=sum(1 for r in rows if r['source'] != 'provider')))
+                        simulated=aggregate['simulated']))
 
     @atomic
     def usage(self, limit=200):

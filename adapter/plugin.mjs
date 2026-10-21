@@ -102,12 +102,25 @@ export function mount(ctx, config, defineTool) {
       return result;
     },
   }));
-  ctx.on('agent/created', async ({ agent, signal }) => { await refresh(agent, signal); });
+  ctx.on('agent/created', async ({ agent, signal }) => {
+    try { await refresh(agent, signal); }
+    catch (error) {
+      if (signal?.aborted) throw error;
+      diagnostics.record('context.refresh.failed', 'warn');
+    }
+  });
   ctx.on('agent/pre-step', async ({ agent, signal }, next) => {
     const decision = await next();
     if (decision.kind !== 'reject' && !signal.aborted) {
-      await transport.call(agent.id, 'policy_tick', {}, signal);
-      await refresh(agent, signal);
+      try {
+        await transport.call(agent.id, 'policy_tick', {}, signal);
+        await refresh(agent, signal);
+      } catch (error) {
+        if (signal.aborted) throw error;
+        // Keep the last consistent snapshot; a local storage outage must not
+        // prevent the host from generating. Explicit vctx calls still fail.
+        diagnostics.record('context.refresh.failed', 'warn');
+      }
     }
     return decision;
   }, { prepend: true });

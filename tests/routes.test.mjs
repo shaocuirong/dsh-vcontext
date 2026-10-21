@@ -57,6 +57,20 @@ test('state route reports the per-session switch and needs a session', async () 
   assert.equal((await invoke(handler, 'POST', `${ROUTE_PREFIX}state?session=s-1`)).status, 405);
 });
 
+test('health needs a session and rejects cross-origin browser requests', async () => {
+  const stub = { health: { running: false, pending: 0 } };
+  const handler = createHandler(CONFIG, stub, null, { snapshot: () => ({ totals: { calls: 3 } }) });
+  const health = await invoke(handler, 'GET', '/vctx/health?session=a');
+  assert.equal(health.body.worker.running, false);
+  assert.equal(health.body.diagnostics.totals.calls, 3);
+  assert.equal((await invoke(handler, 'GET', '/vctx/health')).status, 400);
+  const req = request('POST', '/vctx/session', '{"session":"a","enabled":true}');
+  req.headers = { origin: 'https://foreign.example', host: 'localhost' };
+  const res = response();
+  await handler(req, res);
+  assert.equal(res.captured.status, 403);
+});
+
 test('session route accepts exactly one boolean and rejects everything else', async () => {
   const stub = transport({ set_session_enabled: input => ({ enabled: input.enabled, configured: true, params: {} }) });
   const handler = createHandler(CONFIG, stub);

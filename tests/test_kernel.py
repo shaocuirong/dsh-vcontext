@@ -87,6 +87,17 @@ class KernelTests(unittest.TestCase):
                 store._row_text(store._head(result['page']['id']))
             self.assertLessEqual(len(store._row_cache), 128)
 
+    def test_usage_window_does_not_truncate_cumulative_totals(self):
+        with ContextStore(self.path, 'a') as store:
+            for _ in range(205):
+                store.record_usage(input_tokens=1, cache_read_tokens=9)
+            summary = store.usage(limit=2)
+            self.assertEqual(len(summary['steps']), 2)
+            self.assertEqual(summary['totals']['calls'], 205)
+            self.assertEqual(summary['totals']['billed_input'], 2050)
+            self.assertEqual(summary['totals']['hit_ratio'], 0.9)
+            self.assertEqual(summary['window']['returned'], 2)
+
 
 if __name__ == '__main__':
     unittest.main()
