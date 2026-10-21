@@ -27,6 +27,8 @@
 - Node.js 22.19.0 + SDK 0.2.0-rc.2：41 项测试通过，0 失败，0 跳过。
 - Python 3.12.3：63 项测试通过。doctor 还识别并通过了本机 Harness 附带 Python 3.12.14。
 - dsh-context：npm 官方包 0.74.0，对应上游提交 `77749653063ab282287583c3de02fa7da092c335`。通过 SDK 原生注册测试；仅依据公开契约实现适配，没有复制上游实现。
+- 将本机现有 dsh-context 0.72.0 入口复制到隔离测试目录，使用测试 SDK 注册后，公开投影也返回 connected；没有改动该安装。
+- GitHub PR #1 的 push / pull_request 两轮 Windows、Ubuntu CI 全部通过：[push](https://github.com/shaocuirong/dsh-vcontext/actions/runs/39582874251)、[PR](https://github.com/shaocuirong/dsh-vcontext/actions/runs/39582948710)。
 - 本机已安装 Harness 0.2.1-rc.2：通过独立 DSH_HOME 的 web profile 加载两个插件，以演示数据创建 Agent；实际 `/vctx/dashboard` 返回 connected、组成数据与上游累计用量。浏览器检查创建前开关、侧栏、设置和策略保存；不触碰日常配置和数据库。
 - 本轮没有供应商生成请求；不宣称真实模型效果、token 缩减或缓存命中改善。
 
@@ -62,5 +64,7 @@ npm pack --dry-run
 3. 如需联动，在同一 profile 安装 dsh-context@0.74.0，并将两个 bundle 一起启用。仅查看缓存页不需要上游依赖。
 4. 服务不会自动重试失败写入；超时或取消后先读取状态。宿主步骤降级时使用上一次成功快照，直到后续读取恢复。
 5. 诊断仅在内存保留最近记录；宿主 logger 负责持久化。需要更细日志时设置 logLevel=debug。
+
+本机正式插件目录以 junction 指向当前项目，发布后同步项目源码即可同步正式副本。检查时日常 desktop profile 已启用 dsh-context 0.72.0，但尚未启用 dsh-virtual-context；本次保留日常启用列表，启用步骤见 README，不覆盖机器配置。
 
 归档搜索仍会扫描该作用域的全部页面；看板仍读取页面元数据，因此海量归档需要后续基准与分页设计。RPC 上限保护进程内存，不代替查询索引。API 适用于本机单用户环境，同源检查不构成多租户认证。上游版本升级后应重新运行原生投影测试。
