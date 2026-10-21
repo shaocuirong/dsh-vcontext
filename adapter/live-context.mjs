@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { readContextIntegration } from './context-integration.mjs';
 
 // Keep only displayable request data: never retain connection configuration,
 // adapter replay envelopes, abort signals, or credentials from LLM options.
@@ -18,7 +19,7 @@ export function describeContext(messages, tools = [], route = {}) {
   };
 }
 
-export function createLiveContext(ctx) {
+export function createLiveContext(ctx, { diagnostics, contextIntegration = true } = {}) {
   const sent = new Map();
   const dispose = ctx.on('llm/stream', (options, next) => {
     try {
@@ -28,18 +29,25 @@ export function createLiveContext(ctx) {
         sent.set(options.sessionId, snapshot);
         if (sent.size > 128) sent.delete(sent.keys().next().value);
       }
-    } catch { /* Observing a request must never interrupt generation. */ }
+    } catch {
+      diagnostics?.record('context.capture.failed', 'warn', { error_type: 'Error' });
+    }
     return next();
   });
   return {
     read(sessionId) {
       const session = ctx.get('sessions')?.get(sessionId);
       let current = null;
-      if (session?.deriveMessages) {
-        const header = session.requestHeader?.();
-        current = describeContext(session.deriveMessages(), header?.tools, header?.config);
+      try {
+        if (session?.deriveMessages) {
+          const header = session.requestHeader?.();
+          current = describeContext(session.deriveMessages(), header?.tools, header?.config);
+        }
+      } catch {
+        diagnostics?.record('context.derive.failed', 'warn', { error_type: 'Error' });
       }
       return { current, last_request: sent.get(sessionId) ?? null, checked_at: Date.now(),
+        dsh_context: readContextIntegration(ctx, session, { enabled: contextIntegration, diagnostics }),
         source: current ? 'session.deriveMessages' : 'unavailable' };
     },
     dispose() { dispose(); sent.clear(); },

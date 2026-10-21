@@ -10,7 +10,7 @@ export const inject = ['tools', 'agents', 'systemPrompt'];
 export function apply(ctx, config = {}) {
   const settings = resolveConfig(config);
   const { transport, diagnostics } = mount(ctx, settings, defineTool);
-  const liveContext = createLiveContext(ctx, { diagnostics });
+  const liveContext = createLiveContext(ctx, { diagnostics, contextIntegration: settings.contextIntegration });
   ctx.effect(() => () => liveContext.dispose(), 'virtual-context: live request observer');
   // The client half reads the dashboard through this route, and
   // /virtual-context flips the per-session switch the route reports.

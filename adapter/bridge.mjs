@@ -26,6 +26,8 @@ export function validateConfig(config) {
     throw new Error('maxPending must be in 1..4096');
   if (!Number.isSafeInteger(maxScopes) || maxScopes < 1 || maxScopes > 256)
     throw new Error('maxScopes must be in 1..256');
+  if (config.contextIntegration !== undefined && typeof config.contextIntegration !== 'boolean')
+    throw new Error('contextIntegration must be a boolean');
   return { ...config, budget, timeoutMs, maxPending, maxScopes, python: config.python ?? 'python' };
 }
 
@@ -34,6 +36,8 @@ export class Bridge {
   #disposed = false;
   constructor(config) { this.config = validateConfig(config); }
 
+  get health() { return { mode: 'process', pending: this.#pending.size, disposed: this.#disposed }; }
+
   async call(sessionId, operation, input = {}, signal) {
     if (this.#disposed) throw new Error('virtual-context plugin has been disposed');
     signal?.throwIfAborted();
@@ -41,6 +45,8 @@ export class Bridge {
       throw new Error('a stable calling agent id is required');
     if (typeof operation !== 'string' || !/^[a-z_]+$/.test(operation))
       throw new Error('invalid operation');
+    if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('input must be an object');
+    if (this.#pending.size >= this.config.maxPending) throw new Error('virtual-context bridge busy: pending request limit reached');
     const raw = JSON.stringify(input);
     if (Buffer.byteLength(raw) > 2000000) throw new Error('request too large');
     const scope = JSON.stringify([this.config.namespace, sessionId]);
