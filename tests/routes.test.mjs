@@ -57,6 +57,20 @@ test('state route reports the per-session switch and needs a session', async () 
   assert.equal((await invoke(handler, 'POST', `${ROUTE_PREFIX}state?session=s-1`)).status, 405);
 });
 
+test('conversation replacement accepts a fast job and exposes status without using policy_tick', async () => {
+  const calls = [];
+  const jobs = { start(session) { calls.push(session); return { id: 'job', status: 'running' }; },
+    read(session) { assert.equal(session, 's-1'); return { id: 'job', status: 'completed' }; } };
+  const handler = createHandler(CONFIG, {}, null, null, jobs);
+  const accepted = await invoke(handler, 'POST', '/vctx/compact', '{"session":"s-1"}');
+  assert.equal(accepted.status, 202);
+  assert.equal(accepted.body.job.status, 'running');
+  assert.equal((await invoke(handler, 'GET', '/vctx/compact?session=s-1')).body.job.status, 'completed');
+  assert.equal((await invoke(handler, 'GET', '/vctx/compact')).status, 400);
+  assert.equal((await invoke(handler, 'POST', '/vctx/compact', '{"session":"s-1","force":true}')).status, 400);
+  assert.deepEqual(calls, ['s-1']);
+});
+
 test('health needs a session and rejects cross-origin browser requests', async () => {
   const stub = { health: { running: false, pending: 0 } };
   const handler = createHandler(CONFIG, stub, null, { snapshot: () => ({ totals: { calls: 3 } }) });
