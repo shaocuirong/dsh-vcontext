@@ -11,6 +11,8 @@ assert.equal(lock.packages[''].version, version, 'lockfile package version diffe
 assert.equal((await read('pyproject.toml')).match(/^version = "([^"]+)"/m)?.[1], version, 'Python version differs');
 assert.ok((await read('README.md')).includes(`releases/tag/v${version}`), 'README current version missing');
 assert.ok((await read('CHANGELOG.md')).includes(`## [${version}] - `), 'changelog version missing');
-for (const path of ['index.mjs', 'lib/client.js', 'adapter/context-integration.mjs', 'adapter/diagnostics.mjs', 'vcontext/server.py'])
+for (const path of ['index.mjs', 'lib/client.js', 'adapter/context-integration.mjs', 'adapter/diagnostics.mjs',
+  'adapter/session-bridge.mjs', 'adapter/resource-capture.mjs', 'vcontext/state.py', 'vcontext/migrations.py',
+  'docs/RESEARCH.md', 'docs/ARCHITECTURE-0.5.0.md', 'vcontext/server.py'])
   await read(path);
 console.log(`Release metadata and entry points verified: v${version}`);

@@ -47,7 +47,7 @@ function sessionOf(url) {
   return session && session.length <= 256 ? session : null;
 }
 
-export function createHandler(config, transport, liveContext, diagnostics, replacement) {
+export function createHandler(config, transport, liveContext, diagnostics, replacement, sessionBridge) {
   const settings = validateConfig(config);
   return async function handle(request, response) {
     let url;
@@ -157,6 +157,7 @@ export function createHandler(config, transport, liveContext, diagnostics, repla
         const dashboard = await transport.call(session, 'dashboard', { events });
         dashboard.live_context = await liveContext?.read(session) ?? { current: null, last_request: null, source: 'unavailable' };
         dashboard.context_replacement = replacement?.read(session) ?? null;
+        dashboard.session_bridge = sessionBridge?.status(session) ?? null;
         if (diagnostics) dashboard.diagnostics = diagnostics.snapshot();
         return send(response, 200, { ok: true, namespace: settings.namespace, session, dashboard });
       } catch (error) {
@@ -170,7 +171,7 @@ export function createHandler(config, transport, liveContext, diagnostics, repla
   };
 }
 
-export function mountRoutes(ctx, config, transport, liveContext, diagnostics, replacement) {
+export function mountRoutes(ctx, config, transport, liveContext, diagnostics, replacement, sessionBridge) {
   const webServer = ctx.get('webServer');
   // The shipped web and desktop profiles always carry the HTTP carrier. A CLI
   // or SDK-only composition has none, and then there is simply no route to
@@ -178,5 +179,5 @@ export function mountRoutes(ctx, config, transport, liveContext, diagnostics, re
   // service-resolution waterfall and can corrupt the value other plugins read,
   // which is exactly what the real-SDK test caught.
   if (!webServer || typeof webServer.register !== 'function') return () => {};
-  return webServer.register({ kind: 'prefix', path: ROUTE_PREFIX.slice(0, -1), handler: createHandler(config, transport, liveContext, diagnostics, replacement) });
+  return webServer.register({ kind: 'prefix', path: ROUTE_PREFIX.slice(0, -1), handler: createHandler(config, transport, liveContext, diagnostics, replacement, sessionBridge) });
 }

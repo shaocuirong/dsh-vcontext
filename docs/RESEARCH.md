@@ -1,57 +1,71 @@
-# 论文与实现映射
+# 研究依据与实现边界
 
-核对日期：2026-10-16。用户已明确 dsh 指 DeepSeek Harness。这里提供工程实现和可验证的算法接口，不声称复现论文训练、实验分数或集群性能。
+核对日期：2026-10-22。以下 16 篇论文及 1 个开源工程的链接指向 arXiv 原始记录、正文或作者仓库。年份按首次投稿记录，后续修订另列。论文实验结果不代表 dsh-vcontext 的性能；模块组合、SQLite 表结构与预算策略是本项目的工程选择。
 
-## MemGPT：分层与换页
+项目目标是与 DeepSeek Harness 会话集成的客户端上下文管理器：记录结构化事件，保留可恢复原文，明确资源版本和会话状态，再决定哪些内容进入工作集。服务端 KV cache 管理不是当前开发目标。
 
-[MemGPT, arXiv:2310.08560v2](https://arxiv.org/html/2310.08560v2)，重点是第 2 节。
+## A. 架构核心
 
-论文把有限主上下文与外部存储分开，通过工具操作在两者间移动信息。本实现对应 core/working/archive、显式 page_in/page_out、压力下驱逐和持久恢复。原始页面不会因换出而删除。
+| 编号 | 原始标题、年份与来源 | 核心机制 | 本项目用途及边界 |
+|---|---|---|---|
+| 1 | **MemGPT: Towards LLMs as Operating Systems**，2023；[arXiv:2310.08560v2](https://arxiv.org/abs/2310.08560v2)（2024 修订） | 在有限上下文与外部记忆间移动信息，以分层记忆及控制流延伸可用上下文 | 区分可恢复资源与驻留工作集；没有复现完整中断、heartbeat 与模型控制循环 |
+| 2 | **Git Context Controller: Manage the Context of LLM-based Agents like Git**，2025；GCC；[arXiv:2508.00031](https://arxiv.org/abs/2508.00031) | 以 COMMIT、BRANCH、MERGE、CONTEXT 管理持久上下文 | 借鉴检查点、版本和分层历史；资源版本引用不等于完整 GCC 文件系统或 Git 分支合并 |
+| 3 | **Beyond Semantic Organization: Memory as Execution State Management for Long-Horizon Agents**，2026；MAGE；[arXiv:2606.06090v2](https://arxiv.org/abs/2606.06090v2) | 用层级状态树及 Grow、Compress、Maintain、Revise 隔离执行路径与失败分支 | 为任务树及验证状态提供依据；v0.5.0 先记录操作及证据，不实现完整状态树算法 |
+| 4 | **Agentic Context Engineering: Evolving Contexts for Self-Improving Language Models**，2025；ACE；[arXiv:2510.04618v3](https://arxiv.org/abs/2510.04618v3)（ICLR 2026） | Generator、Reflector、Curator 维护局部增量，减少整体重写的信息流失 | 摘要独立版本化并保留来源；没有实现完整反思、策展或自改进循环 |
+| 5 | **ChronoMem: Version Control and Semantic Rollback for Large Language Model Agent Memory**，2026；[arXiv:2607.27773v2](https://arxiv.org/abs/2607.27773v2) | 全记忆快照、检索选择历史版本及接触后回滚一致性评测 | 明确恢复语义；内容哈希和固定引用不等于全局语义回滚 |
+| 6 | **RAPTOR: Recursive Abstractive Processing for Tree-Organized Retrieval**，2024；[arXiv:2401.18059v1](https://arxiv.org/abs/2401.18059v1) | 递归嵌入、聚类、摘要形成多层检索树 | 后续层级摘要参考；摘要来源表本身不是 RAPTOR 聚类树 |
+| 7 | **Structured Episodic Event Memory**，2026；SEEM；[arXiv:2601.06411v2](https://arxiv.org/abs/2601.06411v2) | 来源指针锚定事件帧，结合事实图和事件记忆，反向展开来源 | 结构化操作、会话序号及摘要来源链接；关系表不代表完整图推理或 Reverse Provenance Expansion |
+| 8 | **Agentic Memory: Learning Unified Long-Term and Short-Term Memory Management for Large Language Model Agents**，2026；AgeMem；[arXiv:2601.01885v3](https://arxiv.org/abs/2601.01885v3) | 记忆管理工具动作与三阶段强化学习、step-wise GRPO | 暴露可审查的存储检索动作；不训练 RL，不把确定性换页称为论文策略 |
 
-差异：本项目没有 MemGPT 的 heartbeat 推理控制器，也不自动生成递归会话摘要。compact 接受宿主 Agent 提供的摘要，历史会话压缩继续交给 Harness。
+GCC 有标题版本差异：核对时 [arXiv 摘要元数据](https://arxiv.org/abs/2508.00031v3)使用表中标题，而 [v3 HTML 正文](https://arxiv.org/html/2508.00031v3)标题为 **Git Context Controller: Manage the Context of Agents by Agentic Git**。通过 arXiv ID 和具体版本定位，不把标题变化当成另一篇论文。
 
-## Vesta：缓存位置与调度的联合考虑
+## B. 检索、演化与评估
 
-[Vesta: Queueing-Aware LLM Scheduling for Real-World Workloads, arXiv:2610.14686v1](https://arxiv.org/html/2610.14686v1)，重点是 holder/executor 分离及式 (15)。这篇论文的名称与用户描述吻合；它讨论的是分布式推理的 KV cache。
+| 编号 | 原始标题、年份与来源 | 可借鉴内容 | 实现边界 |
+|---|---|---|---|
+| 9 | **A-MEM: Agentic Memory for LLM Agents**，2025；[arXiv:2502.12110v11](https://arxiv.org/abs/2502.12110v11)（NeurIPS 2025） | 原子笔记、动态链接和记忆演化 | 现有 title、summary、tags、links 可承接；阈值关联不等于 LLM 关系判断或事实真实性 |
+| 10 | **Zep: A Temporal Knowledge Graph Architecture for Agent Memory**，2025；[arXiv:2501.13956v1](https://arxiv.org/abs/2501.13956v1) | 时间关系、动态事实及历史关系 | 未来事实层参考；文件版本不会自动产生事实图或解决事实矛盾 |
+| 11 | **LongMemEval: Benchmarking Chat Assistants on Long-Term Interactive Memory**，2024；[arXiv:2410.10813v2](https://arxiv.org/abs/2410.10813v2)（ICLR 2025） | 信息提取、跨会话和时间推理、知识更新、拒答 | 为恢复用例分类；本项目单元测试不是该基准正式跑分 |
+| 12 | **LongMemEval-V2: Evaluating Long-Term Agent Memory Toward Experienced Colleagues**，2026；[arXiv:2605.12493v1](https://arxiv.org/abs/2605.12493v1) | Web 环境静态状态、动态状态、工作流、陷阱和前提意识 | 参考证据收集评测方式；不是软件版本专用基准，原始记录标注 Work in Progress |
 
-关键启发是：权威缓存放置可以稳定，执行位置则按请求选择；远端执行节省排队时间，却会增加传输与服务工作，在全局拥堵时应更保守。
+## C. 推理服务扩展参考
 
-本项目的 `schedule` 接受 holder、队列时间、预计计算时间、带宽及缓存版本键。`prepare_task` 先按任务相关性选页，再用选中页面的缺失字节量评估执行位置。评分中的拥堵价格是外部输入。把所有候选共享的常数项去掉后，其排序形式与“完成时间加额外服务工作价格”的思路一致；不是论文的完整估计器。
+| 编号 | 原始标题、年份与来源 | 研究对象 | 当前定位 |
+|---|---|---|---|
+| 13 | **Efficient Memory Management for Large Language Model Serving with PagedAttention**，2023；[arXiv:2309.06180v1](https://arxiv.org/abs/2309.06180v1)（SOSP 2023） | vLLM 的 GPU KV cache 分页与共享 | 分页抽象背景；本地文本页不是 GPU KV 页 |
+| 14 | **SGLang: Efficient Execution of Structured Language Model Programs**，2023；[arXiv:2312.07104v2](https://arxiv.org/abs/2312.07104v2)（2024 修订） | 模型程序执行、RadixAttention 与 KV 复用 | 理解前缀复用；本插件不实现 SGLang runtime |
+| 15 | **Preble: Efficient Distributed Prompt Scheduling for LLM Serving**，2024；[arXiv:2407.00023v2](https://arxiv.org/abs/2407.00023v2) | 分布式 KV 复用与负载均衡 | 研究背景，不在客户端部署集群调度器 |
+| 16 | **Vesta: Queueing-Aware LLM Scheduling for Real-World Workloads**，2026；[arXiv:2610.14686v1](https://arxiv.org/abs/2610.14686v1) | 稳定 KV holder、按请求选择 executor、排队与传输代价 | 保留现有 `schedule` / `prepare_task` 启发式接口；没有 KV 迁移、真实集群队列或论文性能保证 |
 
-明确区别：这里只调度文本记忆页；没有 GPU KV 传输、真实集群遥测、length bucket、权威缓存回写、迁移原子性或任务执行队列。两阶段启发式不是页面布局与任务顺序的全局最优解。接入真实集群需要在这些接口之外实现执行、指标采集及版本化缓存副本协议。
+既有执行位置建议依赖调用者输入的队列、带宽等指标，不参与本次结构化存储的正确性判断。
 
-## AgeMem：让记忆管理成为 Agent 可选动作
+## D. 开源工程：DiffMem
 
-[Agentic Memory / AgeMem, arXiv:2601.01885v1](https://arxiv.org/html/2601.01885v1)。注意它与名称相近的第三方记忆产品不是同一来源。
+[DiffMem: Git-Based Differential Memory for AI Agents](https://github.com/Growth-Kinetics/DiffMem) 是工程项目，不算第 17 篇论文。其 [README](https://github.com/Growth-Kinetics/DiffMem/blob/main/README.md) 把当前知识保存为可编辑文件，把演化过程留在 Git，按需通过日志与差异检索历史。
 
-论文将长短期记忆管理放进 Agent 策略，暴露存储、更新、检索、摘要和过滤等动作，并训练何时使用。本项目把这些动作统一为 vctx 操作，Agent 根据任务决定是否调用；预算和固定页保护由确定性代码兜底。
+本项目借鉴“当前状态默认可见，历史按需检索”。DiffMem 不是现成后端；dsh-vcontext 仍以 DSH 日志、工作目录 / Git、插件 SQLite 分别作为各自数据的权威来源，不自动上传记忆或引入其云服务依赖。
 
-差异：没有训练 AgeMem 的三阶段 RL，也没有实现 step-wise GRPO、奖励函数或已学好的替换策略。价值密度驱逐是工程默认策略，可替换为外部学习策略。page_out 不删除长期数据，属于保守过滤；没有不可逆 delete 工具。
+## 五项核心设计决定
 
-## A-MEM：笔记、链接与记忆演化
+1. **有限窗口与可恢复存储分开。** MemGPT 启发分层记忆；本项目进一步区分插件页面驻留和宿主请求。驱逐页面不会消除已经进入工具历史的正文。[MemGPT](https://arxiv.org/html/2310.08560v2)
+2. **版本引用与当前状态明确。** GCC 启发检查点和历史检索；先保证版本引用始终读到相同内容，不混同项目 HEAD 与会话目标快照。[GCC §2](https://arxiv.org/html/2508.00031v3)
+3. **操作成功和状态可信分开。** MAGE 的 Maintain 要求检查边界摘要；本项目记录操作状态与 verification，工具成功不能推断功能已验证。任务树和执行分支留待后续。[MAGE §3](https://arxiv.org/html/2606.06090v2)
+4. **摘要是有来源的派生数据。** ACE 的局部增量启发摘要独立版本与原文保留；不自动运行 Reflector / Curator，不用摘要覆盖原始证据。[ACE §3](https://arxiv.org/html/2510.04618v3)
+5. **派生记录可追溯。** SEEM 启发来源锚定；以 session、seq、操作 ID、哈希和摘要来源链接实现可核查追溯，先不引入独立图数据库。[SEEM §3](https://arxiv.org/html/2601.06411v2)
 
-[A-MEM, arXiv:2502.12110v11](https://arxiv.org/html/2502.12110v11)，重点是第 3 节的笔记构造、链接与演化。
+## 分期实现与验收
 
-论文采用带内容、语境、标签等属性的原子笔记，由语义候选和 LLM 判断构造联系，并更新既有记忆。本项目提供 title/content/summary/tags/source/links，支持相似度候选、双向链接和一次关联检索传播。
+| 阶段 | 工程目标 | 需要证明的结果 |
+|---|---|---|
+| v0.5.0 | 扩展 SQLite、Session Bridge、幂等操作、不可变内容、资源版本及摘要来源 | 重放不重复写；全文可恢复；失败与未验证状态不被提升；旧页面和检查点仍可用 |
+| v0.5.x | 显式 Session Snapshot、历史版本选择、观测到的文件版本 | 多会话引用不被全局 latest 偷换，明确文件观测时点 |
+| v0.6.0 方向 | 任务树、阶段摘要、Maintain 式验证、执行分支 | 恢复后延续有效任务路径，失败分支不成为当前已验证状态 |
+| v0.7.0 方向 | 工作集调度、访问账本、请求统计及恢复评测 | 联合衡量正确率、恢复质量、Token 成本和延迟，不只追求驻留命中率 |
 
-差异：organize 是阈值启发式，不会调用 LLM 判断关系。更复杂的标签、语境和事实演化由宿主 Agent 提交 write；每次变化都保留修订，便于审查、回滚和恢复。关联分数不是因果关系或事实真实性。
+阶段是研发方向，不是尚未完成版本的功能承诺。v0.5.0 契约见 [架构说明](ARCHITECTURE-0.5.0.md)，操作名和字段以 [API](API.md) 为准。
 
-## 效率取舍
+## 保留的工程约束
 
-驻留页渲染只读取 core/working，使用 SQLite 的 scope/tier 索引；不会在每一步对全部 archive 做检索或 embedding。只有显式 search、recall、organize、prepare_task 进入检索路径。未变的快照维持稳定字段和排序，避免时间戳造成无意义变化。
+现有 `core / working / archive`、页面修订、摘要索引及按需检索继续使用。词法向量、关联阈值和贪心预算是工程实现；没有因为引用论文就变成原始论文算法。默认字节预算不是真实模型 Tokenizer。供应商缓存命中来自可观察 Usage，插件驻留命中不能推断模型隐式用了哪些记忆。
 
-当前检索是 scope 内全量向量扫描，复杂度约 O(N·d)，适合小型本地记忆。没有实现 ANN、向量索引、检索质量评测或 RAG 对比基准；不声称速度优于现有 RAG。语义模型初始化、Python 进程启动及宿主旧快照都会产生开销，详见 README 的限制。
-
-下一步可在不改页面 API 的前提下增加：长驻 embedding 服务、ANN 索引、按任务完成收益学习驱逐、只在可信证据下合并记忆、对真实请求记录 cache hit / page fault / latency。是否值得增加这些部件，应由目标工作负载测量决定。
-
-## Harness 协议依据
-
-只依据官方仓库的公开接口编写适配层：
-
-- [本地插件及 overlay 教程](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/user/develop/basic/index.md)：name / inject / apply 与绝对路径 patch。
-- [工具作者接口](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/cookbook/adding-a-tool.md)：defineTool、execute、canonical output 和取消信号。
-- [SystemPrompt 接口](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/core/system-prompt/README.md)：scoped section/context、禁止插值的原样文本。
-- [Agent 接口](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/core/agent/src/index.ts)：Agent 身份与生命周期事件。
-- [Compaction 契约](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/compaction/compaction/README.md)：由宿主安全缩减历史，保留事件日志。
-
-代码已用 npm 实际安装的固定版本做验证，避免只依赖 master 分支页面描述。完整带模型运行仍需用户在目标部署里完成。
+Harness 集成依据公开的 [工具接口](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/cookbook/adding-a-tool.md)、[Agent 源码](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/core/agent/src/index.ts)、[SystemPrompt 契约](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/core/system-prompt/README.md)和 [Compaction 契约](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/compaction/compaction/README.md)，兼容性由固定 SDK 与本地回放验证。宿主日志保留权威地位，改变 Surface 必须走宿主支持的机制。

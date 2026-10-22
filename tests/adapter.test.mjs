@@ -101,6 +101,8 @@ test('adapter contract: tool execution, per-agent snapshots, resume, cleanup', a
   const accepted = {kind:'accept',messages:[]};
   assert.equal(await handlers.get('agent/pre-step')({agent,signal},async()=>accepted),accepted);
   await assert.rejects(tools.get('vctx').execute({operation:'status',input:'{}'},{signal}),/calling agent/);
+  await assert.rejects(tools.get('vctx').execute({operation:'state_sync',input:'{}'},{agent,signal}),/host-only/);
+  await assert.rejects(tools.get('vctx').execute({operation:'resource_store',input:JSON.stringify({source_revision:'working-tree:forged'})},{agent,signal}),/host-owned/);
   handlers.get('agent/disposed')({agent});
   assert.equal(snapshots.size,0); assert.equal(variables.size,0);
   await handlers.get('agent/created')({agent,signal});
