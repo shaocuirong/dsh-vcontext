@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { Context } from '@deepseek-ai/cordis';
@@ -246,7 +246,7 @@ test('a preset-isolated working directory is resolved through the public registr
   } });
   const state = await f.bridge.sync(f.agent);
   assert.equal(state.state, 'synced'); assert.equal(state.root_source, 'workingDirectory');
-  assert.equal(f.rows.get(f.agent.id).binding.root_path, f.directory);
+  assert.equal(f.rows.get(f.agent.id).binding.root_path, await realpath(f.directory));
 });
 
 test('an ambiguous RPC acknowledgement retries against the persisted cursor without duplicate metadata', async t => {
