@@ -311,9 +311,16 @@ class PrefixTests(unittest.TestCase):
         reopened = ContextStore(self.path, 'one', budget=4096)
         try:
             self.assertEqual(reopened.read(page)['content'], '旧数据')
+            self.assertIsNotNone(reopened.migration_backup)
+            backup = sqlite3.connect(reopened.migration_backup)
+            try:
+                self.assertEqual(backup.execute("SELECT value FROM metadata WHERE key='schema'").fetchone()[0], '1')
+                self.assertEqual(backup.execute('SELECT COUNT(*) FROM pages WHERE id=?', (page,)).fetchone()[0], 1)
+            finally:
+                backup.close()
             self.assertEqual(reopened.snapshot()['generation'], 1)
             self.assertEqual(reopened.db.execute(
-                "SELECT value FROM metadata WHERE key='schema'").fetchone()[0], '6')
+                "SELECT value FROM metadata WHERE key='schema'").fetchone()[0], '7')
             self.assertEqual(reopened.dashboard()['scope'], 'one')
         finally:
             reopened.close()

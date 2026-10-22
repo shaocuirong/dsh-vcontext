@@ -11,6 +11,8 @@ from pathlib import Path
 
 from .embedding import LexicalEmbedder, cosine, normalize, terms
 from .scheduler import choose_executor
+from .state import StructuredState, install_schema
+from .migrations import backup_legacy
 
 
 class ContextError(ValueError):
@@ -74,7 +76,12 @@ OUTLINE_LIMIT = 32
 MUTATING_OPERATIONS = frozenset({
     'write', 'ingest', 'page_in', 'page_out', 'unpin', 'recall', 'restore',
     'compact', 'organize', 'prepare_task', 'render', 'checkpoint', 'fold',
-    'set_policy', 'policy_tick', 'set_session_enabled', 'record_usage'})
+    'set_policy', 'policy_tick', 'set_session_enabled', 'record_usage',
+    'state_bind', 'state_sync', 'resource_store', 'summary_store'})
+
+STRUCTURED_OPERATIONS = frozenset({'state_bind', 'state_sync', 'state_status',
+    'operation_list', 'operation_read', 'resource_store', 'resource_read',
+    'resource_history', 'summary_store', 'summary_read'})
 
 
 def atomic(method):
@@ -132,6 +139,7 @@ class ContextStore:
         self.db.execute('PRAGMA journal_mode=WAL')
         self.db.execute('PRAGMA foreign_keys=ON')
         try:
+            self.migration_backup = backup_legacy(self.db)
             self._initialize()
         except BaseException:
             self.db.close()
@@ -141,7 +149,7 @@ class ContextStore:
     def _initialize(self):
         self.db.execute('CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL)')
         version = self.db.execute("SELECT value FROM metadata WHERE key='schema'").fetchone()
-        if version and version[0] not in ('1', '2', '3', '4', '5', '6'):
+        if version and version[0] not in ('1', '2', '3', '4', '5', '6', '7'):
             raise ContextError('unsupported schema version; migrate before opening')
         model = self.db.execute("SELECT value FROM metadata WHERE key='embedding'").fetchone()
         if model and model[0] != self.embedder.model_id:
@@ -206,7 +214,10 @@ class ContextStore:
         self.db.execute('''CREATE TABLE IF NOT EXISTS replacement_state(
             scope TEXT PRIMARY KEY, last_turn TEXT, turns INTEGER NOT NULL DEFAULT 0,
             runs INTEGER NOT NULL DEFAULT 0, last_result TEXT NOT NULL DEFAULT '{}')''')
-        self.db.execute("INSERT OR REPLACE INTO metadata VALUES('schema','6')")
+        # Additive migration: preserve legacy pages, revisions, snapshots and
+        # usage. State metadata and immutable objects never alter residency.
+        install_schema(self.db)
+        self.db.execute("INSERT OR REPLACE INTO metadata VALUES('schema','7')")
 
     def close(self):
         self.db.close()
@@ -936,6 +947,7 @@ class ContextStore:
             pages=sorted(pages, key=lambda p: (p['segment'] is None, p['segment'] or 9, -p['bytes'], p['id'])),
             renders=renders, residency=residency, usage=self._usage_summary(),
             replacement=dict(policy=self.replacement_policy(), state=self.replacement_state()),
+            structured_state=StructuredState(self.db, self.scope).state_status(),
             totals=dict(renders=len(renders),
                         invalidated_bytes_sum=sum(invalidated),
                         invalidated_bytes_mean=round(sum(invalidated)/len(invalidated), 1) if invalidated else 0,
@@ -1068,6 +1080,8 @@ class ContextStore:
                     policy='relevance-first admission followed by cache-aware placement')
 
     def dispatch(self, operation, arguments):
+        if operation in STRUCTURED_OPERATIONS:
+            return StructuredState(self.db, self.scope).dispatch(operation, arguments)
         allowed = {'write','ingest','read','history','search','page_in','page_out','unpin',
                    'recall','render','snapshot','prefix','metrics','dashboard','usage','record_usage',
                     'session_state','set_session_enabled','replacement_policy','set_policy','policy_tick','status','checkpoint',
