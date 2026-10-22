@@ -95,7 +95,7 @@ test('adapter contract: tool execution, per-agent snapshots, resume, cleanup', a
   await handlers.get('agent/created')({agent,signal});
   const result = await tools.get('vctx').execute({operation:'write',input:JSON.stringify({content:'task result {{verbatim}}',tier:'working'})},{agent,signal});
   assert.ok(result.page.id);
-  assert.equal(snapshots.get(agent.id).text(),'{{vctx_pages}}');
+  assert.equal(snapshots.get(agent.id).text(),'{{vctx_pages}}\n{{vctx_session_target}}');
   assert.match(variables.get('vctx_pages')(),/task result \{\{verbatim\}\}/);
   assert.equal(snapshots.get(agent.id).interpolate,false);
   const accepted = {kind:'accept',messages:[]};
@@ -108,6 +108,6 @@ test('adapter contract: tool execution, per-agent snapshots, resume, cleanup', a
   handlers.get('agent/disposed')({agent});
   assert.equal(snapshots.size,0); assert.equal(variables.size,0);
   await handlers.get('agent/created')({agent,signal});
-  assert.equal(snapshots.get(agent.id).text(),'{{vctx_pages}}');
+  assert.equal(snapshots.get(agent.id).text(),'{{vctx_pages}}\n{{vctx_session_target}}');
   assert.match(variables.get('vctx_pages')(),/task result \{\{verbatim\}\}/);
 });

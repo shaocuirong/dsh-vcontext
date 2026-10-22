@@ -7,6 +7,7 @@ import { createLiveContext } from './adapter/live-context.mjs';
 import { createReplacement } from './adapter/replacement.mjs';
 import { createResultProjection } from './adapter/result-projection.mjs';
 import { createResultJobs } from './adapter/result-jobs.mjs';
+import { createSessionSnapshots } from './adapter/session-snapshots.mjs';
 
 export const name = 'virtual-context';
 export const inject = ['tools', 'agents', 'systemPrompt'];
@@ -17,13 +18,15 @@ export function apply(ctx, config = {}) {
   const replacement = createReplacement(ctx, diagnostics);
   const resultProjection = createResultProjection(ctx, transport, sessionBridge, diagnostics);
   const resultJobs = createResultJobs(resultProjection);
+  const sessionSnapshots = createSessionSnapshots(ctx, transport, sessionBridge, diagnostics);
+  ctx.effect(() => () => sessionSnapshots.dispose(), 'virtual-context: session resource snapshots');
   ctx.effect(() => () => resultJobs.dispose(), 'virtual-context: result projection jobs');
   ctx.effect(() => () => replacement.dispose(), 'virtual-context: replacement jobs');
   ctx.effect(() => () => liveContext.dispose(), 'virtual-context: live request observer');
   // The client half reads the dashboard through this route, and
   // /virtual-context flips the per-session switch the route reports.
   ctx.inject(['webServer'], carrier => {
-    carrier.effect(() => mountRoutes(carrier, settings, transport, liveContext, diagnostics, replacement, sessionBridge, resultProjection, resultJobs), 'virtual-context: dashboard routes');
+    carrier.effect(() => mountRoutes(carrier, settings, transport, liveContext, diagnostics, replacement, sessionBridge, resultProjection, resultJobs, sessionSnapshots), 'virtual-context: dashboard routes');
   });
   ctx.inject(['commands'], carrier => {
     carrier.effect(() => mountCommand(carrier, settings, transport), 'virtual-context: command');
