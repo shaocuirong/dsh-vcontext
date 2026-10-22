@@ -13,6 +13,8 @@ assert.ok((await read('README.md')).includes(`releases/tag/v${version}`), 'READM
 assert.ok((await read('CHANGELOG.md')).includes(`## [${version}] - `), 'changelog version missing');
 for (const path of ['index.mjs', 'lib/client.js', 'adapter/context-integration.mjs', 'adapter/diagnostics.mjs',
   'adapter/session-bridge.mjs', 'adapter/resource-capture.mjs', 'vcontext/state.py', 'vcontext/migrations.py',
-  'docs/RESEARCH.md', 'docs/ARCHITECTURE-0.5.0.md', 'vcontext/server.py'])
+  'docs/RESEARCH.md', 'docs/ARCHITECTURE-0.5.0.md', 'docs/PROJECTION-0.6.0.md',
+  'adapter/result-projection.mjs', 'adapter/result-jobs.mjs', 'docs/NODES-0.6.0.md',
+  'vcontext/result_store.py', 'vcontext/server.py'])
   await read(path);
 console.log(`Release metadata and entry points verified: v${version}`);

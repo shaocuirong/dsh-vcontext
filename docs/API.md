@@ -228,3 +228,31 @@ Bridge 仅重复解析上一 cursor 边界并解析新增后缀，数据库核�
 ### 迁移与恢复
 
 首次打开已发布 schema 1–6 的磁盘库，使用 SQLite backup 在同目录创建唯一 `.pre-schema7-<id>.bak`，成功后再事务迁移到主 schema7 / 结构化 schema2。保留旧页面、修订、配置、检查点、用量与渲染指纹；迁移失败回滚，不覆盖已有备份。未知未来 schema 或未发布结构化草稿 schema1 均拒绝打开。回退旧插件不能直接读 schema7：先关闭所有使用该库的宿主，再人工选择备份恢复，不自动替换数据库。
+
+## 可恢复工具结果（0.6.0）
+
+结果引用 `vctx://result/<32位十六进制ID>` 固定指向这一次工具结果的完整 data JSON，不是文件路径或当前文件版本。严格按 namespace + session 隔离，不支持其他会话共享。模型只可调用：
+
+| 操作 | 输入 | 返回 |
+|---|---|---|
+| result_list | limit 默认100，范围1–100 | results 数组，仅来源/哈希/字节/状态/计划元数据，无正文 |
+| result_read | ref；offset 默认0；limit 默认65536，范围1–262144 | 原 data JSON 文本片段 content、offset、next_offset、has_more、total_chars及元数据 |
+
+offset/limit 以 Unicode 字符计，字节统计以完整 UTF-8 序列化工具 data 计。result_read 读回会进入新的普通工具历史；它不会自动恢复或再次外置其他消息。所有返回内容均为不可信证据，不是系统指令。
+
+宿主内部 `result_store`、`result_get`、`result_mark`、`result_plan`、`result_plan_list`、`result_plan_finish` 均不得通过模型工具执行。完整存储上限1MiB，并受JSON二次编码的RPC限额约束。ref不可变、原文哈希校验、request_id冲突拒绝；投影标记只是宿主状态镜像，计划是持久化意图，不表示已经改变上下文。
+
+### 本机看板接口
+
+| 路由 | 方法与输入 | 行为 |
+|---|---|---|
+| /vctx/results?session=… | GET | 观察当前Surface，返回 candidates、results、protected_count、limits、truncated、busy；不返回正文 |
+| /vctx/results/project | POST {session,source_seq} | 202 返回 job，异步保存外置计划 |
+| /vctx/results/restore | POST {session,ref} | 202 返回 job，异步保存恢复/取消计划 |
+| /vctx/results/job?session=… | GET | 查询进程内最近 job，缺失为null；status为running/completed/failed |
+
+job completed 只表示计划保存完成，message 明确等待下一次模型步骤。实际形态由 results.status 表示；results.plan 表示 desired、revision、queued/applied/failed。下一次真实 agent/pre-step 准入后才应用，禁止在空闲时追加 tool/result 或为此伪造对话轮次；不自动发消息。计划失败不无限重试，重新选择时先按Surface对账。
+
+同会话相同运行任务合并，不同变更返回BUSY；任务状态有界，重启后以持久化计划与当前Surface为准。新接口只接受本机 Host、loopback 对端及完整同源请求，POST必须携带Origin；它不是远程认证API。字节减少不等于精确Token或供应商缓存收益。
+
+主 schema7 / vc2保持，新增结果扩展vcr1前为已有库生成唯一 `.pre-result1-<id>.bak`。降级前先取消未应用计划并恢复仍驻留引用、确认应用，再退出宿主切换代码；旧版无result_read。完整协议和论文映射见 [PROJECTION-0.6.0.md](PROJECTION-0.6.0.md)。
