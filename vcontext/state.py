@@ -442,6 +442,12 @@ class StructuredState:
                 'source_revision': row['source_revision'], 'operation_id': row['operation_id'],
                 'created_at': row['created_at'], 'current_in_session': bool(current and current['resource_id'] == row['resource_id'])}
 
+    def _resource_metadata_many(self, rows):
+        return [self._resource_metadata(row) for row in rows]
+
+    def _check_resource_capacity(self, current):
+        """Optional working-set limit, checked after idempotent replay and CAS."""
+
     @_atomic
     def resource_store(self, path, content, request_id, operation_id=None, expected_ref=None, source_revision=None):
         binding = self._binding()
@@ -459,7 +465,11 @@ class StructuredState:
         expected_id = _resource_id(expected_ref) if expected_ref is not None else None
         if (current['resource_id'] if current else None) != expected_id:
             raise ValueError('resource version conflict; expected_ref must match this session snapshot')
-        version = self._resource(current['resource_id'], binding)['version'] + 1 if current else 1
+        self._check_resource_capacity(current)
+        # A snapshot branch can remove a working pointer without deleting its
+        # immutable history. Reintroducing that path must not reuse version 1.
+        version = self.db.execute('''SELECT COALESCE(MAX(version),0)+1 FROM vc_resources
+            WHERE namespace=? AND session_id=? AND path=?''', (*self._scope, path)).fetchone()[0]
         resource_id = uuid.uuid4().hex
         content_hash = self._object(content)
         self.db.execute('''INSERT INTO vc_resources(resource_id,namespace,project_id,session_id,path,version,
@@ -496,7 +506,7 @@ class StructuredState:
         rows = self._all('''SELECT r.*,o.char_count,o.byte_count FROM vc_resources r JOIN vc_objects o
             ON r.content_hash=o.content_hash WHERE r.namespace=? AND r.session_id=? AND r.path=?
             ORDER BY r.version DESC LIMIT ?''', (*self._scope, path, limit))
-        return {'resources': [self._resource_metadata(row) for row in rows]}
+        return {'resources': self._resource_metadata_many(rows)}
 
     @_atomic
     def summary_store(self, request_id, content, sources, level='operation', verification='not_tested'):

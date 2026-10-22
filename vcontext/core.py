@@ -11,8 +11,9 @@ from pathlib import Path
 
 from .embedding import LexicalEmbedder, cosine, normalize, terms
 from .scheduler import choose_executor
-from .state import StructuredState, install_schema
+from .state import install_schema
 from .result_store import ResultStore, OPERATIONS as RESULT_OPERATIONS, install_result_schema
+from .session_snapshots import SnapshotState, OPERATIONS as SNAPSHOT_OPERATIONS, install_snapshot_schema
 from .migrations import backup_legacy
 
 
@@ -79,7 +80,7 @@ MUTATING_OPERATIONS = frozenset({
     'compact', 'organize', 'prepare_task', 'render', 'checkpoint', 'fold',
     'set_policy', 'policy_tick', 'set_session_enabled', 'record_usage',
     'state_bind', 'state_sync', 'resource_store', 'summary_store', 'result_store', 'result_mark',
-    'result_plan', 'result_plan_finish'})
+    'result_plan', 'result_plan_finish', 'snapshot_create', 'snapshot_checkout', 'snapshot_detach', 'snapshot_branch'})
 
 STRUCTURED_OPERATIONS = frozenset({'state_bind', 'state_sync', 'state_status',
     'operation_list', 'operation_read', 'resource_store', 'resource_read',
@@ -151,7 +152,7 @@ class ContextStore:
     def _initialize(self):
         self.db.execute('CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL)')
         version = self.db.execute("SELECT value FROM metadata WHERE key='schema'").fetchone()
-        if version and version[0] not in ('1', '2', '3', '4', '5', '6', '7'):
+        if version and version[0] not in ('1', '2', '3', '4', '5', '6', '7', '8'):
             raise ContextError('unsupported schema version; migrate before opening')
         model = self.db.execute("SELECT value FROM metadata WHERE key='embedding'").fetchone()
         if model and model[0] != self.embedder.model_id:
@@ -220,7 +221,8 @@ class ContextStore:
         # usage. State metadata and immutable objects never alter residency.
         install_schema(self.db)
         install_result_schema(self.db)
-        self.db.execute("INSERT OR REPLACE INTO metadata VALUES('schema','7')")
+        install_snapshot_schema(self.db)
+        self.db.execute("INSERT OR REPLACE INTO metadata VALUES('schema','8')")
 
     def close(self):
         self.db.close()
@@ -950,7 +952,7 @@ class ContextStore:
             pages=sorted(pages, key=lambda p: (p['segment'] is None, p['segment'] or 9, -p['bytes'], p['id'])),
             renders=renders, residency=residency, usage=self._usage_summary(),
             replacement=dict(policy=self.replacement_policy(), state=self.replacement_state()),
-            structured_state=StructuredState(self.db, self.scope).state_status(),
+            structured_state=SnapshotState(self.db, self.scope).state_status(),
             totals=dict(renders=len(renders),
                         invalidated_bytes_sum=sum(invalidated),
                         invalidated_bytes_mean=round(sum(invalidated)/len(invalidated), 1) if invalidated else 0,
@@ -1085,8 +1087,8 @@ class ContextStore:
     def dispatch(self, operation, arguments):
         if operation in RESULT_OPERATIONS:
             return ResultStore(self.db, self.scope).dispatch(operation, arguments)
-        if operation in STRUCTURED_OPERATIONS:
-            return StructuredState(self.db, self.scope).dispatch(operation, arguments)
+        if operation in STRUCTURED_OPERATIONS or operation in SNAPSHOT_OPERATIONS:
+            return SnapshotState(self.db, self.scope).dispatch(operation, arguments)
         allowed = {'write','ingest','read','history','search','page_in','page_out','unpin',
                    'recall','render','snapshot','prefix','metrics','dashboard','usage','record_usage',
                     'session_state','set_session_enabled','replacement_policy','set_policy','policy_tick','status','checkpoint',
