@@ -152,8 +152,8 @@ test('navigation names, settings controls and persisted parameter bounds are usa
   const settings = find('settings.section').component({});
   assert.equal(findNode(settings, n => n.props.id === 'vctx-events').props.value, 2000);
   assert.equal(findNode(settings, n => n.props.id === 'vctx-refresh').props.value, 1000);
-  assert.match(text(settings), /每 N 轮替换/);
-  assert.match(text(settings), /达到阈值替换/);
+  assert.match(text(settings), /每 N 轮归档/);
+  assert.match(text(settings), /达到阈值归档/);
   assert.match(text(settings), /轮次或阈值触发/);
 });
 
