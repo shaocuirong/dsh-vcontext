@@ -1,13 +1,13 @@
 # dsh-vcontext
 
-当前版本：**[v0.5.0](https://github.com/shaocuirong/dsh-vcontext/releases/tag/v0.5.0)** · [架构设计](docs/ARCHITECTURE-0.5.0.md) · [16 篇参考论文](docs/RESEARCH.md) · [实现节点](docs/NODES-0.5.0.md) · [更新日志](CHANGELOG.md) · [验证记录](docs/VALIDATION.md)
+当前版本：**[v0.6.0](https://github.com/shaocuirong/dsh-vcontext/releases/tag/v0.6.0)** · [可恢复投影](docs/PROJECTION-0.6.0.md) · [优化 Git 节点](docs/NODES-0.6.0.md) · [架构基础](docs/ARCHITECTURE-0.5.0.md) · [16 篇参考论文](docs/RESEARCH.md) · [更新日志](CHANGELOG.md) · [验证记录](docs/VALIDATION.md)
 
 **DeepSeek Harness 客户端虚拟上下文管理器**：结构化操作、可追溯资源版本、有来源的摘要、按需换页与会话内看板。
 
 [![Tests](https://github.com/shaocuirong/dsh-vcontext/actions/workflows/test.yml/badge.svg)](https://github.com/shaocuirong/dsh-vcontext/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-默认页面存储离线运行，使用 SQLite 保存页面原文与修订，不需要额外的模型 API Key。手动“会话上下文替换”使用 Harness 配置的摘要模型，可能产生模型调用。适用于本地、单用户 Harness 环境。
+默认页面存储和工具结果外置离线运行，不需要额外的模型 API Key。“压缩会话上下文”则使用 Harness 配置的摘要模型，可能产生模型调用。适用于本地、单用户 Harness 环境。
 
 > 仓库名为 `dsh-vcontext`；安装包名和插件标识保留 `dsh-virtual-context`，兼容既有配置。界面统一显示“上下文缓存”。
 
@@ -16,14 +16,15 @@
 - **结构化会话索引**：通过公开 SessionQuery 接口增量同步 Native / PTC 操作元数据、来源 seq 和状态；幂等连续游标、Fork 与 Surface 投影区分，工具成功仍为未测试。
 - **版本化资源与摘要**：不可变 SHA256 内容对象、每会话当前路径指针、CAS 更新和 request_id 去重；历史原文按引用读取，摘要保留来源而不覆盖证据。
 - **可选文件捕获**：默认关闭；宿主显式启用后，经宿主 fs 有界读取项目内 UTF-8 文件，返回版本引用。不会自动扫描仓库、覆盖文件或创建 Git 提交。
-- **会话上下文替换**：通过 Harness 官方压缩服务将旧历史替换为摘要，保留原始日志；兼容隔离预设及未激活会话，显示运行状态、替换数量和前后大小。
+- **工具结果外置与恢复**：明确选择较大的成功文本读取结果，保存完整数据和计划，在下一次真实模型步骤前将原位置换为引用；支持分页读取与排队原位恢复，不生成摘要，不改原始历史。等待状态明确显示，错误、测试、执行和多模态结果默认保护。
+- **压缩会话上下文**：通过 Harness 官方压缩服务将旧历史替换为摘要，保留原始日志；原“会话上下文替换”按钮更名，行为及已有 API 保持兼容。
 - **dsh-context 联动**：可选读取公开会话投影，展示上下文组成、压缩次数和供应商累计用量；优先使用宿主 token-meter，无数据时明确显示估算或未连接状态。
 - **运行诊断**：有界结构化日志、请求编号、耗时、错误分类、慢调用与健康检查；不记录正文或原始错误内容。
 - **内核恢复**：回滚时清除未提交缓存、复用页面序列化、限制 RPC 缓冲和排队数量，异常服务可重新启动；存储不可用时保留上次快照并允许宿主继续生成。
 - **实时上下文**：读取活跃会话或只读还原磁盘上的已有多轮会话，无需新发消息；展示插件加载后最近一次 LLM 调用的独立快照，默认每 2 秒刷新。
 - **专用看板**：主看板隐藏输入框，回到聊天自动恢复；右侧面板不影响聊天输入。
 - **分层记忆**：`core` 核心页常驻；`working` 工作页按需换出；`archive` 归档页可检索恢复。
-- **四种替换模式**：手动、每 N 轮、达到占用阈值、轮次或阈值任一满足。
+- **四种工作页归档模式**：手动、每 N 轮、达到占用阈值、轮次或阈值任一满足。
 - **可调参数**：间隔、触发阈值、目标占用、保留最近页数，以及低价值密度 / 最久未使用优先。
 - **会话内界面**：输入框旁开关、同名导航标签页、右侧面板、分组设置与卡片式看板。
 - **持久恢复**：SQLite 事务、不可变修订、会话隔离、检查点恢复；换出不删除原文。
@@ -33,6 +34,13 @@
 ## 界面预览
 
 以下截图来自独立预览，使用演示数据。它们不代表模型效果或真实供应商缓存收益。
+
+<details open>
+<summary>0.6.0 原生可恢复投影：排队状态与摘要压缩分开</summary>
+
+![工具结果外置与恢复计划](docs/images/projection-060.png)
+
+</details>
 
 <details open>
 <summary>0.5.0 原生 Harness 结构化状态验收</summary>
@@ -49,7 +57,7 @@
 </details>
 
 <details>
-<summary>替换策略与分组参数设置</summary>
+<summary>工作页归档设置（旧版截图）</summary>
 
 ![上下文缓存设置](docs/images/settings.png)
 
@@ -57,7 +65,7 @@
 
 ## 安装到 Harness 桌面端
 
-要求：DeepSeek Harness、Python 3.10+、Node.js 22+。基础 SDK 回归基于 `0.2.0-rc.2`，会话上下文替换已在本机 Harness `0.2.1-rc.2` 验证，需要宿主提供 `compactNow` 及会话恢复服务；缺少能力时显示原因，成功替换由宿主追加日志事件并保留原始历史。
+要求：DeepSeek Harness、Python 3.10+、Node.js 22+。基础 SDK 回归基于 `0.2.0-rc.2`，工具结果投影和会话压缩已在本机 Harness `0.2.1-rc.2` 验证；投影需要公开维护、查询和持久化服务，并在真实 pre-step 应用，压缩需要 `compactNow`。缺少能力时显示原因，原始历史保留。
 
 先完全退出桌面端，包括系统托盘，再安装：
 
@@ -82,6 +90,8 @@ dsh plugin --profile desktop add "link:$((Get-Location).Path)"
 
 0.5.0 首次打开旧库会先生成同目录唯一 `.pre-schema7-<id>.bak`，再事务迁移；已有页面、配置、检查点和用量保留。主 schema 升为 7，旧插件不能直接读取升级后的库，回退需先退出宿主并人工选择备份。不要用旧数据库文件覆盖新数据。
 
+0.6.0 保持主 schema7 / vc2，增量增加结果表 vcr1。首次打开已有 schema7 库前生成唯一 `.pre-result1-<id>.bak`。降级前先取消排队计划并恢复仍驻留的引用，确认已应用，再退出宿主切换代码；旧插件没有 result_read。备份不是自动覆盖恢复指令。
+
 ## 快速使用
 
 1. 点击输入框旁的“上下文缓存”，开启当前会话的面板；也可以输入 `/virtual-context on`。
@@ -91,11 +101,11 @@ dsh plugin --profile desktop add "link:$((Get-Location).Path)"
    > 调用 vctx，operation=write，input={"title":"项目约束","content":"离线优先；数据库采用 SQLite。","tier":"core"}。
 
 4. 换题时使用 `recall` 检索已归档内容；需要原文时使用 `read`。
-5. 在“设置 → 上下文缓存”选择替换模式，点击“保存替换策略”。显示偏好会自动保存。
+5. 在“工具结果外置与恢复”刷新候选，逐条选择外置或恢复；在设置中另行保存工作页归档策略。显示偏好会自动保存。
 6. 减少完整聊天上下文时，点击看板“立即替换会话上下文”；“仅归档插件工作页”和自动策略只管理 vctx 工作页。生成中的会话需等待结束后再替换。
 7. 用 `operation_list` 查询宿主操作索引；用 `resource_store` 保存明确文本，或启用后用 `resource_capture` 捕获文件版本；从返回值保留 ref，再通过 `resource_read` 按需读回旧版本。详见 [结构化状态 API](docs/API.md#结构化状态与资源050)。
 
-v0.5.0 实现基础存储与会话桥接。完整 Session Snapshot / Git DAG、MAGE 任务树、事实图、自动摘要、MCP 服务器及统一双命中率调度仍是后续阶段，不将论文引用当成功能实现或跑分证明。
+v0.6.0 在基础存储与会话桥接之上补充可恢复的单条工具结果投影。完整 Session Snapshot / Git DAG、MAGE 任务树、事实图、自动摘要、MCP 服务器及统一双命中率调度仍是后续阶段，不将论文引用当成功能实现或跑分证明。阶段顺序按宿主可见性这一实际缺口调整。
 
 工具的 `input` 字段实际接受 JSON 字符串：
 
@@ -151,7 +161,7 @@ dsh plugin --profile desktop add dsh-context@0.74.0
 ## 边界
 
 - 页面预算默认按 UTF-8 字节计算，**不是模型完整上下文窗口**。本插件不会删除宿主历史，仍应配合 Harness `/compact`。
-- 面板开关控制显示，不会自动归档聊天记录，也不会暂停已启用的替换策略。内容由 Agent 通过 `vctx` 显式保存。
+- 面板开关控制显示，不会自动归档聊天记录，也不会暂停已启用的工作页归档策略或明确提交的投影计划。内容由 Agent 通过 `vctx` 显式保存。
 - 字节稳定不保证供应商缓存命中；命中率仅来自实际 usage，没有记录时显示空状态。
 - 默认检索是离线词法基线，不代表神经语义检索。可选 sentence-transformers 模型需自行安装，见 [研究映射](docs/RESEARCH.md)。
 - 数据库为本机明文文件。会话隔离是应用层隔离，不是多租户认证机制。

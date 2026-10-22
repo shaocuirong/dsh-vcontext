@@ -9,12 +9,14 @@ export const MUTATING_OPERATIONS = new Set([
   'set_policy', 'policy_tick', 'set_session_enabled',
   'record_usage',
   'state_bind', 'state_sync', 'resource_store', 'resource_capture', 'summary_store',
+  'result_store', 'result_mark', 'result_plan', 'result_plan_finish',
 ]);
 
 export const READ_OPERATIONS = new Set([
   'read', 'history', 'search', 'snapshot', 'prefix', 'metrics', 'status',
   'checkpoints', 'schedule', 'replacement_policy', 'session_state', 'dashboard', 'usage',
   'state_status', 'operation_list', 'operation_read', 'resource_read', 'resource_history', 'summary_read',
+  'result_read', 'result_list', 'result_get', 'result_plan_list',
 ]);
 
 export function isMutating(operation) {
