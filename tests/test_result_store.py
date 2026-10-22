@@ -193,6 +193,108 @@ class ResultEvidenceTests(unittest.TestCase):
         self.store.db.commit()
         self.save()
 
+    def test_plan_is_persistent_idempotent_and_does_not_claim_surface_applied(self):
+        saved = self.save()
+        self.assertIsNone(saved['plan'])
+        plan = self.store.dispatch('result_plan', {'ref': saved['ref'], 'desired': 'projected'})
+        self.assertEqual((plan['revision'], plan['desired'], plan['status'], plan['error_code']),
+                         (1, 'projected', 'queued', None))
+        self.assertEqual(self.store.dispatch('result_plan', {'ref': saved['ref'], 'desired': 'projected'}), plan)
+        self.store.close()
+        self.store = ContextStore(self.path, self.scope)
+        self.assertEqual(self.store.dispatch('result_plan_list', {}), {'plans': [plan]})
+        for operation in ('result_get', 'result_read'):
+            evidence = self.store.dispatch(operation, {'ref': saved['ref']})
+            self.assertEqual(evidence['plan'], plan)
+            self.assertEqual(evidence['status'], 'stored')
+            self.assertIsNone(evidence['surface_seq'])
+        self.assertEqual(self.store.dispatch('result_list', {})['results'][0]['plan'], plan)
+
+    def test_opposite_plan_cancels_queued_intent_and_stale_completion_cannot_finish_it(self):
+        saved = self.save()
+        project = self.store.dispatch('result_plan', {'ref': saved['ref'], 'desired': 'projected'})
+        restore = self.store.dispatch('result_plan', {'ref': saved['ref'], 'desired': 'restored'})
+        self.assertEqual(restore['revision'], project['revision'] + 1)
+        self.assertEqual(restore['desired'], 'restored')
+        with self.assertRaisesRegex(ValueError, 'revision conflict'):
+            self.store.dispatch('result_plan_finish', {'ref': saved['ref'], 'revision': project['revision'], 'status': 'applied'})
+        self.assertEqual(self.store.dispatch('result_plan_list', {}), {'plans': [restore]})
+        finished = self.store.dispatch('result_plan_finish', {'ref': saved['ref'], 'revision': restore['revision'], 'status': 'applied'})
+        self.assertEqual(finished['status'], 'applied')
+        self.assertEqual(self.store.dispatch('result_plan_list', {}), {'plans': []})
+        self.assertEqual(self.store.dispatch('result_get', {'ref': saved['ref']})['status'], 'stored',
+                         'plan completion is a mirror, not proof of a real host Surface event')
+
+    def test_plan_failure_is_not_automatically_retried_and_manual_requeue_increments_revision(self):
+        saved = self.save()
+        args = {'ref': saved['ref'], 'desired': 'projected'}
+        plan = self.store.dispatch('result_plan', args)
+        failed = self.store.dispatch('result_plan_finish', {'ref': saved['ref'], 'revision': plan['revision'],
+            'status': 'failed', 'error_code': 'PERSISTENCE_FAILED'})
+        self.assertEqual((failed['status'], failed['error_code']), ('failed', 'PERSISTENCE_FAILED'))
+        self.assertEqual(self.store.dispatch('result_plan_list', {}), {'plans': []})
+        self.assertEqual(self.store.dispatch('result_plan_finish', {'ref': saved['ref'], 'revision': plan['revision'],
+            'status': 'failed', 'error_code': 'PERSISTENCE_FAILED'}), failed)
+        with self.assertRaisesRegex(ValueError, 'different outcome'):
+            self.store.dispatch('result_plan_finish', {'ref': saved['ref'], 'revision': plan['revision'], 'status': 'applied'})
+        retried = self.store.dispatch('result_plan', args)
+        self.assertEqual(retried['revision'], plan['revision'] + 1)
+        self.assertEqual((retried['status'], retried['error_code']), ('queued', None))
+        finished = self.store.dispatch('result_plan_finish', {'ref': saved['ref'], 'revision': retried['revision'], 'status': 'applied'})
+        self.assertEqual(self.store.dispatch('result_plan_finish', {'ref': saved['ref'], 'revision': retried['revision'], 'status': 'applied'}), finished)
+        queued_again = self.store.dispatch('result_plan', args)
+        self.assertEqual(queued_again['revision'], retried['revision'] + 1)
+
+    def test_plan_scope_and_revision_cas_hold_across_connections(self):
+        saved = self.save()
+        plan = self.store.dispatch('result_plan', {'ref': saved['ref'], 'desired': 'projected'})
+        with ContextStore(self.path, self.scope) as second:
+            other_intent = second.dispatch('result_plan', {'ref': saved['ref'], 'desired': 'restored'})
+            with self.assertRaisesRegex(ValueError, 'revision conflict'):
+                self.store.dispatch('result_plan_finish', {'ref': saved['ref'], 'revision': plan['revision'], 'status': 'applied'})
+            self.assertEqual(self.store.dispatch('result_plan_list', {}), {'plans': [other_intent]})
+        for scope in (json.dumps(['test', 'bob']), json.dumps(['other', 'alice'])):
+            with ContextStore(self.path, scope) as other:
+                self.bind_sync(other)
+                self.assertEqual(other.dispatch('result_plan_list', {}), {'plans': []})
+                for op, args in (
+                    ('result_plan', {'ref': saved['ref'], 'desired': 'projected'}),
+                    ('result_plan_finish', {'ref': saved['ref'], 'revision': other_intent['revision'], 'status': 'applied'})):
+                    with self.assertRaisesRegex(ValueError, 'this session'):
+                        other.dispatch(op, args)
+
+    def test_plan_validations_reject_bad_statuses_revisions_and_unbounded_error_text(self):
+        saved = self.save()
+        for desired in ('applied', '', None, True):
+            with self.assertRaises(ValueError):
+                self.store.dispatch('result_plan', {'ref': saved['ref'], 'desired': desired})
+        plan = self.store.dispatch('result_plan', {'ref': saved['ref'], 'desired': 'projected'})
+        base = {'ref': saved['ref'], 'revision': plan['revision'], 'status': 'failed'}
+        for changes in ({'revision': 0}, {'revision': True}, {'revision': -1}, {'revision': 1.5},
+                        {'status': 'queued'}, {'error_code': 'private diagnostic text'},
+                        {'error_code': False}, {'error_code': 0}, {'error_code': ''},
+                        {'error_code': 'A' * 65}, {'status': 'applied', 'error_code': 'FAILED'}):
+            with self.assertRaises(ValueError):
+                self.store.dispatch('result_plan_finish', {**base, **changes})
+        failed = self.store.dispatch('result_plan_finish', base)
+        self.assertEqual(failed['error_code'], 'FAILED')
+        for limit in (0, 101, True):
+            with self.assertRaises(ValueError):
+                self.store.dispatch('result_plan_list', {'limit': limit})
+
+    def test_plan_changes_are_rolled_back_with_the_callers_outer_transaction(self):
+        saved = self.save()
+        self.store.db.execute('BEGIN IMMEDIATE')
+        self.store.dispatch('result_plan', {'ref': saved['ref'], 'desired': 'projected'})
+        self.store.db.rollback()
+        self.assertEqual(self.store.dispatch('result_plan_list', {}), {'plans': []})
+        self.assertIsNone(self.store.dispatch('result_get', {'ref': saved['ref']})['plan'])
+        plan = self.store.dispatch('result_plan', {'ref': saved['ref'], 'desired': 'projected'})
+        self.store.db.execute('BEGIN IMMEDIATE')
+        self.store.dispatch('result_plan_finish', {'ref': saved['ref'], 'revision': plan['revision'], 'status': 'applied'})
+        self.store.db.rollback()
+        self.assertEqual(self.store.dispatch('result_plan_list', {}), {'plans': [plan]})
+
 
 class PublishedSchemaSevenUpgradeTests(unittest.TestCase):
     def setUp(self):
@@ -204,7 +306,7 @@ class PublishedSchemaSevenUpgradeTests(unittest.TestCase):
             store.checkpoint('published')
             store.set_session_enabled(True)
         db = sqlite3.connect(self.path)
-        for table in ('vcr_marks', 'vcr_results', 'vcr_schema'):
+        for table in ('vcr_plans', 'vcr_marks', 'vcr_results', 'vcr_schema'):
             db.execute('DROP TABLE ' + table)
         db.commit()
         db.close()

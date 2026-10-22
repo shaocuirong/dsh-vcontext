@@ -14,7 +14,8 @@ from .state import StructuredState, _atomic, _integer, _text
 SCHEMA_VERSION = 1
 MAX_CONTENT_BYTES = 1024 * 1024
 REF_PREFIX = 'vctx://result/'
-OPERATIONS = frozenset({'result_store', 'result_mark', 'result_get', 'result_read', 'result_list'})
+OPERATIONS = frozenset({'result_store', 'result_mark', 'result_get', 'result_read', 'result_list',
+                       'result_plan', 'result_plan_list', 'result_plan_finish'})
 
 
 def install_result_schema(db):
@@ -38,7 +39,15 @@ def install_result_schema(db):
              status TEXT NOT NULL CHECK(status IN ('projected','restored')), created_at REAL NOT NULL,
              PRIMARY KEY(result_id,surface_seq), UNIQUE(namespace,session_id,surface_seq),
              FOREIGN KEY(namespace,session_id,result_id) REFERENCES vcr_results(namespace,session_id,result_id))''',
+        '''CREATE TABLE IF NOT EXISTS vcr_plans (
+             namespace TEXT NOT NULL, session_id TEXT NOT NULL, result_id TEXT PRIMARY KEY,
+             revision INTEGER NOT NULL CHECK(revision>0),
+             desired TEXT NOT NULL CHECK(desired IN ('projected','restored')),
+             status TEXT NOT NULL CHECK(status IN ('queued','applied','failed')),
+             error_code TEXT, created_at REAL NOT NULL, updated_at REAL NOT NULL,
+             FOREIGN KEY(namespace,session_id,result_id) REFERENCES vcr_results(namespace,session_id,result_id))''',
         'CREATE INDEX IF NOT EXISTS vcr_result_order ON vcr_results(namespace,session_id,source_seq DESC)',
+        'CREATE INDEX IF NOT EXISTS vcr_plan_queue ON vcr_plans(namespace,session_id,status,updated_at)',
         '''CREATE TRIGGER IF NOT EXISTS vcr_results_immutable_update BEFORE UPDATE ON vcr_results
            BEGIN SELECT RAISE(ABORT,'tool-result evidence is immutable'); END''',
         '''CREATE TRIGGER IF NOT EXISTS vcr_results_immutable_delete BEFORE DELETE ON vcr_results
@@ -87,7 +96,71 @@ class ResultStore(StructuredState):
                 'content_hash': row['content_hash'], 'bytes': row['byte_count'],
                 'total_chars': row['char_count'], 'created_at': row['created_at'],
                 'status': mark['status'] if mark else 'stored',
-                'surface_seq': mark['surface_seq'] if mark else None}
+                'surface_seq': mark['surface_seq'] if mark else None,
+                'plan': self._plan(row['result_id'])}
+
+    def _plan(self, result_id):
+        row = self._one('''SELECT * FROM vcr_plans WHERE namespace=? AND session_id=? AND result_id=?''',
+                        (*self._scope, result_id))
+        if row is None:
+            return None
+        return {'ref': REF_PREFIX + result_id, 'revision': row['revision'], 'desired': row['desired'],
+                'status': row['status'], 'error_code': row['error_code'],
+                'created_at': row['created_at'], 'updated_at': row['updated_at']}
+
+    @_atomic
+    def result_plan(self, ref, desired):
+        result_id = _result_id(ref)
+        self._row(result_id)
+        if desired not in ('projected', 'restored'):
+            raise ValueError('result plan desired must be projected or restored')
+        previous = self._plan(result_id)
+        if previous and previous['status'] == 'queued' and previous['desired'] == desired:
+            return previous
+        revision = _integer(previous['revision'] + 1 if previous else 1, 'revision', 1)
+        now = time.time()
+        if previous:
+            self.db.execute('''UPDATE vcr_plans SET revision=?,desired=?,status='queued',error_code=NULL,updated_at=?
+                WHERE namespace=? AND session_id=? AND result_id=?''',
+                (revision, desired, now, *self._scope, result_id))
+        else:
+            self.db.execute('INSERT INTO vcr_plans VALUES(?,?,?,?,?,?,?,?,?)',
+                            (*self._scope, result_id, revision, desired, 'queued', None, now, now))
+        return self._plan(result_id)
+
+    def result_plan_list(self, limit=100):
+        _integer(limit, 'limit', 1, 100)
+        rows = self._all('''SELECT result_id FROM vcr_plans WHERE namespace=? AND session_id=? AND status='queued'
+            ORDER BY updated_at,result_id LIMIT ?''', (*self._scope, limit))
+        return {'plans': [self._plan(row['result_id']) for row in rows]}
+
+    @_atomic
+    def result_plan_finish(self, ref, revision, status, error_code=None):
+        result_id = _result_id(ref)
+        self._row(result_id)
+        _integer(revision, 'revision', 1)
+        if status not in ('applied', 'failed'):
+            raise ValueError('result plan finish status must be applied or failed')
+        if status == 'applied':
+            if error_code is not None:
+                raise ValueError('an applied plan cannot carry an error_code')
+        else:
+            error_code = 'FAILED' if error_code is None else error_code
+            if not isinstance(error_code, str) or not re.fullmatch(r'[A-Z][A-Z0-9_]{0,63}', error_code):
+                raise ValueError('error_code must be a stable uppercase code of at most 64 characters')
+        previous = self._plan(result_id)
+        if previous is None or previous['revision'] != revision:
+            raise ValueError('result plan revision conflict; reconcile the current intent')
+        if previous['status'] != 'queued':
+            if previous['status'] == status and previous['error_code'] == error_code:
+                return previous
+            raise ValueError('result plan is already finished with a different outcome')
+        changed = self.db.execute('''UPDATE vcr_plans SET status=?,error_code=?,updated_at=?
+            WHERE namespace=? AND session_id=? AND result_id=? AND revision=? AND status='queued' ''',
+            (status, error_code, time.time(), *self._scope, result_id, revision)).rowcount
+        if changed != 1:
+            raise ValueError('result plan revision conflict; reconcile the current intent')
+        return self._plan(result_id)
 
     @_atomic
     def result_store(self, request_id, source_seq, tool_call_id, tool_name, content):

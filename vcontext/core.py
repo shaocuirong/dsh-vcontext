@@ -78,7 +78,8 @@ MUTATING_OPERATIONS = frozenset({
     'write', 'ingest', 'page_in', 'page_out', 'unpin', 'recall', 'restore',
     'compact', 'organize', 'prepare_task', 'render', 'checkpoint', 'fold',
     'set_policy', 'policy_tick', 'set_session_enabled', 'record_usage',
-    'state_bind', 'state_sync', 'resource_store', 'summary_store', 'result_store', 'result_mark'})
+    'state_bind', 'state_sync', 'resource_store', 'summary_store', 'result_store', 'result_mark',
+    'result_plan', 'result_plan_finish'})
 
 STRUCTURED_OPERATIONS = frozenset({'state_bind', 'state_sync', 'state_status',
     'operation_list', 'operation_read', 'resource_store', 'resource_read',
