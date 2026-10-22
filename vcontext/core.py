@@ -12,6 +12,7 @@ from pathlib import Path
 from .embedding import LexicalEmbedder, cosine, normalize, terms
 from .scheduler import choose_executor
 from .state import StructuredState, install_schema
+from .result_store import ResultStore, OPERATIONS as RESULT_OPERATIONS, install_result_schema
 from .migrations import backup_legacy
 
 
@@ -77,7 +78,7 @@ MUTATING_OPERATIONS = frozenset({
     'write', 'ingest', 'page_in', 'page_out', 'unpin', 'recall', 'restore',
     'compact', 'organize', 'prepare_task', 'render', 'checkpoint', 'fold',
     'set_policy', 'policy_tick', 'set_session_enabled', 'record_usage',
-    'state_bind', 'state_sync', 'resource_store', 'summary_store'})
+    'state_bind', 'state_sync', 'resource_store', 'summary_store', 'result_store', 'result_mark'})
 
 STRUCTURED_OPERATIONS = frozenset({'state_bind', 'state_sync', 'state_status',
     'operation_list', 'operation_read', 'resource_store', 'resource_read',
@@ -217,6 +218,7 @@ class ContextStore:
         # Additive migration: preserve legacy pages, revisions, snapshots and
         # usage. State metadata and immutable objects never alter residency.
         install_schema(self.db)
+        install_result_schema(self.db)
         self.db.execute("INSERT OR REPLACE INTO metadata VALUES('schema','7')")
 
     def close(self):
@@ -1080,6 +1082,8 @@ class ContextStore:
                     policy='relevance-first admission followed by cache-aware placement')
 
     def dispatch(self, operation, arguments):
+        if operation in RESULT_OPERATIONS:
+            return ResultStore(self.db, self.scope).dispatch(operation, arguments)
         if operation in STRUCTURED_OPERATIONS:
             return StructuredState(self.db, self.scope).dispatch(operation, arguments)
         allowed = {'write','ingest','read','history','search','page_in','page_out','unpin',
