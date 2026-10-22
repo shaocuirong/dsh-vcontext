@@ -14,6 +14,7 @@ export function resolveConfig(config = {}) {
     budget: 8192,
     transport: 'service',
     timeoutMs: 30000,
+    resourceCapture: false,
     ...config,
   };
 }

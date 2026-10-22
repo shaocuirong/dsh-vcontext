@@ -1,8 +1,8 @@
 # dsh-vcontext
 
-当前版本：**[v0.4.0](https://github.com/shaocuirong/dsh-vcontext/releases/tag/v0.4.0)** · [更新日志](CHANGELOG.md) · [优化与审查节点](docs/OPTIMIZATION-0.3.0.md) · [替换修复节点](docs/REPLACEMENT-0.4.0.md) · [验证记录](docs/VALIDATION.md)
+当前版本：**[v0.5.0](https://github.com/shaocuirong/dsh-vcontext/releases/tag/v0.5.0)** · [架构设计](docs/ARCHITECTURE-0.5.0.md) · [16 篇参考论文](docs/RESEARCH.md) · [更新日志](CHANGELOG.md) · [验证记录](docs/VALIDATION.md)
 
-**DeepSeek Harness 上下文缓存插件**：持久记忆、按需换页、可配置替换策略与会话内看板。
+**DeepSeek Harness 客户端虚拟上下文管理器**：结构化操作、可追溯资源版本、有来源的摘要、按需换页与会话内看板。
 
 [![Tests](https://github.com/shaocuirong/dsh-vcontext/actions/workflows/test.yml/badge.svg)](https://github.com/shaocuirong/dsh-vcontext/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -13,6 +13,9 @@
 
 ## 功能
 
+- **结构化会话索引**：通过公开 SessionQuery 接口增量同步 Native / PTC 操作元数据、来源 seq 和状态；幂等连续游标、Fork 与 Surface 投影区分，工具成功仍为未测试。
+- **版本化资源与摘要**：不可变 SHA256 内容对象、每会话当前路径指针、CAS 更新和 request_id 去重；历史原文按引用读取，摘要保留来源而不覆盖证据。
+- **可选文件捕获**：默认关闭；宿主显式启用后，经宿主 fs 有界读取项目内 UTF-8 文件，返回版本引用。不会自动扫描仓库、覆盖文件或创建 Git 提交。
 - **会话上下文替换**：通过 Harness 官方压缩服务将旧历史替换为摘要，保留原始日志；兼容隔离预设及未激活会话，显示运行状态、替换数量和前后大小。
 - **dsh-context 联动**：可选读取公开会话投影，展示上下文组成、压缩次数和供应商累计用量；优先使用宿主 token-meter，无数据时明确显示估算或未连接状态。
 - **运行诊断**：有界结构化日志、请求编号、耗时、错误分类、慢调用与健康检查；不记录正文或原始错误内容。
@@ -30,6 +33,13 @@
 ## 界面预览
 
 以下截图来自独立预览，使用演示数据。它们不代表模型效果或真实供应商缓存收益。
+
+<details open>
+<summary>0.5.0 原生 Harness 结构化状态验收</summary>
+
+![版本化状态与会话索引](docs/images/state-050.png)
+
+</details>
 
 <details open>
 <summary>卡片式上下文缓存看板</summary>
@@ -70,6 +80,8 @@ dsh plugin --profile desktop add "link:$((Get-Location).Path)"
 
 默认数据库为 `~/.dsh/dsh-vcontext/context.db`；设置了 `DSH_HOME` 时相对于该目录。插件优先使用 Harness 已下载的 Python 运行时，其次使用系统 Python，也可在本地 profile patch 中覆盖 `python` 和 `dbPath`。详见 [使用说明](docs/USAGE.zh-CN.md)。
 
+0.5.0 首次打开旧库会先生成同目录唯一 `.pre-schema7-<id>.bak`，再事务迁移；已有页面、配置、检查点和用量保留。主 schema 升为 7，旧插件不能直接读取升级后的库，回退需先退出宿主并人工选择备份。不要用旧数据库文件覆盖新数据。
+
 ## 快速使用
 
 1. 点击输入框旁的“上下文缓存”，开启当前会话的面板；也可以输入 `/virtual-context on`。
@@ -81,6 +93,9 @@ dsh plugin --profile desktop add "link:$((Get-Location).Path)"
 4. 换题时使用 `recall` 检索已归档内容；需要原文时使用 `read`。
 5. 在“设置 → 上下文缓存”选择替换模式，点击“保存替换策略”。显示偏好会自动保存。
 6. 减少完整聊天上下文时，点击看板“立即替换会话上下文”；“仅归档插件工作页”和自动策略只管理 vctx 工作页。生成中的会话需等待结束后再替换。
+7. 用 `operation_list` 查询宿主操作索引；用 `resource_store` 保存明确文本，或启用后用 `resource_capture` 捕获文件版本；从返回值保留 ref，再通过 `resource_read` 按需读回旧版本。详见 [结构化状态 API](docs/API.md#结构化状态与资源050)。
+
+v0.5.0 实现基础存储与会话桥接。完整 Session Snapshot / Git DAG、MAGE 任务树、事实图、自动摘要、MCP 服务器及统一双命中率调度仍是后续阶段，不将论文引用当成功能实现或跑分证明。
 
 工具的 `input` 字段实际接受 JSON 字符串：
 

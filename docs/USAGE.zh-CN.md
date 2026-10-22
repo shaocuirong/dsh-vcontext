@@ -79,6 +79,41 @@
 
 ## 让 Agent 保存和找回内容
 
+### 结构化操作与版本资源（0.5.0）
+
+活跃会话的 Bridge 自动索引宿主操作元数据，包含 Native 和 PTC 子调用；不复制原始参数或工具结果。看板“版本化状态与会话索引”显示游标、操作、资源版本与摘要数量。旧的冷会话阅读仍是只读，不会自动激活所有历史 Agent。
+
+可让 Agent 调用 `vctx`：
+
+1. `operation_list` 查询操作 ID 和来源序号。成功工具仍是 `succeeded / not_tested`。
+2. `resource_store` 使用 `request_id`、相对 `path`、`content` 保存明确文本，记录返回的 `resource.ref`。
+3. 更新同一路径时传 `expected_ref`，避免覆盖并发变化；再次发送同一逻辑写入时复用原 request_id 和参数。
+4. `resource_read {"ref":"vctx://resource/..."}` 精确读取历史版本；按 path 读取则只用当前会话指针，不自动跟随别的会话最新文件。
+5. `summary_store` 提交摘要与 `sources:[ref...]`；摘要不覆盖原文、不会自动成为已验证事实。
+
+这些操作不自动把全文驻留在插件快照中；显式 read 返回的文本会进入正常宿主工具历史。按需恢复和实际压缩是不同动作。
+
+### 可选文件捕获
+
+文件捕获默认关闭。需要这个读取能力时，在本机 profile 的现有 `dsh-virtual-context` 行内保留其他配置、仅加入：
+
+```yaml
+- id: dsh-virtual-context
+  config:
+    # 保留这里原有的 namespace、预算和其他设置
+    resourceCapture: true
+```
+
+退出并重新启动 Harness 后，调用 `resource_capture {"path":"vcontext/core.py","request_id":"capture-1"}`。它仅通过宿主文件服务捕获当前项目内单个完整 UTF-8 文件（最多 256 KiB），返回 ref/hash；支持 BOM、CRLF 和 Unicode，不扫描仓库。后端拒绝、越界、二进制、过大或读期间变化会失败。请按实际路径调整示例，不替换整份 profile。
+
+文件捕获可传 operation_id 关联操作，但只证明“捕获时看到此内容”，不能证明该操作是唯一修改者；不会补造修改前原文，也不创建 Git commit。`resource_store` 保存调用者文本，不能伪造宿主来源 source_revision。完整参数见 [API](API.md#结构化状态与资源050)。
+
+### 数据库升级
+
+首次打开旧 schema 1–6 磁盘库时先用 SQLite backup 创建同目录唯一 `.pre-schema7-<id>.bak`，随后在事务内添加新表；不覆盖既有数据或配置。升级失败会回滚。旧版插件不认识 schema7；若要回退，先完全退出使用该数据库的所有宿主，再人工选择升级前备份恢复。自动恢复会覆盖升级后新数据，因此插件不自动执行恢复。
+
+### 原有页面工具
+
 示例请求：
 
 > 调用 vctx，operation=write，input={"title":"项目约束","content":"离线优先；数据库使用 SQLite。","tier":"core"}。

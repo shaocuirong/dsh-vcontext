@@ -28,6 +28,8 @@ export function validateConfig(config) {
     throw new Error('maxScopes must be in 1..256');
   if (config.contextIntegration !== undefined && typeof config.contextIntegration !== 'boolean')
     throw new Error('contextIntegration must be a boolean');
+  if (config.resourceCapture !== undefined && typeof config.resourceCapture !== 'boolean')
+    throw new Error('resourceCapture must be a boolean');
   return { ...config, budget, timeoutMs, maxPending, maxScopes, python: config.python ?? 'python' };
 }
 

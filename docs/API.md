@@ -179,3 +179,52 @@ HTTP 路由适用于本机单用户宿主，并拒绝跨来源浏览器请求；
 服务调用公开 sessionController.resolveAgent，由宿主拥有恢复后的 Agent 生命周期；优先通过 agentPresets.serviceFor 读取隔离服务，兼容 agent.ctx 与全局服务。实际替换调用 compactNow，保留原日志，通过宿主追加摘要与 surface replacement 事件实现。原始历史仍占磁盘，模型可见上下文减少；可能调用宿主摘要模型。生成中或摘要、提交、持久化失败不会伪报成功。
 
 任务结果只保留在进程内，最多 128 个会话；满时淘汰已完成记录，不淘汰运行中任务。重启后不能追溯任务状态，必须先检查当前上下文和宿主日志，再决定是否重试。卸载会取消并等待任务结束。诊断事件为 context.replace.started / completed / failed，不包含正文或原始异常。`POST /vctx/replace` 继续只归档插件工作页，与本接口互不替代。
+
+## 结构化状态与资源（0.5.0）
+
+设计、权威边界与论文来源见 [架构](ARCHITECTURE-0.5.0.md) 和 [研究清单](RESEARCH.md)。页面驻留接口继续兼容，以下操作不自动改变页面快照或删除宿主工具历史。
+
+### 宿主同步与操作索引
+
+- `state_bind {project_id,root_path,target_commit?}` 和 `state_sync {events,through_seq}` 仅供 Bridge / 本地管理入口使用，模型 `vctx` 工具拒绝调用。namespace / session_id 从宿主 RPC scope 注入，不接受模型指定。重复绑定不改目标版本，项目或根冲突时拒绝。
+- `state_sync` 以从 0 开始的连续事件推进 processed_seq；Bridge 每批最多 128 条，同一会话并发合并，最多 32 个待处理会话。事件、操作与 cursor 在同一 SQLite 事务提交；同 seq 异内容、缺口和截断拒绝提交。未知原始正文、参数、错误详情不进入索引。
+- `state_status {}` 返回 binding（未绑定为 null）、processed_seq、counts（events / operations / resource_versions / summaries / current_resources）及结构化 schema_version=2。主数据库 schema 为 7，两者不同。
+- `operation_list {limit?:20}` 最多 100 条；`operation_read {operation_id}` 返回本会话操作，含 call_id、execution_kind=native|ptc、call_seq、result_seq、status、verification、sources。sources 的 session_id + dsh_seq 指向当前可查询拼接日志；保留原事件 type。成功仅为 succeeded / not_tested，不代表测试通过。
+- Fork 前缀记 inherited，不重复聚合成子会话执行；Surface replacement 记 projection，不当成第二次执行。Native 和 PTC 子调用的相同原始 ID 分域隔离。
+
+Bridge 通过 `sessionQuery.observeSession` 读取活跃 Agent 的不可变历史，租约结束释放；工作目录优先取宿主 workingDirectory。目录改变报 ROOT_CHANGED，不静默重绑定。无接口、缺失目录、源日志异常、队列繁忙和同步失败会在看板 session_bridge 中显示安全错误码，后续事件或 pre-step 可从已确认 cursor 重试，不重新执行原工具。冷会话只读看板仍可用，但本次不批量激活所有历史会话进行索引。
+
+Bridge 仅重复解析上一 cursor 边界并解析新增后缀，数据库核对接收元数据的哈希；信任宿主已接受历史不可变，不检测全部旧正文篡改。完整历史观察切片仍由宿主提供；4096 条已处理历史追加一条时，插件元数据解析只访问边界和新事件。
+
+### 不可变资源、当前路径与摘要
+
+| 操作 | 参数 | 结果 / 限制 |
+|---|---|---|
+| `resource_store` | `request_id,path,content,expected_ref?,operation_id?` | 保存调用者提供的文本，返回 resource 元数据与 replayed；模型不能提供 source_revision |
+| `resource_capture` | `request_id,path,expected_ref?,operation_id?` | 可选宿主文件捕获；见下文 |
+| `resource_read` | `ref` 或 `path` 二选一；`offset=0,limit=65536` | 返回 resource、content、next_offset、has_more；offset / limit 按 Unicode 字符，limit 最大 262144 |
+| `resource_history` | `path,limit=20` | 本会话路径的历史元数据，最多 100 条，不返回正文 |
+| `summary_store` | `request_id,content,sources:[ref...],level=operation,verification=not_tested` | 摘要最多 16384 字符，1–128 个不同来源；level 可为 operation / session / project；不自动生成摘要 |
+| `summary_read` | `summary_id` | 本会话摘要正文及来源，读取前校验内容哈希与长度 |
+
+路径必须相对项目根，拒绝绝对路径、空段、`.`、`..`、NUL、Windows drive / ADS。资源使用 `vctx://resource/<opaque-id>` 固定到不可变版本；元数据包含 version、parent_ref、content_hash（sha256）、byte_count / char_count、operation_id、source_revision 和 current_in_session。新路径 expected_ref 为空；更新必须匹配该会话当前 ref，过期 CAS 拒绝。request_id 必填且最长 256 字符；相同 ID 和参数返回已提交结果，异参数冲突，不自动重试修改。
+
+`resource_read(path)` 只读当前会话指针，绝不自动查询全项目最新版本。显式 `ref` 可在同 namespace / project 的会话之间读取、作为摘要来源；不改变接收会话当前路径指针，不能跨 namespace / project。摘要与操作只按当前会话读取。资源及摘要对象按 UTF-8 内容 SHA256 去重，显式读取时校验哈希与长度。传入文本仍受 RPC 2 MB 请求帧限制，读取仍受 8 MB 响应限制。引用本身不是已注册的 MCP Resources 服务器。
+
+示例（实际工具的 input 字段需 JSON.stringify）：
+
+```json
+{"operation":"resource_store","input":"{\"request_id\":\"note-1\",\"path\":\"notes/decision.txt\",\"content\":\"完整决策原文\"}"}
+```
+
+从结果保存 `resource.ref`；更新时传回 expected_ref，历史读取则使用旧 ref。
+
+### 可选文件捕获
+
+`resourceCapture` 为宿主布尔配置，默认 false。启用后提供对当前绑定项目内单个文件的读取能力；不会自动扫描目录。它通过当前 Agent 的 fs 服务进行世界映射、路径解析、包含检查、版本检查和有界 `readBytes`，没有 Node 文件读取 fallback。后端不支持 host path 映射或拒绝访问时失败关闭。仅支持完整 UTF-8 文本，最大 256 KiB；保留 BOM 和 CRLF，拒绝二进制、超限、越界及读期间版本变化。
+
+捕获返回原文引用与 hash，不返回全文；`source_revision=working-tree:sha256:<digest>` 是捕获时点的内容标识，绝非 Git commit。关联 operation_id 只表示证据联系，不证明该操作唯一造成文件变化，verification 仍是 not_tested。默认关闭保留已有工具权限；需宿主管理者按 [使用说明](USAGE.zh-CN.md) 显式启用。
+
+### 迁移与恢复
+
+首次打开已发布 schema 1–6 的磁盘库，使用 SQLite backup 在同目录创建唯一 `.pre-schema7-<id>.bak`，成功后再事务迁移到主 schema7 / 结构化 schema2。保留旧页面、修订、配置、检查点、用量与渲染指纹；迁移失败回滚，不覆盖已有备份。未知未来 schema 或未发布结构化草稿 schema1 均拒绝打开。回退旧插件不能直接读 schema7：先关闭所有使用该库的宿主，再人工选择备份恢复，不自动替换数据库。
