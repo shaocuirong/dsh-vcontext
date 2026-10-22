@@ -17,7 +17,7 @@ function response() {
 function request(method, url, body) {
   const listeners = new Map();
   const req = {
-    method, url, destroyed: false,
+    method, url, destroyed: false, headers: { host: 'localhost', origin: 'http://localhost' },
     on(event, listener) { listeners.set(event, [...(listeners.get(event) ?? []), listener]); return req; },
     destroy() { req.destroyed = true; },
   };
@@ -83,6 +83,64 @@ test('health needs a session and rejects cross-origin browser requests', async (
   const res = response();
   await handler(req, res);
   assert.equal(res.captured.status, 403);
+});
+
+test('result projection routes validate selection and keep host-only mutations behind the controller', async () => {
+  const calls = [];
+  const ref = 'vctx://result/' + 'a'.repeat(32);
+  const projection = {
+    async inspect(session) { calls.push(['inspect', session]); return { candidates: [{ source_seq: 7 }], results: [] }; },
+    async project(session, seq) { calls.push(['project', session, seq]); return { ref, status: 'projected' }; },
+    async restore(session, value) { calls.push(['restore', session, value]); return { ref: value, status: 'restored' }; },
+  };
+  const handler = createHandler(CONFIG, {}, null, null, null, null, projection);
+  assert.equal((await invoke(handler, 'GET', '/vctx/results?session=s')).body.projection.candidates[0].source_seq, 7);
+  assert.equal((await invoke(handler, 'POST', '/vctx/results/project', JSON.stringify({ session: 's', source_seq: 7 }))).body.result.status, 'projected');
+  assert.equal((await invoke(handler, 'POST', '/vctx/results/restore', JSON.stringify({ session: 's', ref }))).body.result.status, 'restored');
+  for (const value of [-1, 1.5, '7'])
+    assert.equal((await invoke(handler, 'POST', '/vctx/results/project', JSON.stringify({ session: 's', source_seq: value }))).status, 400);
+  assert.equal((await invoke(handler, 'POST', '/vctx/results/project', '{"session":"s","source_seq":7,"force":true}')).status, 400);
+  assert.equal((await invoke(handler, 'POST', '/vctx/results/restore', '{"session":"s","ref":"vctx://resource/other"}')).status, 400);
+  assert.equal((await invoke(handler, 'POST', '/vctx/results')).status, 405);
+  assert.equal((await invoke(handler, 'GET', '/vctx/results/project')).status, 405);
+  assert.equal((await invoke(handler, 'GET', '/vctx/results')).status, 400);
+  assert.deepEqual(calls, [['inspect', 's'], ['project', 's', 7], ['restore', 's', ref]]);
+});
+
+test('busy result projection returns a conflict without invoking any worker fallback', async () => {
+  const handler = createHandler(CONFIG, {}, null, null, null, null, {
+    project() { throw Object.assign(new Error('会话忙'), { code: 'BUSY' }); },
+  });
+  const result = await invoke(handler, 'POST', '/vctx/results/project', '{"session":"s","source_seq":7}');
+  assert.equal(result.status, 409); assert.equal(result.body.error_code, 'BUSY');
+});
+
+test('result mutations require matching scheme, local Host and loopback peer', async () => {
+  let writes = 0;
+  const handler = createHandler(CONFIG, {}, null, null, null, null, { project() { writes++; return {}; } });
+  for (const headers of [
+    { host: 'localhost', origin: 'https://localhost' },
+    { host: 'review.example', origin: 'http://review.example' },
+    { host: 'localhost' },
+  ]) {
+    const req = request('POST', '/vctx/results/project', '{"session":"s","source_seq":7}');
+    req.headers = headers;
+    const res = response(); await handler(req, res); assert.equal(res.captured.status, 403);
+  }
+  const req = request('POST', '/vctx/results/project', '{"session":"s","source_seq":7}');
+  req.socket = { remoteAddress: '192.168.1.50' };
+  const res = response(); await handler(req, res); assert.equal(res.captured.status, 403);
+  assert.equal(writes, 0);
+});
+
+test('result route accepts observable jobs without waiting for host persistence', async () => {
+  const job = { id: 'projection-job', status: 'running' };
+  const jobs = { start(session, action, value) { assert.deepEqual([session, action, value], ['s', 'project', 7]); return job; },
+    read(session) { assert.equal(session, 's'); return job; } };
+  const handler = createHandler(CONFIG, {}, null, null, null, null, {}, jobs);
+  const accepted = await invoke(handler, 'POST', '/vctx/results/project', '{"session":"s","source_seq":7}');
+  assert.equal(accepted.status, 202); assert.equal(accepted.body.job.id, job.id);
+  assert.equal((await invoke(handler, 'GET', '/vctx/results/job?session=s')).body.job.status, 'running');
 });
 
 test('session route accepts exactly one boolean and rejects everything else', async () => {

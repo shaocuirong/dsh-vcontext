@@ -47,7 +47,7 @@ function sessionOf(url) {
   return session && session.length <= 256 ? session : null;
 }
 
-export function createHandler(config, transport, liveContext, diagnostics, replacement, sessionBridge) {
+export function createHandler(config, transport, liveContext, diagnostics, replacement, sessionBridge, resultProjection, resultJobs) {
   const settings = validateConfig(config);
   return async function handle(request, response) {
     let url;
@@ -60,14 +60,54 @@ export function createHandler(config, transport, liveContext, diagnostics, repla
     const origin = request.headers?.origin;
     let foreignOrigin = false;
     if (origin) {
-      try { foreignOrigin = new URL(origin).host !== request.headers.host; }
+      try { foreignOrigin = new URL(origin).origin !== `${request.socket?.encrypted ? 'https' : 'http'}://${request.headers.host}`; }
       catch { foreignOrigin = true; }
     }
     if (foreignOrigin || request.headers?.['sec-fetch-site'] === 'cross-site')
       return send(response, 403, { ok: false, error: 'same-origin request required' });
 
+    if (url.pathname === `${ROUTE_PREFIX}results` || url.pathname.startsWith(`${ROUTE_PREFIX}results/`)) {
+      let localHost = false;
+      try { localHost = ['localhost', '127.0.0.1', '[::1]'].includes(new URL(`http://${request.headers?.host}`).hostname); }
+      catch { /* Invalid or absent Host is never a local browser origin. */ }
+      const peer = request.socket?.remoteAddress;
+      const localPeer = !peer || ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(peer);
+      if (!localHost || !localPeer || (request.method === 'POST' && !origin))
+        return send(response, 403, { ok: false, error: '仅接受本机同源请求。' });
+      if (!resultProjection) return send(response, 503, { ok: false, error: '工具结果投影服务尚未就绪。' });
+      try {
+        if (url.pathname === `${ROUTE_PREFIX}results/job`) {
+          if (request.method !== 'GET') return send(response, 405, { ok: false, error: 'GET only' });
+          const session = sessionOf(url);
+          if (!session) throw new Error('session required');
+          return send(response, 200, { ok: true, job: resultJobs?.read(session) ?? null });
+        }
+        if (url.pathname === `${ROUTE_PREFIX}results`) {
+          if (request.method !== 'GET') return send(response, 405, { ok: false, error: 'GET only' });
+          const session = sessionOf(url);
+          if (!session) throw new Error('session required');
+          return send(response, 200, { ok: true, projection: await resultProjection.inspect(session) });
+        }
+        const action = url.pathname.slice(`${ROUTE_PREFIX}results/`.length);
+        if (!['project', 'restore'].includes(action)) return send(response, 404, { ok: false, error: 'unknown route' });
+        if (request.method !== 'POST') return send(response, 405, { ok: false, error: 'POST only' });
+        const body = JSON.parse(await readBody(request));
+        const field = action === 'project' ? 'source_seq' : 'ref';
+        if (!body || typeof body.session !== 'string' || !body.session || body.session.length > 256
+          || Object.keys(body).some(key => !['session', field].includes(key))) throw new Error('invalid request');
+        if (action === 'project' && (!Number.isSafeInteger(body.source_seq) || body.source_seq < 0)) throw new Error('source_seq required');
+        if (action === 'restore' && (typeof body.ref !== 'string' || !/^vctx:\/\/result\/[a-f0-9]{32}$/.test(body.ref))) throw new Error('result ref required');
+        if (resultJobs) return send(response, 202, { ok: true, job: resultJobs.start(body.session, action, body[field]) });
+        const result = await resultProjection[action](body.session, body[field]);
+        return send(response, 200, { ok: true, result });
+      } catch (error) {
+        return send(response, error?.code === 'BUSY' ? 409 : 400,
+          { ok: false, error_code: error?.code ?? 'failed', error: String(error?.message ?? error) });
+      }
+    }
+
     if (url.pathname === `${ROUTE_PREFIX}compact`) {
-      if (!replacement) return send(response, 503, { ok: false, error: '宿主上下文替换服务尚未就绪。' });
+      if (!replacement) return send(response, 503, { ok: false, error: '宿主上下文压缩服务尚未就绪。' });
       try {
         if (request.method === 'GET') {
           const session = sessionOf(url);
@@ -171,7 +211,7 @@ export function createHandler(config, transport, liveContext, diagnostics, repla
   };
 }
 
-export function mountRoutes(ctx, config, transport, liveContext, diagnostics, replacement, sessionBridge) {
+export function mountRoutes(ctx, config, transport, liveContext, diagnostics, replacement, sessionBridge, resultProjection, resultJobs) {
   const webServer = ctx.get('webServer');
   // The shipped web and desktop profiles always carry the HTTP carrier. A CLI
   // or SDK-only composition has none, and then there is simply no route to
@@ -179,5 +219,5 @@ export function mountRoutes(ctx, config, transport, liveContext, diagnostics, re
   // service-resolution waterfall and can corrupt the value other plugins read,
   // which is exactly what the real-SDK test caught.
   if (!webServer || typeof webServer.register !== 'function') return () => {};
-  return webServer.register({ kind: 'prefix', path: ROUTE_PREFIX.slice(0, -1), handler: createHandler(config, transport, liveContext, diagnostics, replacement, sessionBridge) });
+  return webServer.register({ kind: 'prefix', path: ROUTE_PREFIX.slice(0, -1), handler: createHandler(config, transport, liveContext, diagnostics, replacement, sessionBridge, resultProjection, resultJobs) });
 }
