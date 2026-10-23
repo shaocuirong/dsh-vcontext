@@ -319,12 +319,12 @@ class PublishedSchemaSevenUpgradeTests(unittest.TestCase):
     def test_schema_seven_addition_is_backed_up_once_and_preserves_page_state(self):
         with ContextStore(self.path, 'legacy') as store:
             backup_path = Path(store.migration_backup)
-            self.assertIn('.pre-schema8-', backup_path.name)
+            self.assertIn('.pre-schema9-', backup_path.name)
             self.assertEqual(store.snapshot()['sha'], self.sha)
             self.assertEqual(store.read(self.page)['content'], 'schema7 原文')
             self.assertTrue(store.session_state()['enabled'])
             self.assertEqual(store.checkpoints()[0]['label'], 'published')
-            self.assertEqual(store.db.execute("SELECT value FROM metadata WHERE key='schema'").fetchone()[0], '8')
+            self.assertEqual(store.db.execute("SELECT value FROM metadata WHERE key='schema'").fetchone()[0], '9')
         backup = sqlite3.connect(backup_path)
         self.assertEqual(backup.execute("SELECT COUNT(*) FROM sqlite_master WHERE name='vcr_schema'").fetchone()[0], 0)
         self.assertEqual(backup.execute("SELECT value FROM metadata WHERE key='schema'").fetchone()[0], '7')

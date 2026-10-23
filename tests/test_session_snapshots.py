@@ -410,12 +410,12 @@ class SnapshotMigrationTests(unittest.TestCase):
         with ContextStore(self.path, 'legacy') as store:
             self.assertEqual(store.snapshot()['sha'], self.sha)
             self.assertEqual(store.dispatch('resource_read', {'ref': self.resource['ref']})['content'], '原文')
-            self.assertEqual(store.db.execute("SELECT value FROM metadata WHERE key='schema'").fetchone()[0], '8')
+            self.assertEqual(store.db.execute("SELECT value FROM metadata WHERE key='schema'").fetchone()[0], '9')
             self.assertEqual(store.db.execute('SELECT version FROM vc_schema').fetchone()[0], 2)
             self.assertEqual(store.db.execute('SELECT version FROM vcr_schema').fetchone()[0], 1)
             self.assertEqual(store.db.execute('SELECT version FROM vcs_schema').fetchone()[0], 1)
             backup_path = Path(store.migration_backup)
-            self.assertIn('.pre-schema8-', backup_path.name)
+            self.assertIn('.pre-schema9-', backup_path.name)
         db = sqlite3.connect(backup_path)
         self.assertEqual(db.execute("SELECT value FROM metadata WHERE key='schema'").fetchone()[0], '7')
         self.assertEqual(db.execute("SELECT COUNT(*) FROM sqlite_master WHERE name='vcs_schema'").fetchone()[0], 0)
@@ -454,18 +454,18 @@ class SnapshotMigrationTests(unittest.TestCase):
                 self.assertEqual(status['working_count'], 3)
                 self.assertIsNone(status['effective_manifest_hash'])
                 self.assertEqual(store.dispatch('resource_read', {'path': 'c.py'})['content'], 'third')
-                self.assertEqual(store.db.execute("SELECT value FROM metadata WHERE key='schema'").fetchone()[0], '8')
+                self.assertEqual(store.db.execute("SELECT value FROM metadata WHERE key='schema'").fetchone()[0], '9')
                 self.assertTrue(Path(store.migration_backup).is_file())
 
-    def test_unknown_main9_and_snapshot2_refused_without_overwriting_database(self):
+    def test_unknown_main10_and_snapshot2_refused_without_overwriting_database(self):
         db = sqlite3.connect(self.path)
-        db.execute("UPDATE metadata SET value='9' WHERE key='schema'")
+        db.execute("UPDATE metadata SET value='10' WHERE key='schema'")
         db.commit()
         db.close()
         with self.assertRaisesRegex(ValueError, 'unsupported'):
             ContextStore(self.path, 'legacy')
         db = sqlite3.connect(self.path)
-        self.assertEqual(db.execute("SELECT value FROM metadata WHERE key='schema'").fetchone()[0], '9')
+        self.assertEqual(db.execute("SELECT value FROM metadata WHERE key='schema'").fetchone()[0], '10')
         db.execute("UPDATE metadata SET value='7' WHERE key='schema'")
         db.execute('CREATE TABLE vcs_schema(version INTEGER PRIMARY KEY)')
         db.execute('INSERT INTO vcs_schema VALUES(2)')
