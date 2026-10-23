@@ -1,5 +1,13 @@
 # 验证记录
 
+## v0.10.3：有界历史读取与文档重组（2026-10-23）
+
+- 本机完整 191 项 Node/真实 SDK 测试通过（0 失败、0 跳过）；176 项 Python 通过。新增覆盖：单条 >65,536 字符工具结果的分页读取与拼接、整段读取的字符/UTF-8 响应上限、`expected_content_hash` 续读与不匹配 CHANGED、小消息保持原对象形状。
+- `npm run check:release` 输出 v0.10.3；`npm run doctor` 退出 0（数据库 configured=true / modified=false）。
+- 无数据库 schema 变更、无 Python 内核改动；主 schema9 / vc2 / vcr1 / vcs1 / vct1 保持。
+- 文档目录重排为 guides / architecture / research / releases / planning / images；本地 Markdown 链接与 check-release 路径检查通过。
+- 未验证：桌面重启后的真人浏览器点击、供应商 Token/缓存收益、答案质量；单条大消息的峰值内存只记录字符/响应字节，未做独立 RSS 测量。
+
 ## v0.10.2：跨平台归档测试夹具（2026-10-23）
 
 - 0.10.1 的本机 Windows 回归通过后，远端 Ubuntu CI 在创建会话时拒绝固定路径 `C:/offline-fixture`，报 `session header cwd must be an absolute path`；24 项归档测试因此在夹具构建阶段失败。

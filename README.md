@@ -1,6 +1,6 @@
 # dsh-vcontext
 
-当前版本：**[v0.10.2](https://github.com/shaocuirong/dsh-vcontext/releases/tag/v0.10.2)** · [会话历史虚拟上下文](docs/architecture/HISTORY-VCONTEXT-0.10.0.md) · [0.9.0 归档契约](docs/architecture/HISTORY-ARCHIVE-0.9.0.md) · [优化节点](docs/releases/nodes/NODES-0.10.0.md) · [任务执行状态](docs/architecture/TASKS-0.8.0.md) · [16 篇参考论文](docs/research/RESEARCH.md) · [更新日志](CHANGELOG.md) · [验证记录](docs/releases/VALIDATION.md)
+当前版本：**[v0.10.3](https://github.com/shaocuirong/dsh-vcontext/releases/tag/v0.10.3)** · [会话历史虚拟上下文](docs/architecture/HISTORY-VCONTEXT-0.10.0.md) · [0.9.0 归档契约](docs/architecture/HISTORY-ARCHIVE-0.9.0.md) · [0.10.3 优化节点](docs/releases/nodes/NODES-0.10.3.md) · [任务执行状态](docs/architecture/TASKS-0.8.0.md) · [16 篇参考论文](docs/research/RESEARCH.md) · [更新日志](CHANGELOG.md) · [验证记录](docs/releases/VALIDATION.md)
 
 **DeepSeek Harness 客户端虚拟上下文管理器**：结构化操作、可追溯资源版本、有来源的摘要、按需换页与会话内看板。
 
@@ -175,6 +175,8 @@ npm run bench
 0.3.1 修复已有会话开启面板后读不到历史上下文的问题：本机 47 项 Node、63 项 Python 测试通过；真实 Harness JSONL 三轮会话在开启面板后、宿主重启后均能直接读取，读取前后日志 SHA256 一致。历史读取不会自动创建 Agent、写入缓存页或构造“最近模型请求”。
 
 0.10.0 在本机通过 179 项 Node/真实 SDK 和 176 项 Python 测试，0 失败、0 跳过；`npm run check:release` 输出 v0.10.0，`npm run doctor` 退出 0。未进行桌面端重启后的真人浏览器点击验收；看板的归档清单、搜索与 CHANGED 重试状态机由单元/路由/组件测试覆盖，仍不是真实浏览器点击验收；看板归档按钮自动生成并复用 `request_id`，携带预览的 `expected_surface_seq`，遇 CHANGED 会先刷新预览再换新身份，重放成功标注为原回执。已知限制见 [验证记录](docs/releases/VALIDATION.md)。
+
+0.10.3 修复历史读取边界：整段与单条 `history_read` 都受字符/UTF-8 响应上限约束，大消息分页返回，小消息保持原对象形状；`expected_content_hash` 用于续读校验。文档目录重排为 guides / architecture / research / releases / planning / images。本机 191 项 Node/真实 SDK、176 项 Python 测试通过；未进行桌面重启后的真人浏览器点击验收。详见 [验证记录](docs/releases/VALIDATION.md)。
 
 ## 可选启用 dsh-context 联动
 

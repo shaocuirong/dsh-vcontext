@@ -25,7 +25,7 @@
 
 - [验证记录](releases/VALIDATION.md)
 - [v0.3 优化与可用性审查](releases/OPTIMIZATION-0.3.0.md)
-- 版本节点：[v0.5](releases/nodes/NODES-0.5.0.md) · [v0.6](releases/nodes/NODES-0.6.0.md) · [v0.7](releases/nodes/NODES-0.7.0.md) · [v0.8](releases/nodes/NODES-0.8.0.md) · [v0.8.1](releases/nodes/NODES-0.8.1.md) · [v0.9](releases/nodes/NODES-0.9.0.md) · [v0.10](releases/nodes/NODES-0.10.0.md)
+- 版本节点：[v0.5](releases/nodes/NODES-0.5.0.md) · [v0.6](releases/nodes/NODES-0.6.0.md) · [v0.7](releases/nodes/NODES-0.7.0.md) · [v0.8](releases/nodes/NODES-0.8.0.md) · [v0.8.1](releases/nodes/NODES-0.8.1.md) · [v0.9](releases/nodes/NODES-0.9.0.md) · [v0.10](releases/nodes/NODES-0.10.0.md) · [v0.10.3](releases/nodes/NODES-0.10.3.md)
 
 ## 规划
 

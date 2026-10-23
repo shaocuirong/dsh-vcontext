@@ -2,6 +2,16 @@
 
 版本规则：重大功能更新升级次版本号（例如 0.1.0 → 0.2.0），修复升级补丁号（例如 0.2.0 → 0.2.1）。不兼容变更需明确标注；进入 1.0 后按语义化版本升级主版本号。每次发布同步版本元数据、更新日志、Git 标签和 GitHub Release。
 
+## [0.10.3] - 2026-10-23
+
+### 有界历史读取与文档重组
+
+- `history_read` 的整段与单条读取都受字符与 UTF-8 响应字节上限约束：单条消息超过 65536 字符时返回分页 JSON 文本，带 `content_hash`、`total`、`next_offset` 与 `truncated`；整段读取同样同时检查字符和响应字节（≤128 KiB）。小消息保持原对象形状；`expected_content_hash` 用于续读校验，不匹配返回 CHANGED。
+- 读取上限覆盖 JSON 包装、引用和元数据；offset/limit 按 Unicode 码点计。读取诊断只记录 content_chars / response_bytes / offset，不记录正文。
+- 文档目录重排为 guides / architecture / research / releases / planning / images，新增 docs/README.md 索引；所有本地 Markdown 链接与 check-release 路径同步更新。
+- 无数据库 schema 变更、无 Python 内核改动；本机 191 项 Node/真实 SDK、176 项 Python 测试通过，check:release 输出 v0.10.3，doctor 退出 0。未进行桌面重启/真人浏览器点击验收，未证明供应商 Token 或答案质量收益。
+- 设计见[会话历史虚拟上下文](docs/architecture/HISTORY-VCONTEXT-0.10.0.md)，节点见[NODES-0.10.3](docs/releases/nodes/NODES-0.10.3.md)。
+
 ## [0.10.2] - 2026-10-23
 
 - 修复历史归档测试夹具写死 Windows 工作目录的问题，改用平台原生临时目录；Linux 可创建并验证相同的真实 SDK 会话。运行时归档逻辑沿用 0.10.1 的三项审查修复。
