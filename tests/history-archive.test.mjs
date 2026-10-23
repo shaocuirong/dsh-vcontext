@@ -11,7 +11,7 @@ import { restoreReleasedV4Artifact } from '@deepseek-ai/dsh-session-format-v3-to
 import { SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection';
 import { SystemPrompt } from '@deepseek-ai/dsh-system-prompt';
 import { ToolRuntime } from '@deepseek-ai/dsh-tools';
-import { createHistoryArchive, unavailableOutline } from '../adapter/history-archive.mjs';
+import { createHistoryArchive, selectArchiveSpan, unavailableOutline } from '../adapter/history-archive.mjs';
 
 const text = (id, role, value, source) => ({ id, role, source,
   content: [{ type: 'text', text: value }] });
@@ -51,7 +51,7 @@ test('native Surface archive removes old chat and tool content while V4 replay k
   } };
   root.provide('agents'); root.set('agents', new Map([[agent.id, agent]]));
   const archive = createHistoryArchive(root);
-  t.after(async () => { archive.dispose(); await root.fiber.dispose(); });
+  t.after(async () => { await archive.dispose(); await root.fiber.dispose(); });
   const prefix = JSON.stringify(session.snapshotEvents());
   const prefixLength = session.seq;
   const preview = await archive.inspect(agent.id);
@@ -112,7 +112,7 @@ test('next real AgentLoop request uses archived Surface rather than the old chat
   const handle = await agents.create({ sessionId: 'history-request',
     meta: { cwd: 'C:/offline-fixture', delegationDepth: 0 },
     agentOptions: { provider: 'offline-history', model: 'fixture' } });
-  t.after(async () => { archive.dispose(); await handle.dispose(); await root.fiber.dispose(); });
+  t.after(async () => { await archive.dispose(); await handle.dispose(); await root.fiber.dispose(); });
   const agent = handle.agent;
   for (let index = 1; index <= 3; index++) {
     agent.followup(text(`input-${index}`, 'user', `old user ${index}`.repeat(80), { kind: 'user' }));
@@ -143,6 +143,133 @@ test('next real AgentLoop request uses archived Surface rather than the old chat
 });
 
 const ARCHIVE_SOURCE = 'vcontext-history';
+
+const deferred = () => {
+  let resolve;
+  const promise = new Promise(done => { resolve = done; });
+  return { promise, resolve };
+};
+
+for (const stage of ['resolve', 'maintenance', 'before-flush', 'after-flush', 'replay-flush']) {
+  test(`dispose drains archive work paused at ${stage}`, async t => {
+    const fixture = historyFixture();
+    t.after(() => fixture.dispose());
+    const { root, session, agent, archive } = fixture;
+    const options = { request_id: 'disposal-request' };
+    if (stage === 'replay-flush') await archive.archive(agent.id, 2, options);
+    const initialSeq = session.seq;
+    let savedSeq = null;
+    const entered = deferred(), release = deferred();
+    t.after(() => release.resolve());
+    if (stage === 'resolve') {
+      root.provide('sessionController');
+      root.set('sessionController', { async resolveAgent() {
+        entered.resolve(); await release.promise; return { agent };
+      } });
+    } else if (stage === 'maintenance') {
+      agent.runMaintenance = async work => {
+        entered.resolve(); await release.promise;
+        return work(new AbortController().signal);
+      };
+    } else {
+      let flushes = 0;
+      root.on('session/flush', async () => {
+        flushes++;
+        if (flushes === (stage === 'after-flush' ? 2 : 1)) {
+          entered.resolve(); await release.promise;
+        }
+        savedSeq = session.seq;
+      });
+    }
+    const operation = archive.archive(agent.id, 2, options);
+    const rejected = assert.rejects(operation, { code: 'UNAVAILABLE' });
+    await entered.promise;
+    let disposed = false;
+    const disposal = archive.dispose().then(() => { disposed = true; });
+    await new Promise(done => setImmediate(done));
+    assert.equal(disposed, false, 'teardown must drain accepted operations');
+    await assert.rejects(archive.archive(agent.id), { code: 'UNAVAILABLE' });
+    release.resolve();
+    await Promise.all([disposal, rejected]);
+    // An append already accepted before disposal must finish persistence; all
+    // earlier cancellation points must leave the Surface completely untouched.
+    assert.equal(session.seq, initialSeq + (stage === 'after-flush' ? 1 : 0));
+    if (stage === 'after-flush') assert.equal(savedSeq, session.seq);
+    const finalSeq = session.seq;
+    await new Promise(done => setImmediate(done));
+    assert.equal(session.seq, finalSeq);
+  });
+}
+
+test('archive reserves its session while agent resolution is pending', async t => {
+  const fixture = historyFixture();
+  t.after(() => fixture.dispose());
+  const { root, agent, archive } = fixture;
+  const entered = deferred(), release = deferred();
+  t.after(() => release.resolve());
+  root.provide('sessionController');
+  root.set('sessionController', { async resolveAgent() {
+    entered.resolve(); await release.promise; return { agent };
+  } });
+  const operation = archive.archive(agent.id);
+  await entered.promise;
+  await assert.rejects(archive.archive(agent.id), { code: 'BUSY' });
+  release.resolve();
+  assert.equal((await operation).status, 'archived');
+});
+
+test('host cancellation during the first flush prevents an archive append', async t => {
+  const fixture = historyFixture();
+  t.after(() => fixture.dispose());
+  const { root, session, agent, archive } = fixture;
+  const controller = new AbortController();
+  agent.runMaintenance = work => work(controller.signal);
+  root.on('session/flush', () => controller.abort());
+  const initialSeq = session.seq;
+  await assert.rejects(archive.archive(agent.id), { code: 'BUSY' });
+  assert.equal(session.seq, initialSeq);
+});
+
+for (const [position, sourceIndex, expectedCount] of [
+  ['first', 0, 0], ['middle', 2, 0], ['last', 3, 0], ['later-turn', 5, 4],
+]) {
+  test(`history archive preserves the entire turn with a ${position} replacement chain`, async t => {
+    const fixture = historyFixture();
+    t.after(() => fixture.dispose());
+    const { session, agent, archive } = fixture;
+    const source = session.snapshotEvents()[session.surface.nodes[sourceIndex]];
+    session.append('turn/start', { turn: 5 });
+    session.append('user/message', text('u5', 'user', 'latest user', { kind: 'user' }), { surfaceOp: 'append' });
+    session.append('step/start', { turn: 5, step: 1 });
+    let replaced = source.seq;
+    for (let index = 0; index < 2; index++) {
+      const type = source.type === 'assistant/message' ? 'user/message' : source.type;
+      const data = source.type === 'assistant/message'
+        ? text(`replacement-${index}`, 'user', 'replacement text', { kind: 'user' }) : structuredClone(source.data);
+      const replacement = session.append(type, data, {
+        surfaceOp: { op: 'replace', startSeq: replaced, endSeq: replaced }, sourceEventSeqs: [replaced],
+      });
+      replaced = replacement.seq;
+    }
+    session.append('step/end', { turn: 5, step: 1 });
+    session.append('turn/end', { turn: 5, reason: { kind: 'completed' } });
+    const original = session.deriveMessages();
+    assert.equal(selectArchiveSpan(session).nodes.length, expectedCount);
+    if (!expectedCount) {
+      await assert.rejects(archive.archive(agent.id), { code: 'NO_ELIGIBLE' });
+      assert.deepEqual(session.deriveMessages(), original);
+    } else {
+      const result = await archive.archive(agent.id);
+      assert.equal(result.count, expectedCount);
+      assert.deepEqual(session.deriveMessages().slice(1), original.slice(expectedCount));
+    }
+    const artifact = restoreReleasedV4Artifact({ header: structuredClone(session.header),
+      events: structuredClone(session.snapshotEvents()), inheritedEventCount: session.inheritedEventCount },
+    KNOWN_SESSION_EVENT_TYPES);
+    const replay = Session.create(session.id, artifact.events, artifact.header, artifact.inheritedEventCount);
+    assert.deepEqual(replay.deriveMessages(), session.deriveMessages());
+  });
+}
 
 function historyFixture() {
   const root = new Context();
@@ -180,7 +307,7 @@ function historyFixture() {
   root.provide('agents'); root.set('agents', new Map([[agent.id, agent]]));
   const archive = createHistoryArchive(root);
   return { root, session, agent, archive,
-    async dispose() { archive.dispose(); await root.fiber.dispose(); } };
+    async dispose() { await archive.dispose(); await root.fiber.dispose(); } };
 }
 
 test('archive request_id replays without a second marker', async t => {
@@ -311,7 +438,7 @@ test('legacy 0.9.0 markers without meta still list and read', async t => {
   } };
   root.provide('agents'); root.set('agents', new Map([[agent.id, agent]]));
   const archive = createHistoryArchive(root);
-  t.after(async () => { archive.dispose(); await root.fiber.dispose(); });
+  t.after(async () => { await archive.dispose(); await root.fiber.dispose(); });
   const list = await archive.list(agent.id);
   assert.equal(list.total, 1);
   assert.equal(list.archives[0].ref, ref);
@@ -377,6 +504,9 @@ test('a Fork-inherited foreign marker is never listed, searched, replayed or rea
   assert.equal(search.matches.length, 0);
   assert.equal(search.total, 0);
   await assert.rejects(() => archive.read(agent.id, foreignRef), { code: 'NOT_FOUND' });
+  const manufacturedRef = `vctx://history/${createHash('sha256').update(agent.id).digest('hex').slice(0, 16)}/${session.seq - 1}`;
+  await assert.rejects(() => archive.read(agent.id, manufacturedRef), { code: 'NOT_FOUND' });
+  await assert.rejects(() => archive.read(agent.id, manufacturedRef, 0, 65536, source[0]), { code: 'NOT_FOUND' });
   // The foreign request_id must not replay the inherited marker; a real archive
   // for THIS session may still proceed (or fail closed with NO_ELIGIBLE).
   const attempt = await archive.archive(agent.id, 2, { request_id: 'foreign-request' }).catch(error => error);

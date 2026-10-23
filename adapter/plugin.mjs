@@ -243,7 +243,7 @@ export function mount(ctx, config, defineTool) {
   });
   ctx.effect(() => async () => {
     disposed = true;
-    historyArchive.dispose();
+    await historyArchive.dispose();
     for (const state of attached.values()) {
       state.detach();
       state.detachVariable?.();
