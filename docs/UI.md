@@ -24,8 +24,12 @@
 | `GET /vctx/policy` | 读取 namespace 的统一替换策略 |
 | `POST /vctx/policy` | 校验并保存统一替换策略 |
 | `POST /vctx/replace` | 用户手动将当前会话工作页换出到归档，正文保留 |
+| `GET /vctx/history?session=…` | 预览可归档的完整旧轮次 |
+| `POST /vctx/history` | 将旧聊天与工具结果通过宿主 Surface 换成可读取引用 |
 
 HTTP 前缀注册为 `/vctx`，处理器内部匹配 `/vctx/` 下的路径。宿主入口等待 `webServer` 和 `commands` 服务就绪后分别注册路由与命令。
+
+0.9.0 的会话历史归档与上述插件工作页换出为两个独立卡片。前者改变模型可见聊天与工具结果，显示实际上下文的前后字节；原始日志仍保留。接口契约和恢复限制见 [会话历史归档](HISTORY-ARCHIVE-0.9.0.md)。
 
 ## 自动替换
 

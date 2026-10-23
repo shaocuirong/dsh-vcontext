@@ -2,6 +2,8 @@
 
 所有操作通过 `ContextStore.dispatch(operation, arguments)` 调用；CLI 从 stdin 读取 arguments 对象；Harness `vctx` 的 `input` 是此对象的 JSON 字符串。
 
+`history_read` 是 Harness 宿主侧的 `vctx` 操作，不属于 Python `ContextStore.dispatch`：`{"ref":"vctx://history/<会话哈希>/<事件序号>","offset":0,"limit":65536}`。引用只能在当前会话读取，返回原事件序号、类型与消息 JSON 的一段文本、总字符数及 `next_offset`；每次最多65536字符。它不会把多条消息原位恢复，调用本身会进入新的工具历史。归档入口是本机同源的 `GET /vctx/history?session=<id>` 预览与 `POST /vctx/history`，正文 `{"session":"<id>","keep_turns":2}`；保护轮数允许1–20。每次最多256个可见节点、8MiB正文；宿主原日志保持权威。参见 [归档契约](HISTORY-ARCHIVE-0.9.0.md)。
+
 写操作成功结果通常只含页面引用，避免向宿主历史重复回传正文。接口不存在任意 SQL、任意方法调用、跨 scope 访问或模型可改写的数据库路径。
 
 ## 操作表
