@@ -34,7 +34,7 @@
 
 本机 Harness 设置保存验证（隔离 profile、演示数据）：
 
-![Harness 设置保存验证](images/harness-settings-0.3.0.png)
+![Harness 设置保存验证](../images/harness-settings-0.3.0.png)
 
 ```sh
 npm ci --ignore-scripts

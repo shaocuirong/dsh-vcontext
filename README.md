@@ -1,6 +1,6 @@
 # dsh-vcontext
 
-当前版本：**[v0.10.2](https://github.com/shaocuirong/dsh-vcontext/releases/tag/v0.10.2)** · [会话历史虚拟上下文](docs/HISTORY-VCONTEXT-0.10.0.md) · [0.9.0 归档契约](docs/HISTORY-ARCHIVE-0.9.0.md) · [优化节点](docs/NODES-0.10.0.md) · [任务执行状态](docs/TASKS-0.8.0.md) · [16 篇参考论文](docs/RESEARCH.md) · [更新日志](CHANGELOG.md) · [验证记录](docs/VALIDATION.md)
+当前版本：**[v0.10.2](https://github.com/shaocuirong/dsh-vcontext/releases/tag/v0.10.2)** · [会话历史虚拟上下文](docs/architecture/HISTORY-VCONTEXT-0.10.0.md) · [0.9.0 归档契约](docs/architecture/HISTORY-ARCHIVE-0.9.0.md) · [优化节点](docs/releases/nodes/NODES-0.10.0.md) · [任务执行状态](docs/architecture/TASKS-0.8.0.md) · [16 篇参考论文](docs/research/RESEARCH.md) · [更新日志](CHANGELOG.md) · [验证记录](docs/releases/VALIDATION.md)
 
 **DeepSeek Harness 客户端虚拟上下文管理器**：结构化操作、可追溯资源版本、有来源的摘要、按需换页与会话内看板。
 
@@ -112,7 +112,7 @@ dsh plugin --profile desktop add "link:$((Get-Location).Path)"
 
 只追加这一项，保留现有 bundle；JSON 文件应保存为 UTF-8 无 BOM。然后重新打开 Harness。`link:` 安装后不要移动仓库目录，否则需重新安装链接。
 
-默认数据库为 `~/.dsh/dsh-vcontext/context.db`；设置了 `DSH_HOME` 时相对于该目录。插件优先使用 Harness 已下载的 Python 运行时，其次使用系统 Python，也可在本地 profile patch 中覆盖 `python` 和 `dbPath`。详见 [使用说明](docs/USAGE.zh-CN.md)。
+默认数据库为 `~/.dsh/dsh-vcontext/context.db`；设置了 `DSH_HOME` 时相对于该目录。插件优先使用 Harness 已下载的 Python 运行时，其次使用系统 Python，也可在本地 profile patch 中覆盖 `python` 和 `dbPath`。详见 [使用说明](docs/guides/USAGE.zh-CN.md)。
 
 0.5.0 首次打开旧库会先生成同目录唯一 `.pre-schema7-<id>.bak`，再事务迁移；已有页面、配置、检查点和用量保留。主 schema 升为 7，旧插件不能直接读取升级后的库，回退需先退出宿主并人工选择备份。不要用旧数据库文件覆盖新数据。
 
@@ -129,9 +129,9 @@ dsh plugin --profile desktop add "link:$((Get-Location).Path)"
 4. 换题时使用 `recall` 检索已归档内容；需要原文时使用 `read`。
 5. 在“工具结果外置与恢复”刷新候选，逐条选择外置或恢复；在设置中另行保存工作页归档策略。显示偏好会自动保存。
 6. 要让旧聊天和工具结果退出下一次模型请求，点击“归档旧聊天与工具结果”，再用 `vctx history_list` 查看归档清单、`history_search` 在归档原文中检索、`history_read`（可带 `seq`）按引用或单条消息取回需要的证据；看板归档按钮会自动生成 `request_id` 并携带预览的 `expected_surface_seq`；预览未变时重试复用同一身份，成功后或预览刷新后换新。提交结果不确定时先刷新再重试同一身份，不要仅因响应丢失就换新 ID。需要摘要时另用“立即压缩会话上下文”。“仅归档插件工作页”和自动策略只管理 vctx 工作页。生成中的会话需等待结束。
-7. 用 `operation_list` 查询宿主操作索引；用 `resource_store` 保存明确文本，或启用后用 `resource_capture` 捕获文件版本；从返回值保留 ref，再通过 `resource_read` 按需读回旧版本。详见 [结构化状态 API](docs/API.md#结构化状态与资源050)。
+7. 用 `operation_list` 查询宿主操作索引；用 `resource_store` 保存明确文本，或启用后用 `resource_capture` 捕获文件版本；从返回值保留 ref，再通过 `resource_read` 按需读回旧版本。详见 [结构化状态 API](docs/guides/API.md#结构化状态与资源050)。
 
-8. 在“会话资源快照”保存清单，再选择固定、返回或建立独立工作集。固定时插件按路径只读所选版本，完整范围及冲突恢复见 [使用说明](docs/USAGE.zh-CN.md#会话资源快照070)。
+8. 在“会话资源快照”保存清单，再选择固定、返回或建立独立工作集。固定时插件按路径只读所选版本，完整范围及冲突恢复见 [使用说明](docs/guides/USAGE.zh-CN.md#会话资源快照070)。
 
 9. 在“任务与执行状态”建立任务/子任务、设为当前任务并保存进度和下一步。任务状态、版本与来源在宿主重启后保留；人工审核需先在轨迹中核对已关联证据。
 
@@ -170,11 +170,11 @@ npm run bench
 
 `VCTX_PYTHON` 可指定测试使用的 Python；`VCTX_SDK_ROOT` 可指定独立 SDK 安装目录。官方 SDK 测试缺少依赖时会明确跳过，不应把跳过当成验证成功。仓库 CI 在 Windows / Ubuntu 上运行 Python 和 Node 测试。
 
-0.3.0 在本机通过 41 项 Node/SDK 测试和 63 项 Python 测试；包含真实 `dsh-context@0.74.0` 注册、上下文替换与卸载验证。另使用本机 Harness `0.2.1-rc.2` 的隔离 profile 检查设置、开关及演示会话投影；本轮未进行供应商模型生成测试。详见 [优化与可用性审查](docs/OPTIMIZATION-0.3.0.md)。
+0.3.0 在本机通过 41 项 Node/SDK 测试和 63 项 Python 测试；包含真实 `dsh-context@0.74.0` 注册、上下文替换与卸载验证。另使用本机 Harness `0.2.1-rc.2` 的隔离 profile 检查设置、开关及演示会话投影；本轮未进行供应商模型生成测试。详见 [优化与可用性审查](docs/releases/OPTIMIZATION-0.3.0.md)。
 
 0.3.1 修复已有会话开启面板后读不到历史上下文的问题：本机 47 项 Node、63 项 Python 测试通过；真实 Harness JSONL 三轮会话在开启面板后、宿主重启后均能直接读取，读取前后日志 SHA256 一致。历史读取不会自动创建 Agent、写入缓存页或构造“最近模型请求”。
 
-0.10.0 在本机通过 179 项 Node/真实 SDK 和 176 项 Python 测试，0 失败、0 跳过；`npm run check:release` 输出 v0.10.0，`npm run doctor` 退出 0。未进行桌面端重启后的真人浏览器点击验收；看板的归档清单、搜索与 CHANGED 重试状态机由单元/路由/组件测试覆盖，仍不是真实浏览器点击验收；看板归档按钮自动生成并复用 `request_id`，携带预览的 `expected_surface_seq`，遇 CHANGED 会先刷新预览再换新身份，重放成功标注为原回执。已知限制见 [验证记录](docs/VALIDATION.md)。
+0.10.0 在本机通过 179 项 Node/真实 SDK 和 176 项 Python 测试，0 失败、0 跳过；`npm run check:release` 输出 v0.10.0，`npm run doctor` 退出 0。未进行桌面端重启后的真人浏览器点击验收；看板的归档清单、搜索与 CHANGED 重试状态机由单元/路由/组件测试覆盖，仍不是真实浏览器点击验收；看板归档按钮自动生成并复用 `request_id`，携带预览的 `expected_surface_seq`，遇 CHANGED 会先刷新预览再换新身份，重放成功标注为原回执。已知限制见 [验证记录](docs/releases/VALIDATION.md)。
 
 ## 可选启用 dsh-context 联动
 
@@ -186,9 +186,9 @@ dsh plugin --profile desktop add dsh-context@0.74.0
 
 在该 profile 的 `dsh.profile.bundles` 中保留原有项目，并确保同时包含 `dsh-context` 和 `dsh-virtual-context`，然后重启。联动通过宿主 `sessionProjections.snapshot()` 读取公开数据，不导入上游内部实现，不共享数据库，也不会代替宿主压缩历史。未安装上游插件仍可使用全部缓存功能。
 
-若要关闭联动，可在既有本地插件配置中追加 `contextIntegration: false`。上游接口与本插件预算的口径见 [API 与诊断配置](docs/API.md)。
+若要关闭联动，可在既有本地插件配置中追加 `contextIntegration: false`。上游接口与本插件预算的口径见 [API 与诊断配置](docs/guides/API.md)。
 
-已进行独立浏览器交互检查，以及授权历史消息的本地回放：552 页原文完整性、归档检索、轮次去重、阈值触发、核心页保护和预算上限均通过。只发布汇总结果，不包含真实对话或数据库。见 [验证记录](docs/VALIDATION.md)。
+已进行独立浏览器交互检查，以及授权历史消息的本地回放：552 页原文完整性、归档检索、轮次去重、阈值触发、核心页保护和预算上限均通过。只发布汇总结果，不包含真实对话或数据库。见 [验证记录](docs/releases/VALIDATION.md)。
 
 ## 边界
 
@@ -196,14 +196,15 @@ dsh plugin --profile desktop add dsh-context@0.74.0
 - 归档检索是大小写不敏感的离线词法子串检索，只扫描最近 8 个归档、最多 2048 个源事件 / 4 MiB 文本，返回有界摘录而非正文；其中最近 8 个归档的上限有单元测试覆盖，2048 事件 / 4 MiB 上限为代码检查、未做大规模压力测试。归档引用是历史证据指针，不代表事实仍有效或文件版本仍相同。
 - 面板开关控制显示，不会自动归档聊天记录，也不会暂停已启用的工作页归档策略或明确提交的投影计划。内容由 Agent 通过 `vctx` 显式保存。
 - 字节稳定不保证供应商缓存命中；命中率仅来自实际 usage，没有记录时显示空状态。
-- 默认检索是离线词法基线，不代表神经语义检索。可选 sentence-transformers 模型需自行安装，见 [研究映射](docs/RESEARCH.md)。
+- 默认检索是离线词法基线，不代表神经语义检索。可选 sentence-transformers 模型需自行安装，见 [研究映射](docs/research/RESEARCH.md)。
 - 数据库为本机明文文件。会话隔离是应用层隔离，不是多租户认证机制。
 
 ## 文档
 
-- [中文使用说明与参数](docs/USAGE.zh-CN.md)
-- [API](docs/API.md) · [界面实现](docs/UI.md) · [缓存层设计](docs/CACHE.md)
-- [验证记录](docs/VALIDATION.md) · [研究映射](docs/RESEARCH.md)
+- [文档索引](docs/README.md)
+- [中文使用说明与参数](docs/guides/USAGE.zh-CN.md)
+- [API](docs/guides/API.md) · [界面实现](docs/guides/UI.md) · [缓存层设计](docs/architecture/CACHE.md)
+- [验证记录](docs/releases/VALIDATION.md) · [研究映射](docs/research/RESEARCH.md)
 - [参与贡献](CONTRIBUTING.md)
 
 ## License

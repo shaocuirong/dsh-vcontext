@@ -13,13 +13,13 @@ assert.ok((await read('README.md')).includes(`releases/tag/v${version}`), 'READM
 assert.ok((await read('CHANGELOG.md')).includes(`## [${version}] - `), 'changelog version missing');
 for (const path of ['index.mjs', 'lib/client.js', 'adapter/context-integration.mjs', 'adapter/diagnostics.mjs',
   'adapter/session-bridge.mjs', 'adapter/resource-capture.mjs', 'vcontext/state.py', 'vcontext/migrations.py',
-  'docs/RESEARCH.md', 'docs/ARCHITECTURE-0.5.0.md', 'docs/PROJECTION-0.6.0.md',
-  'adapter/result-projection.mjs', 'adapter/result-jobs.mjs', 'docs/NODES-0.6.0.md',
+  'docs/research/RESEARCH.md', 'docs/architecture/ARCHITECTURE-0.5.0.md', 'docs/architecture/PROJECTION-0.6.0.md',
+  'adapter/result-projection.mjs', 'adapter/result-jobs.mjs', 'docs/releases/nodes/NODES-0.6.0.md',
   'vcontext/result_store.py', 'vcontext/server.py', 'vcontext/session_snapshots.py',
-  'adapter/session-snapshots.mjs', 'docs/SNAPSHOTS-0.7.0.md', 'docs/NODES-0.7.0.md',
-  'vcontext/task_state.py', 'adapter/task-controller.mjs', 'docs/TASKS-0.8.0.md', 'docs/NODES-0.8.0.md',
-  'docs/NODES-0.8.1.md', 'adapter/history-archive.mjs', 'tests/history-archive.test.mjs',
-  'docs/HISTORY-ARCHIVE-0.9.0.md', 'docs/NODES-0.9.0.md',
-  'adapter/plugin.mjs', 'adapter/routes.mjs', 'docs/HISTORY-VCONTEXT-0.10.0.md', 'docs/NODES-0.10.0.md'])
+  'adapter/session-snapshots.mjs', 'docs/architecture/SNAPSHOTS-0.7.0.md', 'docs/releases/nodes/NODES-0.7.0.md',
+  'vcontext/task_state.py', 'adapter/task-controller.mjs', 'docs/architecture/TASKS-0.8.0.md', 'docs/releases/nodes/NODES-0.8.0.md',
+  'docs/releases/nodes/NODES-0.8.1.md', 'adapter/history-archive.mjs', 'tests/history-archive.test.mjs',
+  'docs/architecture/HISTORY-ARCHIVE-0.9.0.md', 'docs/releases/nodes/NODES-0.9.0.md',
+  'adapter/plugin.mjs', 'adapter/routes.mjs', 'docs/architecture/HISTORY-VCONTEXT-0.10.0.md', 'docs/releases/nodes/NODES-0.10.0.md'])
   await read(path);
 console.log(`Release metadata and entry points verified: v${version}`);

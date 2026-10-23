@@ -21,22 +21,22 @@
 - `npm run check:release` 校验 0.10.0 元数据、README/CHANGELOG 链接及入口文件后输出 `Release metadata and entry points verified: v0.10.0`；`npm run doctor` 退出码 0，报告 Node 22.19.0、Python 3.12.14、SDK ok、可选 dsh-context 已安装、数据库 configured=true / modified=false（只读检查，未改动数据库或配置）。
 - 本版**没有 Python 改动，也没有数据库 schema 变化**：主 schema9 / vc2 / vcr1 / vcs1 / vct1 不变，不新增迁移、不新建归档登记表；引用格式 `vctx://history/<16位十六进制>/<序号>` 与 0.9.0 surfaceOp replace 语义不变。Node 测试覆盖 request_id 重放不追加第二条 marker、重放回执的前后消息数/字节等于原归档并再次 flush 确认持久化、同 ID 异 keep_turns 拒绝、过期 expected_surface_seq 在追加前失败、list 只含元数据、read(seq) 单条原始消息、0.9.0 无 meta 旧 marker 兼容、outline ≤2048 字节/1–8 条/最旧截断、history_search 摘录与无命中、只扫描最新 8 个归档、外来/Fork marker 不进入 list/outline/summary/search/重放且 read 返回 NOT_FOUND、四行系统上下文与 vctx_history 变量、GET/POST/search 路由字段校验、409 映射与 dashboard.history_archive。客户端测试同时覆盖纯函数与状态化组件：归档请求自动携带 request_id / expected_surface_seq、无预览 surface 时省略 expected_surface_seq、预览未变时复用同一请求身份、预览 surface 变化时轮换请求身份、CHANGED 后立即重新 inspect 且下一次点击使用新 request_id / 新 expected_surface_seq、重放回执显示原始前后值而不是 X → X B；IME 组合期间的 Enter 保护由代码检查覆盖。
 - **未验证范围（如实记录）**：没有进行桌面端完全重启后的真人浏览器点击验收，看板“归档会话历史”的清单与搜索只由 Node 单元/路由测试覆盖，未在真实浏览器中手工点击；看板归档按钮的 CHANGED 恢复与重放文案由状态化 Hook 模拟组件测试覆盖，不是真实 DOM 点击。最近 8 个归档的检索上限有单元测试覆盖；2048 源事件 / 4 MiB 文本上限是代码检查，不是大规模压力测试；`history_read(seq)` 返回单条消息对象，单条对象可能超过 65536 字符，65536 上限只约束整段分页。session/request_id/query 长度按 UTF-16 码元计数（历史读取分页按码点）；GET /vctx/history 的 list() 与 outline() 是两次独立读取，若并发归档 POST 恰好落在两次读取之间，卡片可能少显示一条归档行（按 ref 连接时未知 ref 被丢弃）；Fork 子会话不继承父会话归档这一边界已由外来 marker 测试覆盖，但未在真实 DSH Fork 会话上做端到端点击验收。
-- 原位多消息恢复与自动归档策略仍不在本版范围；本版新增测试未调用供应商模型，未证明 Token 节省、缓存收益或答案质量。设计、边界与已知限制见 [HISTORY-VCONTEXT-0.10.0.md](HISTORY-VCONTEXT-0.10.0.md)，节点见 [NODES-0.10.0.md](NODES-0.10.0.md)。
+- 原位多消息恢复与自动归档策略仍不在本版范围；本版新增测试未调用供应商模型，未证明 Token 节省、缓存收益或答案质量。设计、边界与已知限制见 [HISTORY-VCONTEXT-0.10.0.md](../architecture/HISTORY-VCONTEXT-0.10.0.md)，节点见 [NODES-0.10.0.md](nodes/NODES-0.10.0.md)。
 
 ## v0.9.0：会话历史原位归档（2026-10-23）
 
 - 本机159项Node/真实SDK、176项Python测试通过；release元数据、npm包预览与Git差异检查通过。两项旧Node测试需本机符号链接和回环HTTP，受限沙箱分别报EPERM和连接失败；隔离权限下完整回归全部通过。
 - 原生Session测试将两轮旧聊天和工具结果换成一条引用，实际派生上下文字节下降；原事件前缀逐字节序列化保持一致。严格格式V4验证和Session重建后派生消息完全一致，同会话按引用可分段读回原消息，其他会话的引用拒绝读取。
 - 真实Cordis AgentLoop与离线LLM适配器运行四轮：归档前模型请求仍含首轮旧输入，归档后下一真实请求有历史引用、不再含首轮旧输入，同时保留新输入。未调用供应商模型，不宣称真实Token账单或答案质量收益。
-- 本机同源HTTP入口验证预览、实际提交、未知字段拒绝和无Origin写入拒绝。日常Harness进程和用户原会话未作为本次写入对象；未完成桌面端重启/真人浏览器点击验收。原位多消息恢复尚未实现，可使用 `vctx history_read` 按需读回；设计与论文边界见[会话历史归档](HISTORY-ARCHIVE-0.9.0.md)。
+- 本机同源HTTP入口验证预览、实际提交、未知字段拒绝和无Origin写入拒绝。日常Harness进程和用户原会话未作为本次写入对象；未完成桌面端重启/真人浏览器点击验收。原位多消息恢复尚未实现，可使用 `vctx history_read` 按需读回；设计与论文边界见[会话历史归档](../architecture/HISTORY-ARCHIVE-0.9.0.md)。
 
 ## v0.8.1：审核、投影与接口正确性（2026-10-23）
 
 - 本机完整156项Node/真实SDK、176项Python通过，无跳过。新增覆盖时钟回拨、相同时间戳且后UUID较小、数据库重开时最新审核一致；明确复现并修复新fail回执却仍注入旧pass的问题。顺序以不可变追加表rowid为准，时间仅展示。
 - 16层合法任务、首标题159空格+x或BOM/全角空白+x，其余160个Unicode字符，原先裁剪会导致controller读取整体失败。修复后真实SDK/SQLite/controller完整读取、路径16个身份保留、UTF8≤8192，task_read/history原文精确保留，宿主历史不变，模型调用0。
 - 真实本机HTTP接受4096个Emoji审核说明与4096+1024个Emoji进度/下一步，两者均超过旧16KiB门槛，字段完整到达控制器；32KiB容量上限继续拒绝超限数据且不调用变更。其他路由仍16KiB，各字段字符校验、Origin/Host/loopback守卫不变。
-- 原生Harness独立合成会话中先经面板记录明确模拟审核，再用公开资源存储API推进资源版本而保持任务修订不变。旧界面在修订21持续显示通过、内核已stale；修复后修订22从通过自动更新为已过期，无需手动刷新任务，明细保留读取时的证据说明。[补丁界面截图](images/tasks-081.png)。不将合成审核冒充生产审核；未触碰日常profile/原会话。重启调试宿主期间产生宿主侧locale/gateway取消日志，后续补丁操作无新增插件错误，不将整个宿主控制台宣称为零错误。
-- schema9/vc2/vcr1/vcs1/vct1保持，无新增迁移或历史改写。发布元数据、doctor和安装包隐私检查通过；跨平台CI与正式发布以本版PR/Release为准。补丁节点见[NODES-0.8.1.md](NODES-0.8.1.md)，任务架构和既有能力边界仍见[TASKS-0.8.0.md](TASKS-0.8.0.md)。
+- 原生Harness独立合成会话中先经面板记录明确模拟审核，再用公开资源存储API推进资源版本而保持任务修订不变。旧界面在修订21持续显示通过、内核已stale；修复后修订22从通过自动更新为已过期，无需手动刷新任务，明细保留读取时的证据说明。[补丁界面截图](../images/tasks-081.png)。不将合成审核冒充生产审核；未触碰日常profile/原会话。重启调试宿主期间产生宿主侧locale/gateway取消日志，后续补丁操作无新增插件错误，不将整个宿主控制台宣称为零错误。
+- schema9/vc2/vcr1/vcs1/vct1保持，无新增迁移或历史改写。发布元数据、doctor和安装包隐私检查通过；跨平台CI与正式发布以本版PR/Release为准。补丁节点见[NODES-0.8.1.md](nodes/NODES-0.8.1.md)，任务架构和既有能力边界仍见[TASKS-0.8.0.md](../architecture/TASKS-0.8.0.md)。
 
 ## v0.8.0：核心任务与执行状态（2026-10-23）
 
@@ -45,11 +45,11 @@
 - 人工审核绑定当前任务版本、已关联真实结束操作、资源 manifest 和实际执行水位；双 hash 在提交时拒绝预览后来源变化。工具 succeeded 本身不是测试通过；新的资源或执行活动会让旧审核过期。8KiB UTF-8 注入上限保留身份并截短展示字段，数据库原文不截断；失败读取不阻止宿主生成，不注入旧审核结论。
 - 安装版 Harness 0.2.1-rc.2，使用独立 DSH_HOME、新数据库与合成文件，经公开 SessionController、维护锁与原生 ToolRuntime 验证真实离线 fixture_check 成功/失败来源、任务切换、审核过期、独立重试、A/B 隔离及管理动作不追加聊天事件。审核由明确标注的合成驱动模拟，不冒充用户实际生产审核或供应商生成。模型调用 0，未修改日常 profile、原会话或用户项目文件。
 - 实际停止 9200 独立宿主并重启，持久化恢复任务版本、焦点路径、审核与资源；原始宿主事件前缀 hash 一致，仅宿主新增合法恢复事件。安装版原生恢复通过；外部开发 SDK 的严格 V4 验证器要求安装版可省略的 delegationDepth，因此未声称该外部验证器通过原生日志，也没有改写日志补字段。上一条真实 AgentLoop 夹具包含完整字段并通过严格验证，两者分别记录。
-- 原生浏览器验收新建/选择任务与目标、保存进度、版本历史、证据选择、人工审核、更新后审核失效及失败节点禁用；刷新保留未提交的进度草稿。所有数据明确标注合成演示，无浏览器运行错误。[任务与目标截图](images/tasks-080.png)。
+- 原生浏览器验收新建/选择任务与目标、保存进度、版本历史、证据选择、人工审核、更新后审核失效及失败节点禁用；刷新保留未提交的进度草稿。所有数据明确标注合成演示，无浏览器运行错误。[任务与目标截图](../images/tasks-080.png)。
 - 主 schema9 / vc2 / vcr1 / vcs1 / vct1；已发布 schema1–8 升级前生成非覆盖 pre-schema9 备份，事务失败回滚，重复打开不重复备份；未来主/子版本拒绝。实际载入已发布 v0.7.0 的旧 core，确认拒绝 schema9，数据库 iterdump 前后相同。升级前须完全退出所有旧连接，不混跑版本。具体升级与回退边界见 README。
 - 本机任务接口核对 Origin、Host 和 loopback；严格参数与分页、有界维护队列、卸载取消、变更不确定时刷新及审核 CAS 有回归。元数据诊断不记录任务正文、原始错误或凭证。
 - 发布元数据/入口和 doctor 通过，检查过程不修改配置数据库；npm 包排除 build、node_modules、数据库、备份、会话日志、凭证及 Python 缓存。跨平台 CI 和正式发布以本版本 PR / Release 记录为准。
-- 本版交付 MAGE/SEEM 思路下的可恢复执行状态基础；不是完整 MAGE 自动策略、ACE/RAPTOR、事实层、自动调度或完整 Git 工作区回滚。没有运行 LongMemEval 正式基准，未证明任务正确率、供应商 Token 或缓存收益。研究、API 与优化节点见 [TASKS-0.8.0.md](TASKS-0.8.0.md)、[API.md](API.md)、[NODES-0.8.0.md](NODES-0.8.0.md)。
+- 本版交付 MAGE/SEEM 思路下的可恢复执行状态基础；不是完整 MAGE 自动策略、ACE/RAPTOR、事实层、自动调度或完整 Git 工作区回滚。没有运行 LongMemEval 正式基准，未证明任务正确率、供应商 Token 或缓存收益。研究、API 与优化节点见 [TASKS-0.8.0.md](../architecture/TASKS-0.8.0.md)、[API.md](../guides/API.md)、[NODES-0.8.0.md](nodes/NODES-0.8.0.md)。
 
 ## v0.7.0：会话资源快照（2026-10-22–23）
 
@@ -57,11 +57,11 @@
 - 真实 Cordis 插件 + AgentLoop + SystemPrompt + ToolRuntime + LlmRuntime，由离线适配器返回真实 vctx 工具调用，A/B并发产生四次真实模型请求。A使用工作集V4，B固定S1使用V3；请求中的目标JSON一致，正文按需进入，精确保留Unicode/BOM/CRLF，另一会话版本不串入。isAgentLoopRequest为true，适配器收到相同冻结消息；无供应商网络调用。官方完整V4验证器重放会话，派生消息一致；快照动作前后宿主事件不变。
 - 安装版 Harness 0.2.1-rc.2、独立DSH_HOME/数据库/合成文件，经公开SessionController、原生ToolRuntime与维护锁验证：两文件清单、A V4/B独立分支/C固定V3、缺失路径拒绝、固定存储/捕获拒绝、旧工作集安全快照回读及磁盘仍为V4。模型调用0；不将夹具工具执行冒充供应商生成。
 - 实际停止9199独立宿主后重新启动，从宿主持久化恢复A/B/C；target修订/引用、manifest hash、精确原文与历史引用保持。原有事件前缀hash一致，宿主恢复新增合法session/end-seed；每次快照/读取动作前后事件不变。未修改日常profile、原会话或用户项目文件。
-- 重启证据完成后，为原生UI单独追加明确标注的合成问答和公开会话标题，不冒充模型回复。真实浏览器验证创建、固定、返回空保留集合、建立独立工作集、安全快照反馈、清单读取和差异比较；同正文克隆显示内容变化0、身份变化2。选择不存在引用后变更按钮禁用，先刷新才恢复；无浏览器运行错误。截图仅含演示数据：[目标与范围](images/snapshot-070.png)、[差异与诊断](images/snapshot-070-controls.png)。
+- 重启证据完成后，为原生UI单独追加明确标注的合成问答和公开会话标题，不冒充模型回复。真实浏览器验证创建、固定、返回空保留集合、建立独立工作集、安全快照反馈、清单读取和差异比较；同正文克隆显示内容变化0、身份变化2。选择不存在引用后变更按钮禁用，先刷新才恢复；无浏览器运行错误。截图仅含演示数据：[目标与范围](../images/snapshot-070.png)、[差异与诊断](../images/snapshot-070-controls.png)。
 - 主schema8/vc2/vcr1/vcs1；发布schema1–7升级前非覆盖pre-schema8备份，失败回滚、重复打开不重复备份、旧页面/版本/配置保留，未来版本拒绝。实际载入已发布v0.6.0的旧core验证拒绝schema8，数据库iterdump前后相同，新版重新打开固定状态与原文完好。升级前须完全退出所有旧连接，不能混跑版本。
 - 新路径触顶拒绝，已有路径更新/重放允许。旧合法超限集合仍可迁移、报告真实计数、按引用/路径读取和查询历史；快照创建与需完整安全备份的分支拒绝，不返回截断manifest假hash。固定模式一次100条历史查询只校验一次manifest；不跨API请求缓存校验结果。
 - 本机快照接口核对Origin/Host/loopback，拒绝远程载体、无Origin变更、超限分页和额外查询字段。公开维护锁、pending容量、卸载取消、固定模式文件访问前守卫及并发数据库兜底均有回归。
-- npm包检查排除数据库、备份、会话日志、build、node_modules、凭证与Python缓存；版本元数据与入口检查、doctor通过。研究映射见 [SNAPSHOTS-0.7.0.md](SNAPSHOTS-0.7.0.md)，优化提交见 [NODES-0.7.0.md](NODES-0.7.0.md)。跨平台CI以本版本Actions为准。
+- npm包检查排除数据库、备份、会话日志、build、node_modules、凭证与Python缓存；版本元数据与入口检查、doctor通过。研究映射见 [SNAPSHOTS-0.7.0.md](../architecture/SNAPSHOTS-0.7.0.md)，优化提交见 [NODES-0.7.0.md](nodes/NODES-0.7.0.md)。跨平台CI以本版本Actions为准。
 - 本版仅覆盖已收录资源视图，没有工作区文件checkout、聊天回退、自动Fork继承、完整Git DAG、MAGE任务树、事实层或自动调度。未运行LongMemEval正式基准，也未证明供应商Token/缓存收益或任务正确率提升。
 
 ## v0.6.0：可恢复工具结果投影（2026-10-22）
@@ -71,10 +71,10 @@
 - 官方 V4 完整格式验证器逐阶段重放真实驱动生成的日志，派生消息一致；另将空闲 `tool/result` replacement 作为反例，确认完整验证拒绝。此约束来自原生重启验收发现的问题，最终产品改为持久化计划 + 已准入 pre-step 应用，禁止在空闲维护任务中追加替换事件。
 - 安装版 Harness 0.2.1-rc.2 独立 DSH_HOME、新数据库与演示文件：真实 write/read 工具、公开 runMaintenance、公开 SessionQuery、真实持久化 flush，以及单条投影/原位恢复通过。安装版测试夹具显式生成演示轮次以调用应用边界，真实 AgentLoop 轮次由上一项独立验证；不将夹具轮次冒充供应商生成。
 - 安装版进程实际停止后重启，从压缩 JSONL 恢复会话，识别驻留引用和重启前排队的恢复计划，应用后原文哈希一致；原日志前缀哈希不变。演示派生 messages 的 UTF-8 JSON 从 16,725 降至 9,184 字节，这是该演示的字节变化，不是整个供应商报文或 Token 收益。
-- 原生浏览器点击“排队恢复原文”后先显示处理中并禁用，随后显示“已保存恢复计划，下一次模型步骤前应用”；当前形态仍为引用驻留。刷新保留引用列表和明确状态，实际应用后刷新显示当前状态；“压缩会话上下文”与工具结果投影分开。[看板截图](images/projection-060.png)仅含合成演示数据。
+- 原生浏览器点击“排队恢复原文”后先显示处理中并禁用，随后显示“已保存恢复计划，下一次模型步骤前应用”；当前形态仍为引用驻留。刷新保留引用列表和明确状态，实际应用后刷新显示当前状态；“压缩会话上下文”与工具结果投影分开。[看板截图](../images/projection-060.png)仅含合成演示数据。
 - 新结果路由核对完整 Origin、允许的本机 Host 及 loopback 对端；POST 必须携带 Origin。拒绝异 scheme、DNS 域名 Host、远端对端、缺 Origin 和多余字段；该本机单用户界面不是远程认证接口。
 - 已有 schema7 升级前生成唯一 pre-result1 backup，新结果扩展 vcr1 事务迁移；主 schema7 / vc2 保持。失败回滚、重试与重复打开不重复备份；旧页面、资源和配置保留。降级前须取消计划并恢复引用，旧插件不提供 result_read。
-- 研究依据、故障矩阵与边界见 [投影契约](PROJECTION-0.6.0.md)，优化提交见 [Git 节点](NODES-0.6.0.md)。跨平台 CI 以本版本 Actions 为准。未修改日常 profile、真实原会话或用户项目文件；没有正式论文基准、供应商 Token/缓存收益或自动调度质量结论。
+- 研究依据、故障矩阵与边界见 [投影契约](../architecture/PROJECTION-0.6.0.md)，优化提交见 [Git 节点](nodes/NODES-0.6.0.md)。跨平台 CI 以本版本 Actions 为准。未修改日常 profile、真实原会话或用户项目文件；没有正式论文基准、供应商 Token/缓存收益或自动调度质量结论。
 
 ## v0.5.0：结构化状态、版本证据与原生桥接（2026-10-22）
 
@@ -83,9 +83,9 @@
 - 4096 条已处理历史追加一条时只解析上一 cursor 边界和新事件；无新增只检查边界。原始正文和已接受完整前缀的不可变性由宿主保证，不声称插件检测所有旧正文篡改。
 - 官方 LocalFileSystem SDK 验证 BOM / CRLF / Unicode 原文保真、旧引用恢复和 CAS；拒绝目录逃逸、超限、二进制、被拒后端及未映射文件世界，禁用状态不读取文件，没有 Node 读取 fallback。模型不能伪造宿主 source_revision 或内部同步 API。
 - 本机 Harness 0.2.1-rc.2 使用独立 DSH_HOME / 新数据库 / 演示工作目录，经真实 SessionController、文件 write/read 工具与插件 vctx 执行完整流程：两次文件版本捕获、历史原文精确恢复、同会话 path 指针更新及摘要引用两个来源；操作记录 11 条、资源版本 2 条、摘要 1 条、当前指针 1 条。文件写入只记 succeeded / not_tested。
-- 原生 Web 看板显示已同步、游标、11 条操作、2 个版本和 1 个摘要；截图为纯演示数据 [state-050.png](images/state-050.png)。未强制关闭日常桌面端、未使用用户原会话做本轮写入，也未改日常 profile 或数据库。
+- 原生 Web 看板显示已同步、游标、11 条操作、2 个版本和 1 个摘要；截图为纯演示数据 [state-050.png](../images/state-050.png)。未强制关闭日常桌面端、未使用用户原会话做本轮写入，也未改日常 profile 或数据库。
 - 本轮不运行模型摘要或论文正式基准，未证明命中率、Token 成本、摘要质量或任务正确率提升；完整任务树、快照 DAG 和自动调度尚未实现。
-- 参考 [研究清单](RESEARCH.md)、[架构](ARCHITECTURE-0.5.0.md)、[实现节点](NODES-0.5.0.md)。跨平台 CI 以本版本对应 Actions 为准。
+- 参考 [研究清单](../research/RESEARCH.md)、[架构](../architecture/ARCHITECTURE-0.5.0.md)、[实现节点](nodes/NODES-0.5.0.md)。跨平台 CI 以本版本对应 Actions 为准。
 
 ## v0.4.0：替换按钮与真实上下文（2026-10-21）
 
@@ -95,7 +95,7 @@
 - 真实 Web 界面点击按钮后显示运行中并禁用按钮；完成后显示替换 1153 条历史及前后统计，刷新后仍显示。单独归档空插件工作页时显示未归档原因，刷新后原因保留、次数为零。
 - 使用宿主公开 sessionController.resolveAgent 和 agentPresets.serviceFor，验证隔离预设的 compaction 服务；不反射内部服务表、不直接改写 JSONL。
 - 回放摘要由隔离测试钩子离线提取，延迟 2.5 秒用于观察运行状态；实际替换范围选择、维护锁、工具配对、事件提交和保存使用宿主实现。未向模型供应商发送历史内容，未验证真实摘要质量或缓存计费收益；正式功能使用宿主配置的摘要模型。
-- Git 节点及升级方式见 [替换修复报告](REPLACEMENT-0.4.0.md)。用户日常桌面进程未强制退出，需完全重启加载新版本。
+- Git 节点及升级方式见 [替换修复报告](../architecture/REPLACEMENT-0.4.0.md)。用户日常桌面进程未强制退出，需完全重启加载新版本。
 
 ## v0.3.1：已有会话读取修复（2026-10-21）
 

@@ -72,4 +72,4 @@
 - GET `/vctx/history` 的 list() 与 outline() 是两次独立读取；若并发归档 POST 恰好落在两次读取之间，卡片可能少显示一条新归档行（按 ref 连接时未知 ref 被丢弃）。
 - 未进行桌面端重启后的真人浏览器点击验收；看板的归档清单与搜索只做了单元/路由测试，归档按钮的 CHANGED 恢复与重放文案由状态化 Hook 模拟组件测试覆盖，不是真实 DOM 点击。
 
-设计决定见[设计文档](superpowers/specs/2026-10-23-history-virtual-context-design.md)，执行拆分见[实施计划](superpowers/plans/2026-10-23-history-virtual-context.md)，提交节点见[NODES-0.10.0.md](NODES-0.10.0.md)。
+设计决定见[设计文档](../planning/superpowers/specs/2026-10-23-history-virtual-context-design.md)，执行拆分见[实施计划](../planning/superpowers/plans/2026-10-23-history-virtual-context.md)，提交节点见[NODES-0.10.0.md](../releases/nodes/NODES-0.10.0.md)。

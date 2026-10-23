@@ -8,7 +8,7 @@
 
 **Tech Stack:** Node.js 22 ESM, node:test, DeepSeek Harness Session Surface, existing Python kernel (unchanged), plain browser client in lib/client.js.
 
-**Spec:** docs/superpowers/specs/2026-10-23-history-virtual-context-design.md
+**Spec:** docs/planning/superpowers/specs/2026-10-23-history-virtual-context-design.md
 
 ## Global Constraints
 
@@ -317,31 +317,31 @@ git commit -m "feat(history): add bounded archive search and dashboard search"
 
 **Files:**
 - Modify: package.json, package-lock.json, pyproject.toml, scripts/check-release.mjs
-- Modify: CHANGELOG.md, README.md, docs/API.md, docs/UI.md, docs/USAGE.zh-CN.md, docs/VALIDATION.md
-- Create: docs/HISTORY-VCONTEXT-0.10.0.md
-- Create: docs/NODES-0.10.0.md
-- Modify: docs/superpowers/specs/2026-10-23-history-virtual-context-design.md only if a decision changed during implementation
+- Modify: CHANGELOG.md, README.md, docs/guides/API.md, docs/guides/UI.md, docs/guides/USAGE.zh-CN.md, docs/releases/VALIDATION.md
+- Create: docs/architecture/HISTORY-VCONTEXT-0.10.0.md
+- Create: docs/releases/nodes/NODES-0.10.0.md
+- Modify: docs/planning/superpowers/specs/2026-10-23-history-virtual-context-design.md only if a decision changed during implementation
 
 **Interfaces:**
 - Version becomes 0.10.0 everywhere (package.json, package-lock root + packages[""], pyproject.toml).
 - check-release.mjs includes the new docs and changed files.
-- docs/NODES-0.10.0.md lists the actual commits from git log for Tasks 1-3.
+- docs/releases/nodes/NODES-0.10.0.md lists the actual commits from git log for Tasks 1-3.
 
 - [ ] **Step 1: Bump versions**
 
 Update package.json version, package-lock.json version and packages[""].version, pyproject.toml version to 0.10.0.
-Update scripts/check-release.mjs to read the new files: docs/HISTORY-VCONTEXT-0.10.0.md and docs/NODES-0.10.0.md.
+Update scripts/check-release.mjs to read the new files: docs/architecture/HISTORY-VCONTEXT-0.10.0.md and docs/releases/nodes/NODES-0.10.0.md.
 
 - [ ] **Step 2: Write release docs**
 
 CHANGELOG.md: add a 0.10.0 section describing request_id/CAS/list/read(seq)/search/outline/dashboard and the explicit non-goals (no in-place restore, no auto policy, no schema migration, no token claims).
 README.md: update the current version link to v0.10.0, add a bullet under features for discoverable/manageable archive, update the quick-start step and boundaries.
-docs/API.md: document history_list, history_search, history_read(seq), POST fields, GET/search routes, bounds and error codes.
-docs/UI.md: document the GET/search route and the card list/search.
-docs/USAGE.zh-CN.md: add a short paragraph under 归档会话历史 describing list/search/per-message read and retry semantics.
-docs/VALIDATION.md: add a 0.10.0 entry with the actual test counts and the fact that no Python/schema changes were made; state what was not validated (desktop restart/browser click) plainly.
-docs/HISTORY-VCONTEXT-0.10.0.md: a concise design/behavior page covering the same decisions, bounds, error codes, and limits; link the 0.9.0 doc.
-docs/NODES-0.10.0.md: a table mapping H1-H4 to the actual commits (use git log --oneline) and tests/docs.
+docs/guides/API.md: document history_list, history_search, history_read(seq), POST fields, GET/search routes, bounds and error codes.
+docs/guides/UI.md: document the GET/search route and the card list/search.
+docs/guides/USAGE.zh-CN.md: add a short paragraph under 归档会话历史 describing list/search/per-message read and retry semantics.
+docs/releases/VALIDATION.md: add a 0.10.0 entry with the actual test counts and the fact that no Python/schema changes were made; state what was not validated (desktop restart/browser click) plainly.
+docs/architecture/HISTORY-VCONTEXT-0.10.0.md: a concise design/behavior page covering the same decisions, bounds, error codes, and limits; link the 0.9.0 doc.
+docs/releases/nodes/NODES-0.10.0.md: a table mapping H1-H4 to the actual commits (use git log --oneline) and tests/docs.
 
 - [ ] **Step 3: Run full verification**
 
@@ -350,11 +350,11 @@ Run: python -m unittest discover -s tests
 Run: npm run check:release
 Run: npm run doctor
 Expected: all pass; no skipped tests; check-release prints v0.10.0; doctor exits 0.
-Record the exact counts in docs/VALIDATION.md.
+Record the exact counts in docs/releases/VALIDATION.md.
 
 - [ ] **Step 4: Commit**
 
-git add package.json package-lock.json pyproject.toml scripts/check-release.mjs CHANGELOG.md README.md docs/API.md docs/UI.md docs/USAGE.zh-CN.md docs/VALIDATION.md docs/HISTORY-VCONTEXT-0.10.0.md docs/NODES-0.10.0.md docs/superpowers/specs/2026-10-23-history-virtual-context-design.md docs/superpowers/plans/2026-10-23-history-virtual-context.md
+git add package.json package-lock.json pyproject.toml scripts/check-release.mjs CHANGELOG.md README.md docs/guides/API.md docs/guides/UI.md docs/guides/USAGE.zh-CN.md docs/releases/VALIDATION.md docs/architecture/HISTORY-VCONTEXT-0.10.0.md docs/releases/nodes/NODES-0.10.0.md docs/planning/superpowers/specs/2026-10-23-history-virtual-context-design.md docs/planning/superpowers/plans/2026-10-23-history-virtual-context.md
 git commit -m "chore(release): prepare v0.10.0 history virtual context"
 
 ---
