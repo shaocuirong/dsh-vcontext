@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { tmpdir } from 'node:os';
 import { Context } from '@deepseek-ai/cordis';
 import { createVolatile } from '@deepseek-ai/cosmokit';
 import { AgentRegistry } from '@deepseek-ai/dsh-agent';
@@ -19,7 +20,7 @@ const text = (id, role, value, source) => ({ id, role, source,
 test('native Surface archive removes old chat and tool content while V4 replay keeps original events', async t => {
   const root = new Context();
   const sessions = new SessionStore(root);
-  const session = sessions.create('history-fixture', { meta: { cwd: 'C:/offline-fixture', delegationDepth: 0 } });
+  const session = sessions.create('history-fixture', { meta: { cwd: tmpdir(), delegationDepth: 0 } });
   root.on('session/flush', () => {});
   for (let turn = 1; turn <= 4; turn++) {
     session.append('turn/start', { turn });
@@ -110,7 +111,7 @@ test('next real AgentLoop request uses archived Surface rather than the old chat
   root.on('session/flush', () => {});
   const archive = createHistoryArchive(root);
   const handle = await agents.create({ sessionId: 'history-request',
-    meta: { cwd: 'C:/offline-fixture', delegationDepth: 0 },
+    meta: { cwd: tmpdir(), delegationDepth: 0 },
     agentOptions: { provider: 'offline-history', model: 'fixture' } });
   t.after(async () => { await archive.dispose(); await handle.dispose(); await root.fiber.dispose(); });
   const agent = handle.agent;
@@ -274,7 +275,7 @@ for (const [position, sourceIndex, expectedCount] of [
 function historyFixture() {
   const root = new Context();
   const sessions = new SessionStore(root);
-  const session = sessions.create('history-fixture', { meta: { cwd: 'C:/offline-fixture', delegationDepth: 0 } });
+  const session = sessions.create('history-fixture', { meta: { cwd: tmpdir(), delegationDepth: 0 } });
   root.on('session/flush', () => {});
   for (let turn = 1; turn <= 4; turn++) {
     session.append('turn/start', { turn });
@@ -414,7 +415,7 @@ test('history_read with seq returns one original message', async t => {
 test('legacy 0.9.0 markers without meta still list and read', async t => {
   const root = new Context();
   const sessions = new SessionStore(root);
-  const session = sessions.create('history-legacy', { meta: { cwd: 'C:/offline-fixture', delegationDepth: 0 } });
+  const session = sessions.create('history-legacy', { meta: { cwd: tmpdir(), delegationDepth: 0 } });
   root.on('session/flush', () => {});
   session.append('turn/start', { turn: 1 });
   const userSeq = session.seq;

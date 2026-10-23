@@ -1,5 +1,11 @@
 # 验证记录
 
+## v0.10.2：跨平台归档测试夹具（2026-10-23）
+
+- 0.10.1 的本机 Windows 回归通过后，远端 Ubuntu CI 在创建会话时拒绝固定路径 `C:/offline-fixture`，报 `session header cwd must be an absolute path`；24 项归档测试因此在夹具构建阶段失败。
+- 将四处归档测试会话的 cwd 改为 `node:os` 的 `tmpdir()`，使用各平台原生绝对路径，仅作为测试元数据。没有更改运行时逻辑、用户数据或机器配置。
+- 本机 24 项归档测试通过；完整远端结果以 PR #9 的当前提交检查为准。已发布的 v0.10.1 保留，使用新的 v0.10.2 版本发布此补丁。
+
 ## v0.10.1：PR #9 归档边界修复（2026-10-23）
 
 - 编辑前核验 origin 为 `shaocuirong/dsh-vcontext`，检出 `codex/history-vcontext-010`，本地与 PR #9 head 均为 `ea8d5c5d676a823f613c01a5672a8ad78acf16fa`，工作区干净。
