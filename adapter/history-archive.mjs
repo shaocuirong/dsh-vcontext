@@ -4,6 +4,11 @@ import { describeContext } from './live-context.mjs';
 const MAX_NODES = 256;
 const MAX_BYTES = 8 * 1024 * 1024;
 const MAX_READ = 65536;
+const OUTLINE_FORMAT = 'vctx-history-v1';
+const OUTLINE_LIMIT = 8;
+const OUTLINE_LIMIT_MAX = 16;
+const OUTLINE_BYTES = 2048;
+const EXCERPT = 80;
 const ARCHIVE_SOURCE = 'vcontext-history';
 const VISIBLE = new Set(['user/message', 'assistant/message', 'tool/result']);
 const ERRORS = {
@@ -80,6 +85,41 @@ function firstUserExcerpt(events, nodes) {
     if (value !== null) return value.slice(0, 80);
   }
   return null;
+}
+
+const collapsedExcerpt = (value, max = EXCERPT) => {
+  if (typeof value !== 'string') return null;
+  const collapsed = value.replace(/\s+/gu, ' ').trim();
+  return collapsed ? collapsed.slice(0, max) : null;
+};
+
+/** Prefer the bounded excerpt stored at archive time; legacy markers fall back to the first archived user message. */
+function firstExcerpt(events, marker, max = EXCERPT) {
+  const stored = collapsedExcerpt(marker.meta?.first, max);
+  if (stored) return stored;
+  for (const seq of marker.event.sourceEventSeqs) {
+    const event = events[seq];
+    if (event?.type !== 'user/message' || event.data?.source?.kind !== 'user') continue;
+    const fallback = collapsedExcerpt(textOf(event), max);
+    if (fallback) return fallback;
+  }
+  return null;
+}
+
+/** Newest-first markers from one immutable-log snapshot, shared by list/outline/summary. */
+function scanArchives(agent) {
+  const events = agent.session.snapshotEvents();
+  const markers = [];
+  for (let seq = events.length - 1; seq >= 0; seq--) {
+    const marker = parseArchiveMarker(events[seq]);
+    if (marker) markers.push(marker);
+  }
+  return { events, markers };
+}
+
+/** The bounded degradation injected when the archive service cannot produce an outline. */
+export function unavailableOutline() {
+  return { format: OUTLINE_FORMAT, available: false };
 }
 
 /** Choose one bounded span of completed old turns from the current native Surface. */
@@ -279,16 +319,40 @@ export function createHistoryArchive(ctx, diagnostics) {
     async list(id, limit = 20) {
       if (!validId(id) || !Number.isSafeInteger(limit) || limit < 1 || limit > 100) fail('INVALID_INPUT');
       const agent = await resolve(id);
-      const events = agent.session.snapshotEvents();
-      const archives = [];
-      let total = 0;
-      for (let seq = events.length - 1; seq >= 0; seq--) {
-        const marker = parseArchiveMarker(events[seq]);
-        if (!marker) continue;
-        total++;
-        if (archives.length < limit) archives.push(markerMetadata(marker));
+      const { markers } = scanArchives(agent);
+      return { archives: markers.slice(0, limit).map(markerMetadata), total: markers.length };
+    },
+    async outline(id, limit = OUTLINE_LIMIT) {
+      if (!validId(id) || !Number.isSafeInteger(limit) || limit < 1 || limit > OUTLINE_LIMIT_MAX) fail('INVALID_INPUT');
+      const agent = await resolve(id);
+      const { events, markers } = scanArchives(agent);
+      const metadata = markers.map(marker => markerMetadata(marker));
+      let totalBytes = 0;
+      for (const entry of metadata) if (Number.isSafeInteger(entry.bytes)) totalBytes += entry.bytes;
+      const archives = metadata.slice(0, limit).map((entry, index) => ({
+        ref: entry.ref, count: entry.count, bytes: entry.bytes, first: firstExcerpt(events, markers[index]),
+      }));
+      let truncated = markers.length > archives.length;
+      const bounded = () => ({ format: OUTLINE_FORMAT, available: true, archives,
+        total_archives: markers.length, total_bytes: totalBytes, truncated });
+      // Newest entries stay; every pop removes the oldest so the injected JSON fits the hard bound.
+      while (Buffer.byteLength(JSON.stringify(bounded()), 'utf8') > OUTLINE_BYTES && archives.length > 0) {
+        archives.pop();
+        truncated = true;
       }
-      return { archives, total };
+      return bounded();
+    },
+    async summary(id) {
+      if (!validId(id)) fail('INVALID_INPUT');
+      const agent = await resolve(id);
+      const { markers } = scanArchives(agent);
+      let totalBytes = 0, lastRef = null;
+      for (const marker of markers) {
+        const entry = markerMetadata(marker);
+        if (Number.isSafeInteger(entry.bytes)) totalBytes += entry.bytes;
+        lastRef ??= entry.ref;
+      }
+      return { total_archives: markers.length, total_bytes: totalBytes, last_ref: lastRef };
     },
     dispose() { disposed = true; },
   };

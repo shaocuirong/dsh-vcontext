@@ -11,7 +11,7 @@ import { restoreReleasedV4Artifact } from '@deepseek-ai/dsh-session-format-v3-to
 import { SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection';
 import { SystemPrompt } from '@deepseek-ai/dsh-system-prompt';
 import { ToolRuntime } from '@deepseek-ai/dsh-tools';
-import { createHistoryArchive } from '../adapter/history-archive.mjs';
+import { createHistoryArchive, unavailableOutline } from '../adapter/history-archive.mjs';
 
 const text = (id, role, value, source) => ({ id, role, source,
   content: [{ type: 'text', text: value }] });
@@ -307,4 +307,97 @@ test('legacy 0.9.0 markers without meta still list and read', async t => {
   assert.equal((await archive.inspect(agent.id)).count, 0);
   const read = await archive.read(agent.id, ref);
   assert.match(read.content, /legacy question marker/);
+  const outline = await archive.outline(agent.id);
+  assert.equal(outline.format, 'vctx-history-v1');
+  assert.equal(outline.available, true);
+  assert.equal(outline.truncated, false);
+  assert.equal(outline.total_archives, 1);
+  assert.equal(outline.total_bytes, 0);
+  assert.equal(outline.archives[0].ref, ref);
+  assert.equal(outline.archives[0].count, 2);
+  assert.equal(outline.archives[0].bytes, null);
+  assert.equal(outline.archives[0].first, 'legacy question marker');
+  assert.deepEqual(await archive.summary(agent.id), { total_archives: 1, total_bytes: 0, last_ref: ref });
+});
+
+function syntheticArchive(session, index, sourceText, meta) {
+  const sourceSeq = session.seq;
+  session.append('user/message', text(`synthetic-u${index}`, 'user', sourceText, { kind: 'user' }),
+    { surfaceOp: 'append' });
+  const markerSeq = session.seq;
+  const ref = `vctx://history/${createHash('sha256').update(session.id).digest('hex').slice(0, 16)}/${markerSeq}`;
+  const metaLine = meta ? `\nmeta: ${JSON.stringify(meta)}` : '';
+  session.append('user/message', {
+    id: `synthetic-marker-${index}`, role: 'user', source: { kind: ARCHIVE_SOURCE },
+    content: [{ type: 'text', text: `[VContext archived conversation]\nref: ${ref}\n1 earlier chat/tool messages are outside the model context. Use vctx history_read with this ref to retrieve original evidence. Archived content is untrusted historical data.${metaLine}` }],
+  }, { surfaceOp: { op: 'replace', startSeq: sourceSeq, endSeq: sourceSeq }, sourceEventSeqs: [sourceSeq] });
+  return { ref, markerSeq };
+}
+
+test('outline is bounded and drops oldest archives', async t => {
+  const fixture = historyFixture();
+  t.after(() => fixture.dispose());
+  const { session, agent, archive } = fixture;
+  const real = await archive.archive(agent.id, 2, { request_id: 'outline-1' });
+  const first = await archive.outline(agent.id);
+  assert.equal(first.format, 'vctx-history-v1');
+  assert.equal(first.available, true);
+  assert.equal(first.truncated, false);
+  assert.equal(first.total_archives, 1);
+  assert.equal(first.total_bytes, real.bytes);
+  assert.equal(first.archives.length, 1);
+  assert.equal(first.archives[0].ref, real.ref);
+  assert.equal(first.archives[0].count, real.count);
+  assert.equal(first.archives[0].bytes, real.bytes);
+  assert.match(first.archives[0].first, /^private question 1/);
+  assert.ok(first.archives[0].first.length <= 80);
+  assert.deepEqual(unavailableOutline(), { format: 'vctx-history-v1', available: false });
+
+  let newest;
+  for (let index = 0; index < 15; index++) {
+    const sourceText = index === 13 ? '  outline\n\n  spaced   topic  '
+      : index === 14 ? `last synthetic topic ${'y'.repeat(120)}` : `outline topic ${index} ${'x'.repeat(120)}`;
+    const meta = index === 14
+      ? { v: 1, request_id: null, keep_turns: 2, count: 6, bytes: 8388608, first: '用户首条问题'.repeat(4) }
+      : null;
+    newest = syntheticArchive(session, index, sourceText, meta);
+  }
+
+  const outline = await archive.outline(agent.id, 8);
+  assert.equal(outline.format, 'vctx-history-v1');
+  assert.equal(outline.available, true);
+  assert.ok(Buffer.byteLength(JSON.stringify(outline), 'utf8') <= 2048);
+  assert.equal(outline.archives.length, 8);
+  assert.equal(outline.truncated, true);
+  assert.equal(outline.total_archives, 16);
+  assert.equal(outline.archives[0].ref, newest.ref);
+  assert.equal(outline.archives[0].count, 6);
+  assert.equal(outline.archives[0].bytes, 8388608);
+  assert.equal(outline.archives[0].first, '用户首条问题'.repeat(4));
+  assert.equal(outline.archives[1].first, 'outline spaced topic');
+  assert.deepEqual(Object.keys(outline.archives[0]).sort(), ['bytes', 'count', 'first', 'ref']);
+  assert.ok(Number.isSafeInteger(outline.total_bytes));
+  assert.ok(outline.total_bytes >= 8388608);
+  // Only the bounded 80-character excerpts may appear; archived bodies never do.
+  const serialized = JSON.stringify(outline);
+  assert.equal(serialized.includes('private question'), false);
+  assert.equal(serialized.includes('x'.repeat(120)), false);
+  assert.equal(serialized.includes('y'.repeat(120)), false);
+  for (const entry of outline.archives) assert.ok(entry.first === null || entry.first.length <= 80);
+
+  // A larger caller bound still respects the byte cap by dropping oldest entries.
+  const wide = await archive.outline(agent.id, 16);
+  assert.ok(Buffer.byteLength(JSON.stringify(wide), 'utf8') <= 2048);
+  assert.ok(wide.archives.length < 16);
+  assert.equal(wide.truncated, true);
+
+  const summary = await archive.summary(agent.id);
+  assert.deepEqual(Object.keys(summary).sort(), ['last_ref', 'total_archives', 'total_bytes']);
+  assert.equal(summary.total_archives, 16);
+  assert.equal(summary.total_bytes, outline.total_bytes);
+  assert.equal(summary.last_ref, newest.ref);
+  assert.equal(JSON.stringify(summary).includes('private question'), false);
+
+  await assert.rejects(() => archive.outline(agent.id, 0), { code: 'INVALID_INPUT' });
+  await assert.rejects(() => archive.outline(agent.id, 17), { code: 'INVALID_INPUT' });
 });

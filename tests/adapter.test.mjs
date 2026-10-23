@@ -95,8 +95,13 @@ test('adapter contract: tool execution, per-agent snapshots, resume, cleanup', a
   await handlers.get('agent/created')({agent,signal});
   const result = await tools.get('vctx').execute({operation:'write',input:JSON.stringify({content:'task result {{verbatim}}',tier:'working'})},{agent,signal});
   assert.ok(result.page.id);
-  assert.equal(snapshots.get(agent.id).text(),'{{vctx_pages}}\n{{vctx_session_target}}\n{{vctx_task_state}}');
+  assert.equal(snapshots.get(agent.id).text(),'{{vctx_pages}}\n{{vctx_session_target}}\n{{vctx_task_state}}\n{{vctx_history}}');
   assert.match(variables.get('vctx_pages')(),/task result \{\{verbatim\}\}/);
+  assert.equal(variables.has('vctx_history'),true);
+  const history = JSON.parse(variables.get('vctx_history')());
+  assert.equal(history.format,'vctx-history-v1');
+  assert.equal(typeof history.available,'boolean');
+  assert.equal(variables.get('vctx_history')(),'{"format":"vctx-history-v1","available":false}');
   assert.equal(snapshots.get(agent.id).interpolate,false);
   const accepted = {kind:'accept',messages:[]};
   assert.equal(await handlers.get('agent/pre-step')({agent,signal},async()=>accepted),accepted);
@@ -108,6 +113,7 @@ test('adapter contract: tool execution, per-agent snapshots, resume, cleanup', a
   handlers.get('agent/disposed')({agent});
   assert.equal(snapshots.size,0); assert.equal(variables.size,0);
   await handlers.get('agent/created')({agent,signal});
-  assert.equal(snapshots.get(agent.id).text(),'{{vctx_pages}}\n{{vctx_session_target}}\n{{vctx_task_state}}');
+  assert.equal(snapshots.get(agent.id).text(),'{{vctx_pages}}\n{{vctx_session_target}}\n{{vctx_task_state}}\n{{vctx_history}}');
   assert.match(variables.get('vctx_pages')(),/task result \{\{verbatim\}\}/);
+  assert.equal(JSON.parse(variables.get('vctx_history')()).format,'vctx-history-v1');
 });

@@ -87,7 +87,7 @@ export function createHandler(config, transport, liveContext, diagnostics, repla
           const preview = await historyArchive.inspect(session);
           const archives = await historyArchive.list(session, 20);
           return send(response, 200, { ok: true, preview, archives: archives.archives,
-            total: archives.total, outline: null });
+            total: archives.total, outline: await historyArchive.outline(session) });
         }
         if (request.method !== 'POST') return send(response, 405, { ok: false, error: 'GET or POST only' });
         const body = JSON.parse(await readBody(request));
@@ -325,6 +325,12 @@ export function createHandler(config, transport, liveContext, diagnostics, repla
           const status = await transport.call(session, 'task_status', {});
           const context = await transport.call(session, 'task_context', {});
           dashboard.task_state = { status, context: context.revision === status.revision ? context : null };
+        }
+        if (historyArchive) {
+          // The archive summary is metadata only; losing it must not take down
+          // the rest of the dashboard payload.
+          try { dashboard.history_archive = await historyArchive.summary(session); }
+          catch { dashboard.history_archive = null; }
         }
         if (diagnostics) dashboard.diagnostics = diagnostics.snapshot();
         return send(response, 200, { ok: true, namespace: settings.namespace, session, dashboard });

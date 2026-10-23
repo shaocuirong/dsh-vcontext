@@ -3,7 +3,10 @@ import { isMutating } from './operations.mjs';
 import { createDiagnostics } from './diagnostics.mjs';
 import { createSessionBridge } from './session-bridge.mjs';
 import { captureResource } from './resource-capture.mjs';
-import { createHistoryArchive } from './history-archive.mjs';
+import { createHistoryArchive, unavailableOutline } from './history-archive.mjs';
+
+// One byte-stable fallback shared by the initial attach and every failure path.
+const UNAVAILABLE_HISTORY = JSON.stringify(unavailableOutline());
 
 export const guidance = `Use vctx to manage durable context pages in this session.
 Store useful results with write/ingest before host compaction; archive is the default tier.
@@ -85,15 +88,17 @@ export function mount(ctx, config, defineTool) {
     if (state) return state;
     state = { text: '', generation: undefined,
       targetText: '{"format":"vctx-session-target-v1","available":false}',
-      taskText: '{"format":"vctx-execution-state-v1","available":false}' };
+      taskText: '{"format":"vctx-execution-state-v1","available":false}',
+      historyText: UNAVAILABLE_HISTORY };
     // Runtime contexts always interpolate in the desktop rc SDK. Variable
     // values are inserted verbatim and are never scanned a second time.
     state.detachVariable = agent.ctx.systemPrompt.variable('vctx_pages', () => state.text);
     state.detachTarget = agent.ctx.systemPrompt.variable('vctx_session_target', () => state.targetText);
     state.detachTasks = agent.ctx.systemPrompt.variable('vctx_task_state', () => state.taskText);
+    state.detachHistory = agent.ctx.systemPrompt.variable('vctx_history', () => state.historyText);
     state.detach = agent.ctx.systemPrompt.context({
       name: 'virtual-context:pages', order: 9500, interpolate: false,
-      text: () => '{{vctx_pages}}\n{{vctx_session_target}}\n{{vctx_task_state}}',
+      text: () => '{{vctx_pages}}\n{{vctx_session_target}}\n{{vctx_task_state}}\n{{vctx_history}}',
     });
     state.detachUsage = attachUsage(agent);
     attached.set(agent, state);
@@ -153,6 +158,17 @@ export function mount(ctx, config, defineTool) {
       state.targetText = '{"format":"vctx-session-target-v1","available":false}';
       state.taskText = '{"format":"vctx-execution-state-v1","available":false}';
       throw error;
+    }
+    // History discovery is best effort: a missing or broken archive service
+    // degrades to available:false and must never block the host step or
+    // invalidate the pages/target/task variables above.
+    try {
+      const text = JSON.stringify(await historyArchive.outline(agent.id));
+      if (Buffer.byteLength(text, 'utf8') > 2048) throw new Error('invalid bounded history outline');
+      if (!disposed && attached.get(agent) === state) state.historyText = text;
+    } catch {
+      if (!disposed && attached.get(agent) === state) state.historyText = UNAVAILABLE_HISTORY;
+      diagnostics.record('context.history.outline.failed', 'warn');
     }
     return result;
   }
@@ -219,6 +235,7 @@ export function mount(ctx, config, defineTool) {
     attached.get(agent)?.detachVariable?.();
     attached.get(agent)?.detachTarget?.();
     attached.get(agent)?.detachTasks?.();
+    attached.get(agent)?.detachHistory?.();
     attached.get(agent)?.detachUsage?.();
     attached.delete(agent);
   });
@@ -230,6 +247,7 @@ export function mount(ctx, config, defineTool) {
       state.detachVariable?.();
       state.detachTarget?.();
       state.detachTasks?.();
+      state.detachHistory?.();
       state.detachUsage?.();
     }
     attached.clear();
