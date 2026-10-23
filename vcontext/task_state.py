@@ -173,8 +173,10 @@ class TaskState(SnapshotState):
 
     def _meta(self, row):
         result = self._version(row["ref"], row["version"])
+        # This append-only rowid records serialized SQLite insertion order.
+        # Wall-clock timestamps and random IDs are display metadata, not order.
         review = self._one(
-            "SELECT * FROM vct_reviews WHERE ref=? ORDER BY created_at DESC,review_id DESC LIMIT 1",
+            "SELECT * FROM vct_reviews WHERE ref=? ORDER BY rowid DESC LIMIT 1",
             (row["ref"],),
         )
         result["verification"] = "not_tested"
@@ -580,7 +582,7 @@ class TaskState(SnapshotState):
         for value, link in zip(resources, resource_links):
             value["association"] = link["provenance"]
         reviews = self._all(
-            "SELECT * FROM vct_reviews WHERE ref=? ORDER BY created_at DESC,review_id DESC LIMIT 20",
+            "SELECT * FROM vct_reviews WHERE ref=? ORDER BY rowid DESC LIMIT 20",
             (ref,),
         )
         more = offset + limit < len(links)
