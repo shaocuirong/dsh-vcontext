@@ -84,14 +84,27 @@ export function createHandler(config, transport, liveContext, diagnostics, repla
         if (request.method === 'GET') {
           const session = sessionOf(url);
           if (!session) throw new Error('session required');
-          return send(response, 200, { ok: true, preview: await historyArchive.inspect(session) });
+          const preview = await historyArchive.inspect(session);
+          const archives = await historyArchive.list(session, 20);
+          return send(response, 200, { ok: true, preview, archives: archives.archives,
+            total: archives.total, outline: null });
         }
         if (request.method !== 'POST') return send(response, 405, { ok: false, error: 'GET or POST only' });
         const body = JSON.parse(await readBody(request));
         if (!body || typeof body.session !== 'string' || !body.session || body.session.length > 256
-          || Object.keys(body).some(key => !['session', 'keep_turns'].includes(key))) throw new Error('invalid request');
-        return send(response, 200, { ok: true, result: await historyArchive.archive(body.session, body.keep_turns ?? 2) });
-      } catch (error) { return send(response, error?.code === 'BUSY' ? 409 : 400,
+          || Object.keys(body).some(key => !['session', 'keep_turns', 'request_id', 'expected_surface_seq'].includes(key)))
+          throw new Error('invalid request');
+        if (body.request_id !== undefined && (typeof body.request_id !== 'string'
+          || body.request_id.length < 1 || body.request_id.length > 256 || /[\u0000-\u001f]/u.test(body.request_id)))
+          throw new Error('invalid request_id');
+        if (body.expected_surface_seq !== undefined && (!Number.isSafeInteger(body.expected_surface_seq)
+          || body.expected_surface_seq < 0)) throw new Error('invalid expected_surface_seq');
+        const options = {};
+        if (body.request_id !== undefined) options.request_id = body.request_id;
+        if (body.expected_surface_seq !== undefined) options.expected_surface_seq = body.expected_surface_seq;
+        return send(response, 200, { ok: true,
+          result: await historyArchive.archive(body.session, body.keep_turns ?? 2, options) });
+      } catch (error) { return send(response, ['BUSY', 'CHANGED', 'ROOT_CHANGED'].includes(error?.code) ? 409 : 400,
         { ok: false, error_code: error?.code ?? 'failed', error: String(error?.message ?? error) }); }
     }
 

@@ -90,24 +90,53 @@ test('state route reports the per-session switch and needs a session', async () 
   assert.equal((await invoke(handler, 'POST', `${ROUTE_PREFIX}state?session=s-1`)).status, 405);
 });
 
-test('history route previews and archives only from a local same-origin session', async () => {
+test('history route previews, lists, archives with CAS and replays by request id', async () => {
   const calls = [];
   const archive = {
-    async inspect(id) { calls.push(['inspect', id]); return { count: 2, bytes: 2048 }; },
-    async archive(id, keepTurns) { calls.push(['archive', id, keepTurns]); return { status: 'archived', count: 2 }; },
+    async inspect(id) { calls.push(['inspect', id]); return { count: 2, bytes: 2048, surface_seq: 10 }; },
+    async list(id, limit) { calls.push(['list', id, limit]);
+      return { archives: [{ ref: 'vctx://history/aaaaaaaaaaaaaaaa/1' }], total: 1 }; },
+    async archive(id, keepTurns, options = {}) {
+      calls.push(['archive', id, keepTurns, options]);
+      if (options.expected_surface_seq === 999) throw Object.assign(new Error('changed'), { code: 'CHANGED' });
+      const replay = calls.filter(call => call[0] === 'archive').length > 1;
+      return { status: replay ? 'replayed' : 'archived', replayed: replay, count: 2 };
+    },
   };
   const handler = createHandler(CONFIG, transport(), null, null, null, null, null, null, null, null, archive);
   const preview = await invoke(handler, 'GET', '/vctx/history?session=s');
   assert.equal(preview.body.preview.count, 2);
-  const archived = await invoke(handler, 'POST', '/vctx/history', JSON.stringify({ session: 's', keep_turns: 2 }));
+  assert.equal(preview.body.preview.surface_seq, 10);
+  assert.equal(preview.body.archives[0].ref, 'vctx://history/aaaaaaaaaaaaaaaa/1');
+  assert.equal(preview.body.total, 1);
+  assert.equal(preview.body.outline, null);
+  const body = { session: 's', keep_turns: 2, request_id: 'req-route-1', expected_surface_seq: 10 };
+  const archived = await invoke(handler, 'POST', '/vctx/history', JSON.stringify(body));
   assert.equal(archived.status, 200);
-  assert.deepEqual(calls, [['inspect', 's'], ['archive', 's', 2]]);
+  assert.equal(archived.body.result.replayed, false);
+  const replayed = await invoke(handler, 'POST', '/vctx/history', JSON.stringify(body));
+  assert.equal(replayed.status, 200);
+  assert.equal(replayed.body.result.replayed, true);
+  assert.deepEqual(calls, [
+    ['inspect', 's'],
+    ['list', 's', 20],
+    ['archive', 's', 2, { request_id: 'req-route-1', expected_surface_seq: 10 }],
+    ['archive', 's', 2, { request_id: 'req-route-1', expected_surface_seq: 10 }],
+  ]);
+  const stale = await invoke(handler, 'POST', '/vctx/history', JSON.stringify({ session: 's', expected_surface_seq: 999 }));
+  assert.equal(stale.status, 409);
+  assert.equal(stale.body.error_code, 'CHANGED');
   assert.equal((await invoke(handler, 'POST', '/vctx/history', JSON.stringify({ session: 's', extra: true }))).status, 400);
+  for (const invalid of [{ request_id: '' }, { request_id: 'x'.repeat(257) }, { request_id: 'a\u0000b' },
+    { expected_surface_seq: -1 }, { expected_surface_seq: 1.5 }])
+    assert.equal((await invoke(handler, 'POST', '/vctx/history',
+      JSON.stringify({ session: 's', ...invalid }))).status, 400);
+  assert.equal(calls.length, 5, 'rejected bodies must never reach the archive');
   const denied = request('POST', '/vctx/history', JSON.stringify({ session: 's' }));
   denied.headers = { host: 'localhost' };
   const res = response(); await handler(denied, res);
   assert.equal(res.captured.status, 403);
-  assert.equal(calls.length, 2);
+  assert.equal(calls.length, 5);
 });
 
 test('task routes scope manual reviews and bound evidence pagination', async () => {
