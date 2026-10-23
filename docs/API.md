@@ -353,6 +353,8 @@ inspect的revision重读保证显式任务变更一致性，不是运行中所�
 
 0.9.0 的归档契约（[归档契约](HISTORY-ARCHIVE-0.9.0.md)）保持不变。本版增加查询、幂等、预览 CAS、有界检索、有界 `vctx_history` 大纲注入和 `dashboard.history_archive` 归档摘要，不新增数据库表、不改 Python 内核，数据库仍为 schema9 / vc2 / vcr1 / vcs1 / vct1；引用格式仍为 `vctx://history/<16位小写十六进制会话哈希>/<事件序号>`。宿主不可变事件日志仍是权威来源，归档 marker 仍是带 `surfaceOp.replace` 的 `user/message`，元数据只写在该引用消息的文本行中。
 
+归档清单、大纲、摘要、检索与 request_id 重放都属于“当前会话”：只接受 ref 等于 `refFor(本会话 id, marker.seq)` 的 marker。DSH Fork 子会话会继承父会话的事件前缀，但不继承父会话的归档登记；继承来的 marker 不会出现在 list/outline/search/summary 中，也不能用其 request_id 重放，`history_read` 对其 ref 返回 NOT_FOUND。这与任务/资源焦点的会话边界一致。
+
 ### 操作
 
 | operation | 参数 | 返回 / 限制 |
@@ -372,12 +374,12 @@ inspect的revision重读保证显式任务变更一致性，不是运行中所�
 | /vctx/history/search | GET | session、q（1–256）、limit（1–20，默认5） | `{ok:true,result}`；拒绝未知查询参数 |
 | /vctx/dashboard | GET | session、events | 增加 `history_archive:{total_archives,total_bytes,last_ref}`；摘要失败为 null，不影响其他看板字段 |
 
-路由要求本机 Host、loopback 对端与完整同源，POST 必须携带 Origin；跨来源返回403，方法不符405，归档服务未就绪503。history POST 正文最多16 KiB。归档操作错误中仅 BUSY / CHANGED / ROOT_CHANGED 映射409，其余（INVALID_INPUT / UNAVAILABLE / PERSISTENCE_FAILED / NO_ELIGIBLE / NOT_FOUND）映射400，均带稳定 `error_code` 与中文消息；路由层参数校验（缺 session、未知字段或查询参数、非法 request_id / expected_surface_seq、非法 q/limit、JSON 解析失败）同样返回400，但 `error_code` 为 `failed`，消息为英文。看板卡片每次归档尝试生成一个 `request_id`，把预览的 `surface_seq` 作为 `expected_surface_seq` 发送；预览未变时重试复用同一 `request_id`，成功后或预览刷新后换新。
+路由要求本机 Host、loopback 对端与完整同源，POST 必须携带 Origin；跨来源返回403，方法不符405，归档服务未就绪503。history POST 正文最多16 KiB。归档操作错误中仅 BUSY / CHANGED / ROOT_CHANGED 映射409，其余（INVALID_INPUT / UNAVAILABLE / PERSISTENCE_FAILED / NO_ELIGIBLE / NOT_FOUND）映射400，均带稳定 `error_code` 与中文消息；路由层参数校验（缺 session、未知字段或查询参数、非法 request_id / expected_surface_seq、非法 q/limit、JSON 解析失败）同样返回400，但 `error_code` 为 `failed`，消息为英文。看板卡片每次归档尝试生成一个 `request_id`，把预览的 `surface_seq` 作为 `expected_surface_seq` 发送；预览未变时重试复用同一 `request_id`，成功后或预览刷新后换新。服务端返回 CHANGED 时，卡片清空本次身份并重新读取预览，下一次点击使用新的 `request_id`；重放成功会标注“重放原回执，未追加新记录”。
 
 ### 重试、错误代码与边界
 
-归档在宿主维护锁内先查 `request_id`，再比较 `expected_surface_seq`，最后才 flush/追加。同一 request_id 与相同 keep_turns 返回原回执（`replayed:true`），不追加第二条 marker；同 ID 不同 keep_turns、过期 surface seq 或归档期间 Surface 变化返回 CHANGED。提交结果不确定时先刷新预览/实际上下文，复用原 request_id 与参数，不要换新 ID 或连续追加。
+归档在宿主维护锁内先查本会话同 `request_id` 的 marker，再比较 `expected_surface_seq`，最后才 flush/追加。同一 request_id 与相同 keep_turns 返回原回执（`replayed:true`），不追加第二条 marker；回执的 before/after 来自 marker meta 的原始消息数与字节，不是当前上下文；返回前会再次 flush，确认 marker 已被宿主持久化，flush 失败返回 PERSISTENCE_FAILED。同 ID 不同 keep_turns、过期 surface seq 或归档期间 Surface 变化返回 CHANGED。提交结果不确定时先刷新预览/实际上下文，复用原 request_id 与参数，不要换新 ID 或连续追加。
 
 归档操作错误使用以下稳定代码与中文消息：`INVALID_INPUT`（参数或边界）、`UNAVAILABLE`（宿主服务/会话不可用或插件已卸载）、`BUSY`（会话运行/维护中或已有归档进行）、`CHANGED`（幂等冲突或预览已过期）、`PERSISTENCE_FAILED`（宿主未确认保存）、`NOT_FOUND`（ref/seq 不属于本会话或该 marker）、`NO_ELIGIBLE`（没有完整旧轮次可归档）。路由层参数校验不使用这些代码，统一为 `failed` + 英文消息，见上。
 
-`history_list` 与 `history_search` 不返回正文；`history_read` 返回的是不可信历史证据，读取会增加普通工具历史。检索是离线词法子串匹配，不是语义检索；2048事件 / 4 MiB上限由代码检查和单元测试覆盖，未做大规模压力测试。session / request_id / query 的长度校验按 JS UTF-16 码元计数，`history_read` 分页按码点迭代。完整限制与设计决定见[会话历史虚拟上下文](HISTORY-VCONTEXT-0.10.0.md)。
+`history_list` 与 `history_search` 不返回正文；`history_read` 返回的是不可信历史证据，读取会增加普通工具历史。检索是离线词法子串匹配，不是语义检索；最近 8 个归档的上限有单元测试覆盖，2048事件 / 4 MiB上限为代码检查、未做大规模压力测试。`history_read` 的 65536 字符上限只约束整段分页；给出 `seq` 时返回单条消息对象，其大小可能超过 65536 字符。session / request_id / query 的长度校验按 JS UTF-16 码元计数，`history_read` 分页按码点迭代。完整限制与设计决定见[会话历史虚拟上下文](HISTORY-VCONTEXT-0.10.0.md)。

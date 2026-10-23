@@ -6,7 +6,6 @@ const MAX_BYTES = 8 * 1024 * 1024;
 const MAX_READ = 65536;
 const OUTLINE_FORMAT = 'vctx-history-v1';
 const OUTLINE_LIMIT = 8;
-const OUTLINE_LIMIT_MAX = 16;
 const OUTLINE_BYTES = 2048;
 const EXCERPT = 80;
 const SEARCH_ARCHIVES = 8;
@@ -74,10 +73,16 @@ function parseArchiveMarker(event) {
   return { event, ref, meta };
 }
 
-function findMarkerByRequestId(events, requestId) {
+// A DSH Fork child inherits the parent's event prefix but not the parent's
+// archive registry: only a marker whose ref hashes THIS session id is
+// actionable. Keep the check in one place so list/outline/summary/search and
+// request_id replay cannot drift apart from history_read.
+const owned = (marker, id) => Boolean(marker) && marker.ref === refFor(id, marker.event.seq);
+
+function findMarkerByRequestId(events, requestId, id) {
   for (let seq = events.length - 1; seq >= 0; seq--) {
     const marker = parseArchiveMarker(events[seq]);
-    if (marker && marker.meta?.request_id === requestId) return marker;
+    if (owned(marker, id) && marker.meta?.request_id === requestId) return marker;
   }
   return null;
 }
@@ -125,13 +130,15 @@ function firstExcerpt(events, marker, max = EXCERPT) {
   return null;
 }
 
-/** Newest-first markers from one immutable-log snapshot, shared by list/outline/summary. */
-function scanArchives(agent) {
+/** Newest-first session-owned markers from one immutable-log snapshot, shared by list/outline/summary/search. */
+function scanArchives(agent, id) {
   const events = agent.session.snapshotEvents();
   const markers = [];
   for (let seq = events.length - 1; seq >= 0; seq--) {
     const marker = parseArchiveMarker(events[seq]);
-    if (marker) markers.push(marker);
+    // Legacy meta:null markers stay visible: ownership is decided by the ref,
+    // never by metadata, so the 0.9.0 format keeps working.
+    if (owned(marker, id)) markers.push(marker);
   }
   return { events, markers };
 }
@@ -227,13 +234,21 @@ export function createHistoryArchive(ctx, diagnostics) {
           // Idempotency is checked inside the maintenance lock, before any
           // flush or append: one request id produces exactly one marker.
           if (requestId !== undefined) {
-            const existing = findMarkerByRequestId(session.snapshotEvents(), requestId);
+            const existing = findMarkerByRequestId(session.snapshotEvents(), requestId, id);
             if (existing) {
               if (existing.meta?.keep_turns !== keepTurns) fail('CHANGED');
+              // A replay confirms durability too: the original post-append flush
+              // may have failed even though the marker is visible in this live
+              // log. Re-flushing before returning the receipt means "replayed"
+              // never claims a persistence the host did not confirm; a failed
+              // flush surfaces PERSISTENCE_FAILED exactly like the first attempt.
+              await flush(agent);
               const receipt = markerMetadata(existing);
-              const current = metrics(session);
-              return { ref: receipt.ref, status: 'replayed', replayed: true, count: receipt.count,
-                bytes: receipt.bytes, before: current, after: current,
+              const meta = existing.meta ?? {};
+              return { ref: receipt.ref, status: 'replayed', replayed: true,
+                count: receipt.count, bytes: receipt.bytes,
+                before: { messages: meta.before_messages ?? null, bytes: meta.before_bytes ?? null },
+                after: { messages: meta.after_messages ?? null, bytes: meta.after_bytes ?? null },
                 surface_seq_before: existing.event.seq, surface_seq_after: session.seq, request_id: requestId };
             }
           }
@@ -250,9 +265,10 @@ export function createHistoryArchive(ctx, diagnostics) {
           const events = session.snapshotEvents();
           const meta = {
             v: 1, request_id: requestId ?? null, keep_turns: keepTurns,
-            count: span.nodes.length, bytes: span.bytes, before_bytes: before.bytes,
-            after_bytes: before.bytes, surface_seq: beforeSeq,
-            first: firstUserExcerpt(events, span.nodes),
+            count: span.nodes.length, bytes: span.bytes,
+            before_messages: before.messages, before_bytes: before.bytes,
+            after_messages: before.messages, after_bytes: before.bytes,
+            surface_seq: beforeSeq, first: firstUserExcerpt(events, span.nodes),
           };
           const baseText = `[VContext archived conversation]\nref: ${ref}\n`
             + `${span.nodes.length} earlier chat/tool messages are outside the model context. `
@@ -270,9 +286,14 @@ export function createHistoryArchive(ctx, diagnostics) {
             .map(seq => session.deriveEventMessage(events[seq]))
             .filter(Boolean);
           const header = session.requestHeader?.();
+          // The marker itself becomes one extra model-visible message; its count
+          // does not depend on the meta text length, so it is fixed once and both
+          // after_messages/after_bytes converge together in the projection loop.
+          const afterMessages = remaining.length + 1;
           let afterBytes = before.bytes;
           for (let attempt = 0; attempt < 4; attempt++) {
             meta.after_bytes = afterBytes;
+            meta.after_messages = afterMessages;
             data.content[0].text = `${baseText}\nmeta: ${JSON.stringify(meta)}`;
             const projected = describeContext([...remaining, data], header?.tools, header?.config).bytes;
             if (projected === afterBytes) break;
@@ -338,7 +359,7 @@ export function createHistoryArchive(ctx, diagnostics) {
     async list(id, limit = 20) {
       if (!validId(id) || !Number.isSafeInteger(limit) || limit < 1 || limit > 100) fail('INVALID_INPUT');
       const agent = await resolve(id);
-      const { markers } = scanArchives(agent);
+      const { markers } = scanArchives(agent, id);
       return { archives: markers.slice(0, limit).map(markerMetadata), total: markers.length };
     },
     async search(id, query, limit = SEARCH_LIMIT_DEFAULT) {
@@ -347,7 +368,7 @@ export function createHistoryArchive(ctx, diagnostics) {
       if (trimmed.length < 1 || trimmed.length > SEARCH_QUERY_MAX
         || !Number.isSafeInteger(limit) || limit < 1 || limit > SEARCH_LIMIT_MAX) fail('INVALID_INPUT');
       const agent = await resolve(id);
-      const { events, markers } = scanArchives(agent);
+      const { events, markers } = scanArchives(agent, id);
       const needle = trimmed.toLowerCase();
       const matches = [];
       let total = 0, truncated = markers.length > SEARCH_ARCHIVES;
@@ -375,9 +396,9 @@ export function createHistoryArchive(ctx, diagnostics) {
       return { query: trimmed, matches, total, truncated };
     },
     async outline(id, limit = OUTLINE_LIMIT) {
-      if (!validId(id) || !Number.isSafeInteger(limit) || limit < 1 || limit > OUTLINE_LIMIT_MAX) fail('INVALID_INPUT');
+      if (!validId(id) || !Number.isSafeInteger(limit) || limit < 1 || limit > OUTLINE_LIMIT) fail('INVALID_INPUT');
       const agent = await resolve(id);
-      const { events, markers } = scanArchives(agent);
+      const { events, markers } = scanArchives(agent, id);
       const metadata = markers.map(marker => markerMetadata(marker));
       let totalBytes = 0;
       for (const entry of metadata) if (Number.isSafeInteger(entry.bytes)) totalBytes += entry.bytes;
@@ -397,7 +418,7 @@ export function createHistoryArchive(ctx, diagnostics) {
     async summary(id) {
       if (!validId(id)) fail('INVALID_INPUT');
       const agent = await resolve(id);
-      const { markers } = scanArchives(agent);
+      const { markers } = scanArchives(agent, id);
       let totalBytes = 0, lastRef = null;
       for (const marker of markers) {
         const entry = markerMetadata(marker);

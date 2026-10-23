@@ -6,19 +6,21 @@
 
 - 宿主不可变事件日志仍是历史证据的唯一权威来源；归档只追加一条合法的 `user/message` Surface 替换事件，模型看到的是投影。
 - 引用格式保持 `vctx://history/<16位小写十六进制会话哈希>/<事件序号>`，只在当前会话内可读；其他会话的 ref 返回 NOT_FOUND。
+- 归档清单、大纲、摘要、检索与 request_id 重放同样按本会话 ref（`refFor(id, marker.seq)`）过滤。DSH Fork 子会话继承父会话的事件前缀，但不继承父会话的归档登记：继承来的 marker 不会出现在 list/outline/summary/search 中，也不能用其 request_id 重放；`history_read` 对其 ref 返回 NOT_FOUND。这与任务/资源焦点的会话边界一致。
 - 不新建 SQLite 归档登记表。归档清单、大纲和检索都从不可变 marker 派生；宿主日志不可用或损坏时，插件无法凭引用恢复内容。
 - marker 仍是一条引用消息，本次在其文本末尾追加一行紧凑元数据，不改 `user/message` 的 data 形状、不增加可能被适配器带进供应商请求的字段：
 
-  `meta: {"v":1,"request_id":"...","keep_turns":2,"count":6,"bytes":1234,"before_bytes":5678,"after_bytes":2345,"surface_seq":42,"first":"..."}`
+  `meta: {"v":1,"request_id":"...","keep_turns":2,"count":6,"bytes":1234,"before_messages":8,"before_bytes":5678,"after_messages":3,"after_bytes":2345,"surface_seq":42,"first":"..."}`
 
-  0.9.0 没有 meta 的旧 marker 仍可 list/read；`request_id` 与 `bytes` 显示为 null，`count` 回退为 `sourceEventSeqs` 长度。
+  0.9.0 没有 meta 的旧 marker 仍可 list/read；`request_id` 与 `bytes` 显示为 null，`count` 回退为 `sourceEventSeqs` 长度。终审修复前生成的 0.10.0 marker 若缺少消息数字段，重放时消息数为 null，但已有字节数仍原样返回。
 
 ## 可重试与预览 CAS
 
-- `request_id`（可选）：1–256 字符，不含 C0 控制字符。归档在宿主维护锁内、追加之前查找本会话同 ID 的 marker：相同 ID 且 `keep_turns` 相同直接返回原回执（`replayed:true`，不再追加第二条 marker）；相同 ID 但 `keep_turns` 不同返回 CHANGED。
+- `request_id`（可选）：1–256 字符，不含 C0 控制字符。归档在宿主维护锁内、追加之前查找本会话同 ID 的 marker：相同 ID 且 `keep_turns` 相同直接返回原回执（`replayed:true`，不再追加第二条 marker）；相同 ID 但 `keep_turns` 不同返回 CHANGED。回执的 before/after 来自 marker meta 的原始消息数与字节，不是当前上下文；返回前会再次 flush 确认 marker 已被宿主持久化，flush 失败返回 PERSISTENCE_FAILED。
+- 只有本会话 ref 的 marker 参与请求 ID 重放；Fork 子会话继承的父会话 marker 即使 request_id 相同也不会重放。
 - `expected_surface_seq`（可选）：非负安全整数。其值来自预览返回的 `surface_seq`；归档在维护锁内先比较当前 Surface 序号，不匹配在追加前返回 CHANGED。
 - 两个字段都可省略；省略时行为与 0.9.0 相同，旧调用方和旧界面保持兼容。
-- 看板归档按钮每次尝试生成一个 `request_id`，把预览的 `surface_seq` 作为 `expected_surface_seq` 发送；预览未变时重试复用同一 `request_id`，成功后或预览刷新后换新。提交结果不确定时，先刷新预览/实际上下文再决定下一步，不要仅因响应丢失就手工换新 ID；同一会话同一 `keep_turns` 复用原 `request_id` 只会返回原回执。
+- 看板归档按钮每次尝试生成一个 `request_id`，把预览的 `surface_seq` 作为 `expected_surface_seq` 发送；预览未变时重试复用同一 `request_id`，成功后或预览刷新后换新。服务端返回 CHANGED（预览已过期）时，卡片清空本次身份并重新读取预览，下一次点击为新 Surface 生成新的 `request_id`。重放成功时标注“重放原回执，未追加新记录”，不再显示新的缩减结果。提交结果不确定时，先刷新预览/实际上下文再决定下一步，不要仅因响应丢失就手工换新 ID；同一会话同一 `keep_turns` 复用原 `request_id` 只会返回原回执。
 
 ## 模型可见的有界大纲
 
@@ -65,8 +67,9 @@
 ## 已知限制
 
 - session / request_id / query 的长度校验以及 first/excerpt 摘录上限按 JS UTF-16 码元计数，不是 Unicode 码点；恰好跨越代理对边界的极长输入或摘录可能与按码点计算的预期差 1。`history_read` 分页按码点迭代。
-- 检索的 2048 事件 / 4 MiB 文本上限由代码检查与单元测试覆盖，未做大规模数据压力测试；超出时 `truncated:true`，不代表没有更早的命中。
+- 检索只扫描最近 8 个归档，该上限有单元测试覆盖；2048 事件 / 4 MiB 文本上限为代码检查、未做大规模数据压力测试；超出时 `truncated:true`，不代表没有更早的命中。
+- `history_read(seq)` 返回单条原始消息对象，单条对象可能超过 65536 字符；65536 的上限只约束省略 `seq` 时的整段分页读取。
 - GET `/vctx/history` 的 list() 与 outline() 是两次独立读取；若并发归档 POST 恰好落在两次读取之间，卡片可能少显示一条新归档行（按 ref 连接时未知 ref 被丢弃）。
-- 未进行桌面端重启后的真人浏览器点击验收；看板的归档清单与搜索只做了单元/路由测试。
+- 未进行桌面端重启后的真人浏览器点击验收；看板的归档清单与搜索只做了单元/路由测试，归档按钮的 CHANGED 恢复与重放文案由状态化 Hook 模拟组件测试覆盖，不是真实 DOM 点击。
 
 设计决定见[设计文档](superpowers/specs/2026-10-23-history-virtual-context-design.md)，执行拆分见[实施计划](superpowers/plans/2026-10-23-history-virtual-context.md)，提交节点见[NODES-0.10.0.md](NODES-0.10.0.md)。

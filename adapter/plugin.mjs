@@ -28,7 +28,7 @@ reformat it. Use dashboard to see what entered or left the window and what each 
 Use outline=true for a step/operation index entry: it injects one line (title + summary) and keeps
 its body in storage, so append as you work and read the body only when you need it. When the
 outline fills up, fold() compresses the oldest entries into one milestone and keeps every body.
-Supported operations: write, ingest, read, history, search, page_in, page_out, unpin, recall,
+Supported operations: write, ingest, read, history, history_read, history_list, history_search, search, page_in, page_out, unpin, recall,
 render, snapshot, prefix, metrics, dashboard, usage, record_usage, status, compact, fold,
 organize, checkpoint, checkpoints, restore, schedule, prepare_task.
 Examples: write {"content":"fact","title":"topic","tier":"working"};

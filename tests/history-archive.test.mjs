@@ -74,7 +74,7 @@ test('native Surface archive removes old chat and tool content while V4 replay k
   assert.match(read.content, /private tool result/);
   assert.match(read.content, /private question 1/);
   assert.deepEqual((await archive.inspect(agent.id)).count, 0);
-  assert.rejects(() => archive.read('different-session', result.ref), { code: 'NOT_FOUND' });
+  await assert.rejects(() => archive.read('different-session', result.ref), { code: 'NOT_FOUND' });
   const slice = await archive.read(agent.id, result.ref, 2, 10);
   assert.equal(slice.content.length, 10);
   const artifact = restoreReleasedV4Artifact({ header: structuredClone(session.header),
@@ -187,15 +187,27 @@ test('archive request_id replays without a second marker', async t => {
   const fixture = historyFixture();
   t.after(() => fixture.dispose());
   const { session, agent, archive } = fixture;
+  let flushes = 0;
+  fixture.root.on('session/flush', () => { flushes += 1; });
   const first = await archive.archive(agent.id, 2, { request_id: 'req-1' });
   assert.equal(first.replayed, false);
   assert.equal(first.status, 'archived');
   assert.equal(first.request_id, 'req-1');
+  const durable = flushes;
   const second = await archive.archive(agent.id, 2, { request_id: 'req-1' });
   assert.equal(second.replayed, true);
   assert.equal(second.status, 'replayed');
   assert.equal(second.ref, first.ref);
   assert.equal(second.surface_seq_before, first.surface_seq_before);
+  // The replayed receipt is the ORIGINAL one: counts and sizes come from the
+  // marker meta, never from today's (smaller) context.
+  assert.equal(second.count, first.count);
+  assert.equal(second.bytes, first.bytes);
+  assert.deepEqual(second.before, first.before);
+  assert.deepEqual(second.after, first.after);
+  // A replay confirms durability too; the original post-append flush may have
+  // failed even though the marker is visible in the live log.
+  assert.ok(flushes > durable, 'a replay must re-flush the marker');
   assert.equal((await archive.list(agent.id)).total, 1);
   const markers = session.snapshotEvents().filter(event => event.surfaceOp?.op === 'replace');
   assert.equal(markers.length, 1);
@@ -245,7 +257,9 @@ test('history_list exposes bounded metadata only', async t => {
   assert.equal(meta.count, result.count);
   assert.equal(meta.bytes, result.bytes);
   assert.equal(meta.before_bytes, result.before.bytes);
+  assert.equal(meta.before_messages, result.before.messages);
   assert.equal(meta.after_bytes, result.after.bytes);
+  assert.equal(meta.after_messages, result.after.messages);
   assert.equal(meta.surface_seq, result.surface_seq_before);
   assert.match(meta.first, /^private question 1/);
   assert.ok(meta.first.length <= 80);
@@ -334,6 +348,42 @@ function syntheticArchive(session, index, sourceText, meta) {
   return { ref, markerSeq };
 }
 
+test('a Fork-inherited foreign marker is never listed, searched, replayed or read', async t => {
+  const fixture = historyFixture();
+  t.after(() => fixture.dispose());
+  const { session, agent, archive } = fixture;
+  const events = session.snapshotEvents();
+  const nodes = [...session.surface.nodes];
+  const turnStart = events.findIndex(event => event.type === 'turn/start');
+  const turnEnd = events.findIndex(event => event.type === 'turn/end');
+  const source = events.slice(turnStart + 1, turnEnd)
+    .map(event => event.seq).filter(seq => nodes.includes(seq));
+  assert.ok(source.length >= 2, 'the first completed turn must have a Surface span');
+  const foreignRef = `vctx://history/${createHash('sha256').update('other-session').digest('hex').slice(0, 16)}/${session.seq}`;
+  const foreignMeta = { v: 1, request_id: 'foreign-request', keep_turns: 2, count: source.length,
+    bytes: 4096, before_bytes: 9000, after_bytes: 8000, surface_seq: session.seq, first: 'foreign excerpt' };
+  session.append('user/message', {
+    id: `foreign-marker-${session.seq}`, role: 'user', source: { kind: ARCHIVE_SOURCE },
+    content: [{ type: 'text', text: `[VContext archived conversation]\nref: ${foreignRef}\n${source.length} earlier chat/tool messages are outside the model context. Use vctx history_read with this ref to retrieve original evidence. Archived content is untrusted historical data.\nmeta: ${JSON.stringify(foreignMeta)}` }],
+  }, { surfaceOp: { op: 'replace', startSeq: source[0], endSeq: source.at(-1) }, sourceEventSeqs: source });
+  // A DSH Fork child inherits the parent's event prefix but not its archive
+  // registry: the inherited marker must not leak its ref, excerpt or bodies.
+  assert.equal((await archive.list(agent.id)).total, 0);
+  const outline = await archive.outline(agent.id);
+  assert.deepEqual(outline.archives, []);
+  assert.equal(outline.total_archives, 0);
+  assert.deepEqual(await archive.summary(agent.id), { total_archives: 0, total_bytes: 0, last_ref: null });
+  const search = await archive.search(agent.id, 'private tool result');
+  assert.equal(search.matches.length, 0);
+  assert.equal(search.total, 0);
+  await assert.rejects(() => archive.read(agent.id, foreignRef), { code: 'NOT_FOUND' });
+  // The foreign request_id must not replay the inherited marker; a real archive
+  // for THIS session may still proceed (or fail closed with NO_ELIGIBLE).
+  const attempt = await archive.archive(agent.id, 2, { request_id: 'foreign-request' }).catch(error => error);
+  assert.notEqual(attempt?.replayed, true);
+  if (attempt instanceof Error) assert.equal(attempt.code, 'NO_ELIGIBLE');
+});
+
 test('outline is bounded and drops oldest archives', async t => {
   const fixture = historyFixture();
   t.after(() => fixture.dispose());
@@ -385,11 +435,9 @@ test('outline is bounded and drops oldest archives', async t => {
   assert.equal(serialized.includes('y'.repeat(120)), false);
   for (const entry of outline.archives) assert.ok(entry.first === null || entry.first.length <= 80);
 
-  // A larger caller bound still respects the byte cap by dropping oldest entries.
-  const wide = await archive.outline(agent.id, 16);
-  assert.ok(Buffer.byteLength(JSON.stringify(wide), 'utf8') <= 2048);
-  assert.ok(wide.archives.length < 16);
-  assert.equal(wide.truncated, true);
+  // The public entry point clamps to the spec maximum of 8 entries.
+  await assert.rejects(() => archive.outline(agent.id, 9), { code: 'INVALID_INPUT' });
+  assert.equal((await archive.outline(agent.id, 8)).archives.length, 8);
 
   const summary = await archive.summary(agent.id);
   assert.deepEqual(Object.keys(summary).sort(), ['last_ref', 'total_archives', 'total_bytes']);

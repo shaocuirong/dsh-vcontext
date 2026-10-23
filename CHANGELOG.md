@@ -10,9 +10,10 @@
 - 新增 `history_list`（1–100 条，默认 20）与 `history_search`（查询 1–256 字符、limit 1–20、摘录 ≤160 字符，只扫描最近 8 个归档 / 2048 个源事件 / 4 MiB 文本）；`history_read` 增加可选 `seq`，按单条原始消息读回。清单与检索不返回正文全集，读取仍进入普通工具历史。
 - 新增有界 `vctx_history` 系统提示变量（`vctx-history-v1`，≤2048 UTF-8 字节，最多 8 条归档的 ref/条数/字节/首条用户摘录）；超限从最旧截断并置 `truncated:true`，服务不可用时降级为 `available:false`，不阻断宿主生成。
 - 看板“归档会话历史”卡片显示归档清单并支持搜索；`GET /vctx/history` 返回 archives/total/outline，新增 `GET /vctx/history/search`；POST 接受 request_id/expected_surface_seq（可选）；`dashboard.history_archive` 返回归档数、总字节与最近引用。
+- 修复终审缺口：看板遇 CHANGED 自动刷新预览并在下一次点击轮换请求身份；重放回执返回原归档时的前后消息数与字节，并在返回前再次 flush 确认保存；清单、大纲、摘要、检索与 request_id 重放只认本会话 ref，Fork 子会话不再暴露或重放父会话归档；同步修正发布文档的测试数量与归档上限覆盖口径。
 - 数据库 schema9 / vc2 / vcr1 / vcs1 / vct1 保持，无迁移、无 Python 内核改动；不新增 SQLite 归档登记表，引用格式与 surfaceOp replace 语义保持 0.9.0。
 - 明确不在本版范围：多条消息的原位恢复、阈值/轮次自动归档、语义检索、Token 或供应商收益证明。设计与边界见[会话历史虚拟上下文](docs/HISTORY-VCONTEXT-0.10.0.md)，节点见[优化节点](docs/NODES-0.10.0.md)。
-- 本机 173 项 Node/真实 SDK、176 项 Python 测试通过，0 失败、0 跳过；`npm run check:release` 输出 v0.10.0，`npm run doctor` 退出 0。未进行桌面端重启后的真人浏览器点击验收；检索扫描上限、UTF-16 长度口径与卡片归档重试字段等已知限制见[验证记录](docs/VALIDATION.md)。
+- 本机 179 项 Node/真实 SDK、176 项 Python 测试通过，0 失败、0 跳过；`npm run check:release` 输出 v0.10.0，`npm run doctor` 退出 0。未进行桌面端重启后的真人浏览器点击验收；检索扫描上限的覆盖口径、UTF-16 长度口径与 seq 模式整条消息读取等已知限制见[验证记录](docs/VALIDATION.md)。
 
 ## [0.9.0] - 2026-10-23
 

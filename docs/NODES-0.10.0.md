@@ -20,10 +20,11 @@
 | `b8e5a62` | fix(history): expose outline excerpts in dashboard rows |
 | `776c1e3` | feat(history): add bounded archive search and dashboard search |
 | 本文所在提交 | chore(release): prepare v0.10.0 history virtual context |
+| `4dc49c2` | fix(history): send dashboard archive retry fields and align docs |
 
 ## 验收范围
 
-- 本机 173 项 Node/真实 SDK、176 项 Python 测试通过，0 失败、0 跳过；`npm run check:release` 输出 v0.10.0，`npm run doctor` 退出码 0。
-- 覆盖：request_id 重放不追加第二条 marker、同 ID 异 keep_turns 拒绝、过期 expected_surface_seq 在追加前失败、list 只含元数据、read(seq) 单条原始消息、旧 0.9.0 marker 兼容、outline 字节上限与截断、history_search 摘录/无命中/扫描上限、四行系统上下文精确文本、路由字段校验与 409。
+- 本机 179 项 Node/真实 SDK、176 项 Python 测试通过，0 失败、0 跳过；`npm run check:release` 输出 v0.10.0，`npm run doctor` 退出码 0。
+- 覆盖：request_id 重放不追加第二条 marker、重放回执的原始前后消息数/字节与再次 flush、同 ID 异 keep_turns 拒绝、过期 expected_surface_seq 在追加前失败、list 只含元数据、read(seq) 单条原始消息、旧 0.9.0 marker 兼容、outline 字节上限与 1–8 条上限、history_search 摘录/无命中/扫描上限、外来/Fork marker 的隔离、四行系统上下文精确文本、路由字段校验与 409、看板卡片 CHANGED 恢复与重放文案。
 - schema9 / vc2 / vcr1 / vcs1 / vct1 不变，无迁移、无 Python 改动；引用格式与 surfaceOp replace 语义保持 0.9.0。
-- 未进行桌面端重启后的真人浏览器点击验收；检索上限为代码检查与单元测试，未做大规模压力测试；当前卡片归档按钮只提交 session 与 keep_turns，尚未携带 request_id / expected_surface_seq。逐项说明见[验证记录](VALIDATION.md)。
+- 未进行桌面端重启后的真人浏览器点击验收；最近 8 个归档的检索上限有单元测试覆盖，2048 事件 / 4 MiB 文本上限为代码检查、未做大规模压力测试。逐项说明见[验证记录](VALIDATION.md)。
