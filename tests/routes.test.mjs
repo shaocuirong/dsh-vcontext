@@ -57,6 +57,31 @@ test('state route reports the per-session switch and needs a session', async () 
   assert.equal((await invoke(handler, 'POST', `${ROUTE_PREFIX}state?session=s-1`)).status, 405);
 });
 
+test('task routes scope manual reviews and bound evidence pagination', async () => {
+  const ref = `vctx://task/${'b'.repeat(32)}`;
+  const calls = [];
+  const controller = { async inspect(session) { return { status: { revision: 4 }, tasks: [], context: { focus: null } }; },
+    async mutate(session, action, input) { calls.push({ session, action, input }); return { revision: 5 }; } };
+  const stub = transport({ task_read: { task: { ref }, operations: [] }, task_history: { versions: [] } });
+  const handler = createHandler(CONFIG, stub, null, null, null, null, null, null, null, controller);
+  assert.equal((await invoke(handler, 'GET', '/vctx/tasks?session=s')).body.tasks.status.revision, 4);
+  const review = { ref, request_id: 'review-1', expected_revision: 4, expected_version: 2,
+    reason: '已人工核对轨迹', outcome: 'pass', operation_ids: ['a'.repeat(32)] };
+  const ok = await invoke(handler, 'POST', '/vctx/tasks/review', JSON.stringify({ session: 's', ...review }));
+  assert.equal(ok.status, 200);
+  assert.deepEqual(calls, [{ session: 's', action: 'review', input: review }]);
+  assert.equal((await invoke(handler, 'GET', `/vctx/tasks/read?session=s&ref=${encodeURIComponent(ref)}&offset=1&limit=50`)).status, 200);
+  assert.deepEqual(stub.calls[0].input, { ref, offset: 1, limit: 50 });
+  for (const query of ['limit=101', 'offset=-1', 'force=true'])
+    assert.equal((await invoke(handler, 'GET', `/vctx/tasks/read?session=s&ref=${encodeURIComponent(ref)}&${query}`)).status, 400);
+  assert.equal(stub.calls.length, 1);
+  const denied = request('POST', '/vctx/tasks/review', JSON.stringify({ session: 's', ...review }));
+  denied.headers = { host: 'localhost' };
+  const res = response(); await handler(denied, res);
+  assert.equal(res.captured.status, 403);
+  assert.equal(calls.length, 1);
+});
+
 test('snapshot routes preserve CAS receipts and bounded explicit metadata selection', async () => {
   const ref = `vctx://snapshot/${'a'.repeat(32)}`;
   const calls = [];

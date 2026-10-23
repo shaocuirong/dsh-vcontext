@@ -11,6 +11,7 @@ export const MUTATING_OPERATIONS = new Set([
   'state_bind', 'state_sync', 'resource_store', 'resource_capture', 'summary_store',
   'result_store', 'result_mark', 'result_plan', 'result_plan_finish',
   'snapshot_create', 'snapshot_checkout', 'snapshot_detach', 'snapshot_branch',
+  'task_create', 'task_update', 'task_select', 'task_fork', 'task_attach', 'task_review',
 ]);
 
 export const READ_OPERATIONS = new Set([
@@ -19,6 +20,7 @@ export const READ_OPERATIONS = new Set([
   'state_status', 'operation_list', 'operation_read', 'resource_read', 'resource_history', 'summary_read',
   'result_read', 'result_list', 'result_get', 'result_plan_list',
   'snapshot_status', 'snapshot_list', 'snapshot_read', 'snapshot_diff',
+  'task_status', 'task_context', 'task_list', 'task_read', 'task_history',
 ]);
 
 export function isMutating(operation) {
