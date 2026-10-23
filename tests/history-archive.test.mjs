@@ -63,6 +63,10 @@ test('native Surface archive removes old chat and tool content while V4 replay k
   // The marker's bounded meta.first excerpt may repeat the opening words, but
   // the archived message bodies themselves must be gone from the Surface.
   assert.equal(visible.includes('private question 1'.repeat(40)), false);
+  // A 90-character run cannot fit in the marker's bounded 80-character excerpt,
+  // so this bounds the partial exposure to that excerpt only.
+  assert.equal(visible.includes('private question 1'.repeat(5)), false);
+  assert.equal(visible.includes('old user 1'.repeat(9)), false);
   assert.doesNotMatch(visible, /private tool result|private answer 2/);
   assert.match(visible, /private question 4/);
   assert.equal(JSON.stringify(session.snapshotEvents().slice(0, prefixLength)), prefix);
@@ -117,11 +121,24 @@ test('next real AgentLoop request uses archived Surface rather than the old chat
   assert.match(JSON.stringify(requests.at(-1)), /old user 1/);
   const result = await archive.archive(agent.id);
   assert.ok(result.count >= 2);
+  // The marker in a real AgentLoop session must carry a parseable meta line
+  // whose after_bytes matches the observed post-archive request size.
+  const marker = agent.session.snapshotEvents().find(event => event.surfaceOp?.op === 'replace');
+  assert.ok(marker);
+  const markerText = marker.data.content.find(block => block.type === 'text').text;
+  assert.equal(markerText.includes(result.ref), true);
+  const metaLine = markerText.split('\n').find(line => line.startsWith('meta: '));
+  assert.ok(metaLine);
+  const meta = JSON.parse(metaLine.slice(6));
+  assert.equal(meta.after_bytes, result.after.bytes);
   agent.followup(text('input-4', 'user', 'latest user', { kind: 'user' }));
   await agent.whenIdle();
   const sent = JSON.stringify(requests.at(-1));
   assert.match(sent, /vctx:\/\/history\//);
+  // The exact archived user body stays absent, and a 90-character run cannot
+  // fit in the marker's bounded 80-character excerpt.
   assert.equal(sent.includes('old user 1'.repeat(80)), false);
+  assert.equal(sent.includes('old user 1'.repeat(9)), false);
   assert.match(sent, /latest user/);
 });
 
