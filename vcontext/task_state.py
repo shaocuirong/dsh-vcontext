@@ -27,14 +27,14 @@ OPERATIONS = frozenset(
 PREFIX = "vctx://task/"
 STATUSES = ("open", "running", "blocked", "completed", "failed", "abandoned")
 TERMINAL = ("completed", "failed", "abandoned")
+JS_TRIM_CHARS = "\t\n\v\f\r \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff"
 
 
 def _task_text(value, label, maximum, empty=False, multiline=False):
     """Match the host controller's accepted display text before persisting it."""
     _text(value, label, maximum, empty=empty)
-    trim_chars = "\t\n\v\f\r \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff"
     controls = r"[\x00-\x08\x0b\x0c\x0e-\x1f]" if multiline else r"[\x00-\x1f]"
-    if (not empty and not value.strip(trim_chars)) or re.search(controls, value):
+    if (not empty and not value.strip(JS_TRIM_CHARS)) or re.search(controls, value):
         raise ValueError(label + " must contain valid task text")
     return value
 
@@ -321,7 +321,10 @@ class TaskState(SnapshotState):
                 ]
             else:
                 for entry in result["path"]:
-                    entry["title"] = entry["title"][: max(8, len(entry["title"]) // 2)]
+                    # Valid titles may have a long whitespace prefix. Trim the
+                    # display copy before slicing so a legal title stays nonblank.
+                    title = entry["title"].strip(JS_TRIM_CHARS)
+                    entry["title"] = title[: max(8, len(title) // 2)]
         return result
 
     def _new_task(self, title, goal, parent_ref, source_ref=None):

@@ -453,6 +453,43 @@ class TaskTests(unittest.TestCase):
         self.assertEqual(len(context["path"]), 16)
         self.assertEqual(len(self.a.task_read(parent["ref"])["task"]["summary"]), 4096)
 
+    def test_deep_path_projection_preserves_nonblank_title_after_whitespace_trim(self):
+        from vcontext.task_state import JS_TRIM_CHARS
+
+        titles = (" " * 159 + "x", "\ufeff\u3000" * 79 + "\ufeffx")
+        for original in titles:
+            with self.subTest(title=repr(original)):
+                root = self.create(title=original)
+                task = root
+                for _ in range(15):
+                    task = self.create(title="界" * 160, parent_ref=task["ref"])
+                self.select(task)
+                context = self.a.task_context()
+                self.assertTrue(context["truncated"])
+                self.assertEqual(len(context["path"]), 16)
+                self.assertEqual(context["path"][0]["title"], "x")
+                self.assertTrue(
+                    all(
+                        entry["title"].strip(JS_TRIM_CHARS) for entry in context["path"]
+                    )
+                )
+                self.assertTrue(
+                    all(set(entry["title"]) == {"界"} for entry in context["path"][1:])
+                )
+                encoded = json.dumps(
+                    context, ensure_ascii=False, separators=(",", ":")
+                ).encode("utf-8")
+                self.assertLessEqual(len(encoded), 8192)
+                self.assertEqual(
+                    self.a.task_read(root["ref"])["task"]["title"], original
+                )
+                self.assertEqual(
+                    self.a.task_history(root["ref"])["versions"][0]["title"], original
+                )
+                self.assertEqual(
+                    self.a.task_read(task["ref"])["task"]["title"], "界" * 160
+                )
+
     def test_focused_goal_survives_restart_without_summary(self):
         goal = "Acceptance: restore the exact pinned file and keep complete source evidence."
         task = self.create(title="Restore", goal=goal)

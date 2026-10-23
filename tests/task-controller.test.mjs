@@ -266,5 +266,20 @@ test('task controller uses real SDK maintenance and SQLite without altering hist
     ref: created.task.ref, expected_version: updated.task.version, outcome: 'pass', reason: 'Human reviewed the new manifest',
     operation_ids: [good.operation_id], ...await readBasis() });
   assert.equal(refreshed.task.verification, 'reviewed_pass');
+  // A valid leading-whitespace title must remain readable when a deep Unicode
+  // path needs projection trimming. Persisted titles retain their exact bytes.
+  const originalTitle = ' '.repeat(158) + '\ufeffx';
+  let revision = refreshed.revision, parent = null, firstRef;
+  for (let index = 0; index < 16; index++) {
+    const entry = await controller.mutate(agent.id, 'create', { request_id: `deep-task-${index}`, expected_revision: revision,
+      title: index === 0 ? originalTitle : '界'.repeat(160), parent_ref: parent });
+    revision = entry.revision; parent = entry.task.ref; firstRef ??= parent;
+  }
+  await controller.mutate(agent.id, 'select', { request_id: 'deep-select', expected_revision: revision, ref: parent });
+  const deep = await controller.inspect(agent.id);
+  assert.equal(deep.context.path.length, 16); assert.equal(deep.context.truncated, true);
+  assert.equal(deep.context.path[0].title, 'x', 'display trimming preserves nonblank task identity');
+  assert.ok(Buffer.byteLength(JSON.stringify(deep.context), 'utf8') <= 8192);
+  assert.equal((await transport.call(agent.id, 'task_read', { ref: firstRef })).task.title, originalTitle);
   assert.equal(JSON.stringify(agent.session.snapshotEvents()), before); assert.equal(modelCalls, 0);
 });
