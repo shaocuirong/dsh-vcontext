@@ -112,6 +112,7 @@ test('history route previews, lists, archives with CAS and replays by request id
   assert.equal(preview.body.preview.count, 2);
   assert.equal(preview.body.preview.surface_seq, 10);
   assert.equal(preview.body.archives[0].ref, 'vctx://history/aaaaaaaaaaaaaaaa/1');
+  assert.equal(preview.body.archives[0].first, 'outline topic');
   assert.equal(preview.body.total, 1);
   assert.equal(preview.body.outline.format, 'vctx-history-v1');
   assert.equal(preview.body.outline.available, true);
@@ -144,6 +145,55 @@ test('history route previews, lists, archives with CAS and replays by request id
   const res = response(); await handler(denied, res);
   assert.equal(res.captured.status, 403);
   assert.equal(calls.length, 6);
+});
+
+test('history GET mirrors the injected outline rows so excerpts reach the dashboard', async () => {
+  const ref = index => `vctx://history/aaaaaaaaaaaaaaaa/${index}`;
+  const archive = {
+    async inspect() { return { count: 4, bytes: 4096, surface_seq: 20 }; },
+    async list() {
+      return { archives: Array.from({ length: 10 }, (_, index) => ({
+        ref: ref(index + 1), request_id: null, count: 10 - index, bytes: 1000 + index,
+        created_seq: index + 1, source_start_seq: index, source_end_seq: index,
+      })), total: 10 };
+    },
+    async outline() {
+      return { format: 'vctx-history-v1', available: true,
+        archives: Array.from({ length: 8 }, (_, index) => ({
+          ref: ref(index + 1), count: 10 - index, bytes: 1000 + index, first: `outline topic ${index + 1}`,
+        })),
+        total_archives: 10, total_bytes: 32000, truncated: true };
+    },
+  };
+  const handler = createHandler(CONFIG, transport(), null, null, null, null, null, null, null, null, archive);
+  const result = await invoke(handler, 'GET', '/vctx/history?session=s');
+  assert.equal(result.status, 200);
+  assert.equal(result.body.archives.length, 8);
+  assert.deepEqual(result.body.archives.map(entry => entry.ref),
+    Array.from({ length: 8 }, (_, index) => ref(index + 1)));
+  assert.deepEqual(result.body.archives.map(entry => entry.first),
+    Array.from({ length: 8 }, (_, index) => `outline topic ${index + 1}`));
+  assert.equal(result.body.total, 10);
+  assert.equal(result.body.outline.truncated, true);
+  assert.equal(result.body.archives[0].count, 10, 'list metadata survives the merge');
+  assert.equal(result.body.archives[7].bytes, 1007);
+});
+
+test('history GET falls back to list rows when the outline is unavailable', async () => {
+  const ref = index => `vctx://history/aaaaaaaaaaaaaaaa/${index}`;
+  const listRows = Array.from({ length: 10 }, (_, index) => ({ ref: ref(index + 1), count: 1, bytes: 100 + index }));
+  const archive = {
+    async inspect() { return { count: 1, bytes: 100, surface_seq: 5 }; },
+    async list() { return { archives: listRows, total: 10 }; },
+    async outline() { return { format: 'vctx-history-v1', available: false, archives: [] }; },
+  };
+  const handler = createHandler(CONFIG, transport(), null, null, null, null, null, null, null, null, archive);
+  const result = await invoke(handler, 'GET', '/vctx/history?session=s');
+  assert.equal(result.status, 200);
+  assert.deepEqual(result.body.archives, listRows);
+  assert.equal(result.body.total, 10);
+  assert.equal(result.body.outline.available, false);
+  assert.equal(result.body.preview.count, 1);
 });
 
 test('task routes scope manual reviews and bound evidence pagination', async () => {

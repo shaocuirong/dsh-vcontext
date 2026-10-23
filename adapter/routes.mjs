@@ -85,9 +85,22 @@ export function createHandler(config, transport, liveContext, diagnostics, repla
           const session = sessionOf(url);
           if (!session) throw new Error('session required');
           const preview = await historyArchive.inspect(session);
-          const archives = await historyArchive.list(session, 20);
-          return send(response, 200, { ok: true, preview, archives: archives.archives,
-            total: archives.total, outline: await historyArchive.outline(session) });
+          const list = await historyArchive.list(session, 20);
+          const outline = await historyArchive.outline(session);
+          // list() is metadata only, so its rows carry no excerpt. The dashboard
+          // must show exactly the rows injected into the model context: mirror
+          // the outline's order and copy each `first` across, including when the
+          // outline was byte-truncated. Without an outline (degraded service)
+          // the raw list rows are still the best available summary.
+          let rows = list.archives;
+          if (outline?.available === true && Array.isArray(outline.archives)) {
+            const byRef = new Map(list.archives.map(entry => [entry.ref, entry]));
+            rows = outline.archives.flatMap(entry => {
+              const listed = byRef.get(entry.ref);
+              return listed ? [{ ...listed, first: entry.first ?? null }] : [];
+            });
+          }
+          return send(response, 200, { ok: true, preview, archives: rows, total: list.total, outline });
         }
         if (request.method !== 'POST') return send(response, 405, { ok: false, error: 'GET or POST only' });
         const body = JSON.parse(await readBody(request));
