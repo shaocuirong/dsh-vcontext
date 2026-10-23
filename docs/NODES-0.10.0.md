@@ -21,6 +21,7 @@
 | `776c1e3` | feat(history): add bounded archive search and dashboard search |
 | 本文所在提交 | chore(release): prepare v0.10.0 history virtual context |
 | `4dc49c2` | fix(history): send dashboard archive retry fields and align docs |
+| `3be2064` | fix(history): close final review gaps in retry, replay and isolation |
 
 ## 验收范围
 
