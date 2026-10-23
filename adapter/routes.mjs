@@ -58,7 +58,7 @@ function localCarrier(request) {
     && (request.method !== 'POST' || Boolean(request.headers?.origin));
 }
 
-export function createHandler(config, transport, liveContext, diagnostics, replacement, sessionBridge, resultProjection, resultJobs, sessionSnapshots, taskController) {
+export function createHandler(config, transport, liveContext, diagnostics, replacement, sessionBridge, resultProjection, resultJobs, sessionSnapshots, taskController, historyArchive) {
   const settings = validateConfig(config);
   return async function handle(request, response) {
     let url;
@@ -76,6 +76,24 @@ export function createHandler(config, transport, liveContext, diagnostics, repla
     }
     if (foreignOrigin || request.headers?.['sec-fetch-site'] === 'cross-site')
       return send(response, 403, { ok: false, error: 'same-origin request required' });
+
+    if (url.pathname === `${ROUTE_PREFIX}history`) {
+      if (!localCarrier(request)) return send(response, 403, { ok: false, error: '仅接受本机同源请求。' });
+      if (!historyArchive) return send(response, 503, { ok: false, error: '会话历史归档服务尚未就绪。' });
+      try {
+        if (request.method === 'GET') {
+          const session = sessionOf(url);
+          if (!session) throw new Error('session required');
+          return send(response, 200, { ok: true, preview: await historyArchive.inspect(session) });
+        }
+        if (request.method !== 'POST') return send(response, 405, { ok: false, error: 'GET or POST only' });
+        const body = JSON.parse(await readBody(request));
+        if (!body || typeof body.session !== 'string' || !body.session || body.session.length > 256
+          || Object.keys(body).some(key => !['session', 'keep_turns'].includes(key))) throw new Error('invalid request');
+        return send(response, 200, { ok: true, result: await historyArchive.archive(body.session, body.keep_turns ?? 2) });
+      } catch (error) { return send(response, error?.code === 'BUSY' ? 409 : 400,
+        { ok: false, error_code: error?.code ?? 'failed', error: String(error?.message ?? error) }); }
+    }
 
     if (url.pathname === `${ROUTE_PREFIX}tasks` || url.pathname.startsWith(`${ROUTE_PREFIX}tasks/`)) {
       if (!localCarrier(request)) return send(response, 403, { ok: false, error: '仅接受本机同源请求。' });
@@ -308,7 +326,7 @@ export function createHandler(config, transport, liveContext, diagnostics, repla
   };
 }
 
-export function mountRoutes(ctx, config, transport, liveContext, diagnostics, replacement, sessionBridge, resultProjection, resultJobs, sessionSnapshots, taskController) {
+export function mountRoutes(ctx, config, transport, liveContext, diagnostics, replacement, sessionBridge, resultProjection, resultJobs, sessionSnapshots, taskController, historyArchive) {
   const webServer = ctx.get('webServer');
   // The shipped web and desktop profiles always carry the HTTP carrier. A CLI
   // or SDK-only composition has none, and then there is simply no route to
@@ -316,5 +334,5 @@ export function mountRoutes(ctx, config, transport, liveContext, diagnostics, re
   // service-resolution waterfall and can corrupt the value other plugins read,
   // which is exactly what the real-SDK test caught.
   if (!webServer || typeof webServer.register !== 'function') return () => {};
-  return webServer.register({ kind: 'prefix', path: ROUTE_PREFIX.slice(0, -1), handler: createHandler(config, transport, liveContext, diagnostics, replacement, sessionBridge, resultProjection, resultJobs, sessionSnapshots, taskController) });
+  return webServer.register({ kind: 'prefix', path: ROUTE_PREFIX.slice(0, -1), handler: createHandler(config, transport, liveContext, diagnostics, replacement, sessionBridge, resultProjection, resultJobs, sessionSnapshots, taskController, historyArchive) });
 }

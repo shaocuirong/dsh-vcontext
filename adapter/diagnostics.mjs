@@ -31,6 +31,8 @@ export function createDiagnostics({ logger, logLevel = 'info', diagnosticLimit =
     const row = { at: new Date().toISOString(), event, level };
     for (const key of ['request_id', 'operation', 'session_hash', 'duration_ms', 'outcome', 'error_type', 'error_code'])
       if (fields[key] !== undefined) row[key] = fields[key];
+    for (const key of ['source_count', 'source_bytes', 'before_bytes', 'after_bytes'])
+      if (Number.isSafeInteger(fields[key]) && fields[key] >= 0) row[key] = fields[key];
     events.push(row);
     if (events.length > diagnosticLimit) events.shift();
     try {

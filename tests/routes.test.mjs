@@ -90,6 +90,26 @@ test('state route reports the per-session switch and needs a session', async () 
   assert.equal((await invoke(handler, 'POST', `${ROUTE_PREFIX}state?session=s-1`)).status, 405);
 });
 
+test('history route previews and archives only from a local same-origin session', async () => {
+  const calls = [];
+  const archive = {
+    async inspect(id) { calls.push(['inspect', id]); return { count: 2, bytes: 2048 }; },
+    async archive(id, keepTurns) { calls.push(['archive', id, keepTurns]); return { status: 'archived', count: 2 }; },
+  };
+  const handler = createHandler(CONFIG, transport(), null, null, null, null, null, null, null, null, archive);
+  const preview = await invoke(handler, 'GET', '/vctx/history?session=s');
+  assert.equal(preview.body.preview.count, 2);
+  const archived = await invoke(handler, 'POST', '/vctx/history', JSON.stringify({ session: 's', keep_turns: 2 }));
+  assert.equal(archived.status, 200);
+  assert.deepEqual(calls, [['inspect', 's'], ['archive', 's', 2]]);
+  assert.equal((await invoke(handler, 'POST', '/vctx/history', JSON.stringify({ session: 's', extra: true }))).status, 400);
+  const denied = request('POST', '/vctx/history', JSON.stringify({ session: 's' }));
+  denied.headers = { host: 'localhost' };
+  const res = response(); await handler(denied, res);
+  assert.equal(res.captured.status, 403);
+  assert.equal(calls.length, 2);
+});
+
 test('task routes scope manual reviews and bound evidence pagination', async () => {
   const ref = `vctx://task/${'b'.repeat(32)}`;
   const calls = [];
