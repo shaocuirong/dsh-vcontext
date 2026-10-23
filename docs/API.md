@@ -188,7 +188,7 @@ HTTP 路由适用于本机单用户宿主，并拒绝跨来源浏览器请求；
 
 - `state_bind {project_id,root_path,target_commit?}` 和 `state_sync {events,through_seq}` 仅供 Bridge / 本地管理入口使用，模型 `vctx` 工具拒绝调用。namespace / session_id 从宿主 RPC scope 注入，不接受模型指定。重复绑定不改目标版本，项目或根冲突时拒绝。
 - `state_sync` 以从 0 开始的连续事件推进 processed_seq；Bridge 每批最多 128 条，同一会话并发合并，最多 32 个待处理会话。事件、操作与 cursor 在同一 SQLite 事务提交；同 seq 异内容、缺口和截断拒绝提交。未知原始正文、参数、错误详情不进入索引。
-- `state_status {}` 返回 binding（未绑定为 null）、processed_seq、counts（events / operations / resource_versions / summaries / current_resources）及结构化 schema_version=2。主数据库 schema 为 7，两者不同。
+- `state_status {}` 返回 binding（未绑定为 null）、processed_seq、counts（events / operations / resource_versions / summaries / current_resources）及结构化 schema_version=2。当前主数据库schema9，与结构化子schema2不同。
 - `operation_list {limit?:20}` 最多 100 条；`operation_read {operation_id}` 返回本会话操作，含 call_id、execution_kind=native|ptc、call_seq、result_seq、status、verification、sources。sources 的 session_id + dsh_seq 指向当前可查询拼接日志；保留原事件 type。成功仅为 succeeded / not_tested，不代表测试通过。
 - Fork 前缀记 inherited，不重复聚合成子会话执行；Surface replacement 记 projection，不当成第二次执行。Native 和 PTC 子调用的相同原始 ID 分域隔离。
 
@@ -227,7 +227,7 @@ Bridge 仅重复解析上一 cursor 边界并解析新增后缀，数据库核�
 
 ### 迁移与恢复
 
-当前 0.7.0 首次打开已发布 schema 1–7 的磁盘库，使用 SQLite backup 在同目录创建唯一 `.pre-schema8-<id>.bak`，成功后再事务迁移到主 schema8 / vc2 / vcr1 / vcs1。保留旧页面、修订、配置、检查点、用量与渲染指纹；迁移失败回滚，不覆盖已有备份。未知未来 schema 或未发布结构化草稿 schema1 均拒绝打开。升级前必须完全关闭所有使用该库的旧宿主：旧版本的新连接拒绝 schema8，升级前已打开的连接却不能靠版本号阻止继续写。降级须人工保留升级后数据并选择旧备份，不自动替换数据库。
+当前0.8.0首次打开已发布schema1–8磁盘库，使用SQLite backup在同目录创建唯一 `.pre-schema9-<id>.bak`，再事务迁移到主schema9/vc2/vcr1/vcs1/vct1。保留旧页面、修订、资源、配置、检查点、用量与渲染指纹，失败回滚，不覆盖备份。未知未来版本及未发布结构化草稿schema1拒绝。升级前须完全退出所有使用该库的旧宿主：旧0.7的新连接拒绝schema9，但不能阻止升级前已打开的连接继续写。降级须单独保留升级后数据，再人工选择旧备份，不自动替换数据库。
 
 ## 可恢复工具结果（0.6.0）
 
@@ -296,3 +296,51 @@ ref 形如 `vctx://snapshot/<32位小写十六进制>`，显式引用可在同 n
 | /vctx/snapshots/create 或 checkout/detach/branch | POST {session,...对应操作参数} | 经公开 runMaintenance、Bridge 和 SQLite CAS；200返回result，BUSY/CHANGED/ROOT_CHANGED为409 |
 
 仅本机完整同源请求，POST必需Origin；不作远程认证API。单会话变更互斥，总pending最多32；卸载取消并等待，异常不自动重试写入。日志只记录操作、session哈希、耗时及固定错误码。未确认响应时先刷新目标；API重试同一逻辑动作保留原request_id和输入。设计及论文见 [SNAPSHOTS-0.7.0.md](SNAPSHOTS-0.7.0.md)。
+
+## 任务与执行状态（0.8.0）
+
+任务ref为 `vctx://task/<32位小写十六进制>`，严格按当前namespace/session隔离，不自动复制DSH Fork父任务。父引用不可变，最大深度16、每会话最多1000任务。模型可调用以下操作，不能更换宿主注入的scope：
+
+| 操作 | 参数 | 返回 / 约束 |
+|---|---|---|
+| task_status | {} | binding、revision、focus_ref、count、limit；未绑定时binding=null |
+| task_context | {} | format=vctx-execution-state-v1、available、revision、focus_ref、focus、path、truncated、verification_source |
+| task_create | request_id,expected_revision,title,goal?,parent_ref? | task、revision、focus_ref、replayed；默认open，不自动选为焦点 |
+| task_update | request_id,expected_revision,ref,expected_version,status?/summary?/next_action? | 至少一变更，生成新不可变版本；不能写verification或改父引用 |
+| task_select | request_id,expected_revision,ref | ref可null；终结任务或终结祖先下路径拒绝选择 |
+| task_fork | request_id,expected_revision,ref,title? | 同父节点新open尝试，source_ref保留来源；目标可继承，进度/来源集合/审核/子树不复制，不切资源 |
+| task_attach | request_id,expected_revision,ref,expected_version,operation_ids?,resource_refs? | 至少一来源，各最多64个唯一项；操作只本会话，资源显式ref可同项目 |
+| task_list | parent_ref?,status?,offset=0,limit=50 | tasks、offset、next_offset、has_more；limit≤100，默认本会话全部按创建顺序列出 |
+| task_read | ref,offset=0,limit=50 | task、review_basis、operations、resources、最近20条reviews及证据分页；limit≤100 |
+| task_history | ref,limit=20 | versions，最近优先、完整持久内容，limit≤100 |
+
+状态为open/running/blocked/completed/failed/abandoned。completed只是报告完成，必须没有未终结直接子任务；它不提升验证状态。更新祖先为终结状态会清当前焦点，终结祖先下禁止重新激活子任务；先显式重开祖先或新建有效路径。模型及界面均不能把失败路径当成当前焦点，历史仍可查询。
+
+元数据包含ref、title、goal、status、summary、next_action、version、parent_ref、source_ref、verification、created_at、updated_at。title最多160字符、goal2048、summary4096、next_action1024；标题非空白且无C0控制字符，多行字段只允许tab/CR/LF。原文与审核记录不可变并校验哈希；历史不会因重新摘要而覆盖。
+
+所有显式变更要求会话task revision CAS；文案更新、附加证据和审核同时检查task expected_version。相同request_id与相同输入只重放原回执及**当前**修订/焦点，不重做、不倒回后来的选择。自动来源关联不推进文案版本或显式revision，避免模型task_read后，其下一次工具调用同步把自己的CAS作废。
+
+焦点历史记录宿主已同步processed_seq切点，自动归属按cut < call_seq选择，而非结果到达时的焦点。新同步仅检索新增call_seq，旧前缀不重复扫描、不追认给后来创建的任务。native/PTC同ID分域；继承和Surface投影不成为新执行。task_read.operations的association为execution或manual，手工关联只表示证据相关，不改变原执行归属。
+
+### 人工审核与版本依据
+
+`task_review` 是host-only，模型工具明确拒绝。参数：request_id、expected_revision、ref、expected_version、outcome=pass/fail、reason（1–4096字符）、operation_ids（1–16个）、expected_manifest_hash、expected_activity_hash。后两项必须原样来自 `task_read.review_basis`，均为sha256:64位小写十六进制；不得在用户核查后自动换成新值提交。
+
+来源必须已经关联、属于当前会话、具有call_seq/result_seq且执行结束；pass不能使用失败/取消或vctx管理调用自证。事务内检查任务CAS与资源/实际活动双hash，预览后变化返回CHANGED。审核记录source=host-review，是人工评估，不冒充自动测试；原vc_operations.verification仍为not_tested。
+
+任务verification为not_tested/reviewed_pass/reviewed_fail/stale。审核仅对记录的任务版本、当前有效已收录资源manifest以及该任务关联的非vctx活动水位适用；任一变化使当前结论过期，历史审核保留。它不是对子任务、整个磁盘、整个项目或未检查证据的自动证明。旧超限资源集合仍可读任务和来源，review_basis=null时不能提交审核；固定到可支持的资源集合后重新核查。
+
+### 请求与本机接口
+
+动态变量vctx_task_state在原pages/资源target之后附加一行JSON。focus包含ref、title、goal、status、summary、next_action、version、verification，path保留根到焦点的身份/标题/状态。总UTF8≤8192字节，超限明确truncated，仅缩短注入文字，不截断持久原文。该段在插件页面预算之外，不代表精确Token。旧runtime快照可能留在历史，以当前请求最后一份任务JSON为准；同步失败注入available=false而不冒用旧已审核状态，不阻断宿主生成。
+
+| 路由 | 方法与输入 | 行为 |
+|---|---|---|
+| /vctx/tasks?session=… | GET | 恢复/同步指定会话，返回tasks:{status,tasks,context,has_more,next_offset} |
+| /vctx/tasks/list | GET session,parent_ref?,status?,offset?,limit? | task_list结果包装为result |
+| /vctx/tasks/read 或 history | GET session,ref,offset?/limit? | task_read或history；history不接受offset |
+| /vctx/tasks/create/update/select/fork/attach/review | POST {session,...对应参数} | 公开runMaintenance与Bridge后提交；200 result，BUSY/CHANGED/ROOT_CHANGED为409 |
+
+接口要求本机Host、loopback对端、完整同源，POST必须Origin；严格多余参数和分页白名单，非远程认证API。每会话变更互斥、最多32个pending，卸载可取消并等待。日志仅操作/耗时/固定错误码/session哈希，不保存任务文本或审核说明。模型任务变更不重入维护锁，由其真实工具调度边界和SQLite CAS保护；两种入口都不追加伪造会话事件、不调用摘要模型。
+
+inspect的revision重读保证显式任务变更一致性，不是运行中所有新工具活动的跨RPC冻结切面；审核提交仍以双hash原子守卫为准。设计、论文和恢复边界见 [TASKS-0.8.0.md](TASKS-0.8.0.md)。

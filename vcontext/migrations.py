@@ -11,8 +11,8 @@ def backup_legacy(connection):
     version = connection.execute("SELECT value FROM metadata WHERE key='schema'").fetchone()
     if not version:
         return None
-    if version[0] in ('1', '2', '3', '4', '5', '6', '7'):
-        upgrade = 'schema8'
+    if version[0] in ('1', '2', '3', '4', '5', '6', '7', '8'):
+        upgrade = 'schema9'
     else:
         return None
     filename = next((row[2] for row in connection.execute('PRAGMA database_list') if row[1] == 'main'), '')

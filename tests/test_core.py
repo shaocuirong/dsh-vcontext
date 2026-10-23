@@ -320,7 +320,7 @@ class PrefixTests(unittest.TestCase):
                 backup.close()
             self.assertEqual(reopened.snapshot()['generation'], 1)
             self.assertEqual(reopened.db.execute(
-                "SELECT value FROM metadata WHERE key='schema'").fetchone()[0], '8')
+                "SELECT value FROM metadata WHERE key='schema'").fetchone()[0], '9')
             self.assertEqual(reopened.dashboard()['scope'], 'one')
         finally:
             reopened.close()

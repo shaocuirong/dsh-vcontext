@@ -1,6 +1,6 @@
 # 研究依据与实现边界
 
-核对日期：2026-10-22。以下 16 篇论文及 1 个开源工程的链接指向 arXiv 原始记录、正文或作者仓库。年份按首次投稿记录，后续修订另列。论文实验结果不代表 dsh-vcontext 的性能；模块组合、SQLite 表结构与预算策略是本项目的工程选择。
+核对日期：2026-10-23（本次重新核对 MAGE、SEEM、MemGPT、ACE 的原始摘要与本版映射；其余沿用 2026-10-22 的记录）。以下 16 篇论文及 1 个开源工程的链接指向 arXiv 原始记录、正文或作者仓库。年份按首次投稿记录，后续修订另列。论文实验结果不代表 dsh-vcontext 的性能；模块组合、SQLite 表结构与预算策略是本项目的工程选择。
 
 项目目标是与 DeepSeek Harness 会话集成的客户端上下文管理器：记录结构化事件，保留可恢复原文，明确资源版本和会话状态，再决定哪些内容进入工作集。服务端 KV cache 管理不是当前开发目标。
 
@@ -10,7 +10,7 @@
 |---|---|---|---|
 | 1 | **MemGPT: Towards LLMs as Operating Systems**，2023；[arXiv:2310.08560v2](https://arxiv.org/abs/2310.08560v2)（2024 修订） | 在有限上下文与外部记忆间移动信息，以分层记忆及控制流延伸可用上下文 | 区分可恢复资源与驻留工作集；没有复现完整中断、heartbeat 与模型控制循环 |
 | 2 | **Git Context Controller: Manage the Context of LLM-based Agents like Git**，2025；GCC；[arXiv:2508.00031](https://arxiv.org/abs/2508.00031) | 以 COMMIT、BRANCH、MERGE、CONTEXT 管理持久上下文 | 借鉴检查点、版本和分层历史；资源版本引用不等于完整 GCC 文件系统或 Git 分支合并 |
-| 3 | **Beyond Semantic Organization: Memory as Execution State Management for Long-Horizon Agents**，2026；MAGE；[arXiv:2606.06090v2](https://arxiv.org/abs/2606.06090v2) | 用层级状态树及 Grow、Compress、Maintain、Revise 隔离执行路径与失败分支 | 为任务树及验证状态提供依据；v0.5.0 先记录操作及证据，不实现完整状态树算法 |
+| 3 | **Beyond Semantic Organization: Memory as Execution State Management for Long-Horizon Agents**，2026；MAGE；[arXiv:2606.06090v2](https://arxiv.org/abs/2606.06090v2) | 用层级状态树及 Grow、Compress、Maintain、Revise 隔离执行路径与失败分支 | v0.8.0 采用持久任务树、当前路径、任务修订与人工审核；不复现完整树维护、自动摘要与恢复算法 |
 | 4 | **Agentic Context Engineering: Evolving Contexts for Self-Improving Language Models**，2025；ACE；[arXiv:2510.04618v3](https://arxiv.org/abs/2510.04618v3)（ICLR 2026） | Generator、Reflector、Curator 维护局部增量，减少整体重写的信息流失 | 摘要独立版本化并保留来源；没有实现完整反思、策展或自改进循环 |
 | 5 | **ChronoMem: Version Control and Semantic Rollback for Large Language Model Agent Memory**，2026；[arXiv:2607.27773v2](https://arxiv.org/abs/2607.27773v2) | 全记忆快照、检索选择历史版本及接触后回滚一致性评测 | 明确恢复语义；内容哈希和固定引用不等于全局语义回滚 |
 | 6 | **RAPTOR: Recursive Abstractive Processing for Tree-Organized Retrieval**，2024；[arXiv:2401.18059v1](https://arxiv.org/abs/2401.18059v1) | 递归嵌入、聚类、摘要形成多层检索树 | 后续层级摘要参考；摘要来源表本身不是 RAPTOR 聚类树 |
@@ -49,7 +49,7 @@ GCC 有标题版本差异：核对时 [arXiv 摘要元数据](https://arxiv.org/
 
 1. **有限窗口与可恢复存储分开。** MemGPT 启发分层记忆；本项目进一步区分插件页面驻留和宿主请求。驱逐页面不会消除已经进入工具历史的正文。[MemGPT](https://arxiv.org/html/2310.08560v2)
 2. **版本引用与当前状态明确。** GCC 启发检查点和历史检索；先保证版本引用始终读到相同内容，不混同项目 HEAD 与会话目标快照。[GCC §2](https://arxiv.org/html/2508.00031v3)
-3. **操作成功和状态可信分开。** MAGE 的 Maintain 要求检查边界摘要；本项目记录操作状态与 verification，工具成功不能推断功能已验证。任务树和执行分支留待后续。[MAGE §3](https://arxiv.org/html/2606.06090v2)
+3. **操作成功和状态可信分开。** MAGE 的 Maintain 要求检查边界摘要；v0.8.0 以任务版本、显式焦点、独立尝试及绑定资源集合的人工审核实现本项目的边界。工具成功和模型完成声明均不等于审核通过，版本或依据变化后旧结论失效；这不是完整 Maintain 算法复现。[MAGE §3](https://arxiv.org/html/2606.06090v2)
 4. **摘要是有来源的派生数据。** ACE 的局部增量启发摘要独立版本与原文保留；不自动运行 Reflector / Curator，不用摘要覆盖原始证据。[ACE §3](https://arxiv.org/html/2510.04618v3)
 5. **派生记录可追溯。** SEEM 启发来源锚定；以 session、seq、操作 ID、哈希和摘要来源链接实现可核查追溯，先不引入独立图数据库。[SEEM §3](https://arxiv.org/html/2601.06411v2)
 
@@ -59,11 +59,12 @@ GCC 有标题版本差异：核对时 [arXiv 摘要元数据](https://arxiv.org/
 |---|---|---|
 | v0.5.0 | 扩展 SQLite、Session Bridge、幂等操作、不可变内容、资源版本及摘要来源 | 重放不重复写；全文可恢复；失败与未验证状态不被提升；旧页面和检查点仍可用 |
 | v0.6.0 | 显式选择工具结果、不可变原文、引用投影与原位恢复 | 在合法真实步骤边界改变模型可见正文，原始历史保留，失败可对账；不是摘要压缩 |
-| v0.7.0 开发目标 | 已收录资源全量 manifest、固定会话目标、历史比较、独立工作集分支 | 完整冻结已收录集合；多会话不被全局 latest 偷换；缺路径不回退；固定时拒绝 live 写入 |
-| 后续执行状态 | 任务树、阶段摘要、Maintain 式验证、执行分支 | 恢复后延续有效任务路径，失败分支不成为当前已验证状态 |
+| v0.7.0 | 已收录资源全量 manifest、固定会话目标、历史比较、独立工作集分支 | 完整冻结已收录集合；多会话不被全局 latest 偷换；缺路径不回退；固定时拒绝 live 写入 |
+| v0.8.0 执行状态 | 持久任务树、版本 / 来源、活动路径、独立尝试与人工审核边界 | 真实请求可重建当前目标和下一步；迟到结果仍归调用时任务；失败兄弟不进入活动路径；模型完成不提升验证状态 |
+| 后续摘要与事实 | 阶段摘要、ACE 增量维护、RAPTOR 检索、结构化事实及有效期 | 摘要有来源且不替代原文，当前事实与历史演化能区分；任务 summary 字段本身不等于这些机制 |
 | 后续自动调度 | 工作集调度、访问账本、请求统计及恢复评测 | 联合衡量正确率、恢复质量、Token 成本和延迟，不只追求驻留命中率 |
 
-阶段是研发方向，不是尚未完成版本的功能承诺。v0.5.0 契约见 [架构说明](ARCHITECTURE-0.5.0.md)，v0.6.0 的 [可恢复工具结果投影](PROJECTION-0.6.0.md)补宿主可见性，v0.7.0 的 [会话资源快照](SNAPSHOTS-0.7.0.md)补明确版本集合。范围是插件已收录资源，不自动扫描磁盘、读取 Git HEAD 或恢复全部对话；DSH Fork 不自动继承父会话当前工作集。原生 read/write 工具仍访问真实工作目录，固定 vctx 视图不等于整个执行环境处在历史 Git 版本。这次优先级调整不代表已实现原规划的 MAGE 任务树或自动调度；操作名和字段以 [API](API.md) 为准。
+阶段是研发方向，验收结果以各版验证记录为准。v0.5.0 契约见 [架构说明](ARCHITECTURE-0.5.0.md)，v0.6.0 的 [可恢复工具结果投影](PROJECTION-0.6.0.md)补宿主可见性，v0.7.0 的 [会话资源快照](SNAPSHOTS-0.7.0.md)补明确版本集合，v0.8.0 的 [任务执行状态](TASKS-0.8.0.md)补当前目标、路径与审核边界。资源范围是插件已收录内容，不自动扫描磁盘、读取 Git HEAD 或恢复全部对话；DSH Fork 不自动继承父会话当前工作集或任务焦点。原生 read/write 工具仍访问真实工作目录，固定 vctx 视图不等于整个执行环境处在历史 Git 版本。任务树与短状态也不等于完整 MAGE、ACE / RAPTOR 或自动调度；操作名和字段以 [API](API.md) 为准。
 
 ## 保留的工程约束
 

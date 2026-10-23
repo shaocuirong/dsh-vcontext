@@ -56,7 +56,7 @@ function localCarrier(request) {
     && (request.method !== 'POST' || Boolean(request.headers?.origin));
 }
 
-export function createHandler(config, transport, liveContext, diagnostics, replacement, sessionBridge, resultProjection, resultJobs, sessionSnapshots) {
+export function createHandler(config, transport, liveContext, diagnostics, replacement, sessionBridge, resultProjection, resultJobs, sessionSnapshots, taskController) {
   const settings = validateConfig(config);
   return async function handle(request, response) {
     let url;
@@ -74,6 +74,52 @@ export function createHandler(config, transport, liveContext, diagnostics, repla
     }
     if (foreignOrigin || request.headers?.['sec-fetch-site'] === 'cross-site')
       return send(response, 403, { ok: false, error: 'same-origin request required' });
+
+    if (url.pathname === `${ROUTE_PREFIX}tasks` || url.pathname.startsWith(`${ROUTE_PREFIX}tasks/`)) {
+      if (!localCarrier(request)) return send(response, 403, { ok: false, error: '仅接受本机同源请求。' });
+      if (!taskController) return send(response, 503, { ok: false, error: '任务状态服务尚未就绪。' });
+      const action = url.pathname === `${ROUTE_PREFIX}tasks` ? '' : url.pathname.slice(`${ROUTE_PREFIX}tasks/`.length);
+      try {
+        if (request.method === 'GET') {
+          const session = sessionOf(url);
+          if (!session) throw new Error('session required');
+          if (!action) return send(response, 200, { ok: true, tasks: await taskController.inspect(session) });
+          if (!['read', 'list', 'history'].includes(action)) return send(response, 404, { ok: false, error: 'unknown route' });
+          const allowed = action === 'list' ? ['parent_ref', 'status', 'offset', 'limit']
+            : action === 'history' ? ['ref', 'limit'] : ['ref', 'offset', 'limit'];
+          if ([...url.searchParams.keys()].some(key => !['session', ...allowed].includes(key))) throw new Error('invalid query');
+          const input = {};
+          for (const key of ['ref', 'parent_ref']) if (allowed.includes(key)) {
+            const value = url.searchParams.get(key);
+            if (key === 'ref' || value !== null) {
+              if (!/^vctx:\/\/task\/[a-f0-9]{32}$/.test(value ?? '')) throw new Error('task ref required');
+              input[key] = value;
+            }
+          }
+          if (url.searchParams.has('status')) {
+            const value = url.searchParams.get('status');
+            if (!['open', 'running', 'blocked', 'completed', 'failed', 'abandoned'].includes(value)) throw new Error('invalid status');
+            input.status = value;
+          }
+          for (const [key, minimum, maximum] of [['offset', 0, Number.MAX_SAFE_INTEGER], ['limit', 1, 100]]) {
+            if (!allowed.includes(key) || !url.searchParams.has(key)) continue;
+            const raw = url.searchParams.get(key), value = Number(raw);
+            if (!/^\d+$/.test(raw) || !Number.isSafeInteger(value) || value < minimum || value > maximum) throw new Error('invalid pagination');
+            input[key] = value;
+          }
+          return send(response, 200, { ok: true, result: await transport.call(session, `task_${action}`, input) });
+        }
+        if (request.method !== 'POST') return send(response, 405, { ok: false, error: 'GET or POST only' });
+        if (!['create', 'update', 'select', 'fork', 'attach', 'review'].includes(action)) return send(response, 404, { ok: false, error: 'unknown route' });
+        const body = JSON.parse(await readBody(request));
+        if (!body || typeof body.session !== 'string' || !body.session || body.session.length > 256) throw new Error('session required');
+        const { session, ...input } = body;
+        return send(response, 200, { ok: true, result: await taskController.mutate(session, action, input) });
+      } catch (error) {
+        return send(response, ['BUSY', 'CHANGED', 'ROOT_CHANGED'].includes(error?.code) ? 409 : 400,
+          { ok: false, error_code: error?.code ?? 'failed', error: String(error?.message ?? error) });
+      }
+    }
 
     if (url.pathname === `${ROUTE_PREFIX}snapshots` || url.pathname.startsWith(`${ROUTE_PREFIX}snapshots/`)) {
       if (!localCarrier(request)) return send(response, 403, { ok: false, error: '仅接受本机同源请求。' });
@@ -242,6 +288,11 @@ export function createHandler(config, transport, liveContext, diagnostics, repla
         dashboard.context_replacement = replacement?.read(session) ?? null;
         dashboard.session_bridge = sessionBridge?.status(session) ?? null;
         dashboard.session_snapshot = sessionSnapshots ? await transport.call(session, 'snapshot_status', {}) : null;
+        if (taskController) {
+          const status = await transport.call(session, 'task_status', {});
+          const context = await transport.call(session, 'task_context', {});
+          dashboard.task_state = { status, context: context.revision === status.revision ? context : null };
+        }
         if (diagnostics) dashboard.diagnostics = diagnostics.snapshot();
         return send(response, 200, { ok: true, namespace: settings.namespace, session, dashboard });
       } catch (error) {
@@ -255,7 +306,7 @@ export function createHandler(config, transport, liveContext, diagnostics, repla
   };
 }
 
-export function mountRoutes(ctx, config, transport, liveContext, diagnostics, replacement, sessionBridge, resultProjection, resultJobs, sessionSnapshots) {
+export function mountRoutes(ctx, config, transport, liveContext, diagnostics, replacement, sessionBridge, resultProjection, resultJobs, sessionSnapshots, taskController) {
   const webServer = ctx.get('webServer');
   // The shipped web and desktop profiles always carry the HTTP carrier. A CLI
   // or SDK-only composition has none, and then there is simply no route to
@@ -263,5 +314,5 @@ export function mountRoutes(ctx, config, transport, liveContext, diagnostics, re
   // service-resolution waterfall and can corrupt the value other plugins read,
   // which is exactly what the real-SDK test caught.
   if (!webServer || typeof webServer.register !== 'function') return () => {};
-  return webServer.register({ kind: 'prefix', path: ROUTE_PREFIX.slice(0, -1), handler: createHandler(config, transport, liveContext, diagnostics, replacement, sessionBridge, resultProjection, resultJobs, sessionSnapshots) });
+  return webServer.register({ kind: 'prefix', path: ROUTE_PREFIX.slice(0, -1), handler: createHandler(config, transport, liveContext, diagnostics, replacement, sessionBridge, resultProjection, resultJobs, sessionSnapshots, taskController) });
 }
