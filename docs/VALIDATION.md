@@ -1,5 +1,35 @@
 # 验证记录
 
+## v0.10.2：跨平台归档测试夹具（2026-10-23）
+
+- 0.10.1 的本机 Windows 回归通过后，远端 Ubuntu CI 在创建会话时拒绝固定路径 `C:/offline-fixture`，报 `session header cwd must be an absolute path`；24 项归档测试因此在夹具构建阶段失败。
+- 将四处归档测试会话的 cwd 改为 `node:os` 的 `tmpdir()`，使用各平台原生绝对路径，仅作为测试元数据。没有更改运行时逻辑、用户数据或机器配置。
+- 本机 24 项归档测试通过；完整远端结果以 PR #9 的当前提交检查为准。已发布的 v0.10.1 保留，使用新的 v0.10.2 版本发布此补丁。
+
+## v0.10.1：PR #9 归档边界修复（2026-10-23）
+
+- 编辑前核验 origin 为 `shaocuirong/dsh-vcontext`，检出 `codex/history-vcontext-010`，本地与 PR #9 head 均为 `ea8d5c5d676a823f613c01a5672a8ad78acf16fa`，工作区干净。
+- 完整 Node/SDK 测试 **190/190** 通过，0 失败、0 跳过；Python **176/176** 通过。首次受限沙箱运行有两项既有测试分别被临时符号链接权限和本机 HTTP 访问阻挡；在所需权限下重跑完整 Node 套件后全部通过。
+- 新增 11 项回归：会话解析、维护准入、首次 flush、追加后 flush、幂等重放 flush 五个等待点的卸载收尾；解析期间并发拒绝；宿主取消；轮次首部、中部、尾部和后续轮次的替换链完整性。现有 Fork 隔离测试增加制造子会话哈希引用的整段/单条读取拒绝断言。替换链使用真实 Session Surface 和严格 V4 重放校验。
+- `npm run check:release` 验证 v0.10.1；`npm run doctor` 报告 Node/Python/SDK 正常，数据库 `modified=false`。包预览与 Git 差异检查通过。
+- 行为取舍：包含投影/恢复等替换节点的轮次整体保留，未知或跨轮次归属保守拒绝归档。已经追加的归档不能通过取消撤回；卸载等待宿主保存收尾，调用方刷新后使用相同 request_id 对账。
+- 未执行桌面端完全重启及真人浏览器点击验收；不宣称实时宿主已加载新代码、真实供应商 Token 收益或答案质量改善。本版无数据库迁移、无本地配置覆盖。
+
+## v0.10.0：可发现、可管理的会话历史归档（2026-10-23）
+
+- 本机完整 **179 项 Node/真实 SDK** 测试通过，0 失败、0 跳过（`npm test` 输出 `# tests 179 / # pass 179 / # fail 0 / # cancelled 0 / # skipped 0 / # todo 0`，duration_ms 3894.7117）；**176 项 Python** 测试通过（`Ran 176 tests in 9.010s` / `OK`），无跳过。两条命令退出码均为 0。
+- `npm run check:release` 校验 0.10.0 元数据、README/CHANGELOG 链接及入口文件后输出 `Release metadata and entry points verified: v0.10.0`；`npm run doctor` 退出码 0，报告 Node 22.19.0、Python 3.12.14、SDK ok、可选 dsh-context 已安装、数据库 configured=true / modified=false（只读检查，未改动数据库或配置）。
+- 本版**没有 Python 改动，也没有数据库 schema 变化**：主 schema9 / vc2 / vcr1 / vcs1 / vct1 不变，不新增迁移、不新建归档登记表；引用格式 `vctx://history/<16位十六进制>/<序号>` 与 0.9.0 surfaceOp replace 语义不变。Node 测试覆盖 request_id 重放不追加第二条 marker、重放回执的前后消息数/字节等于原归档并再次 flush 确认持久化、同 ID 异 keep_turns 拒绝、过期 expected_surface_seq 在追加前失败、list 只含元数据、read(seq) 单条原始消息、0.9.0 无 meta 旧 marker 兼容、outline ≤2048 字节/1–8 条/最旧截断、history_search 摘录与无命中、只扫描最新 8 个归档、外来/Fork marker 不进入 list/outline/summary/search/重放且 read 返回 NOT_FOUND、四行系统上下文与 vctx_history 变量、GET/POST/search 路由字段校验、409 映射与 dashboard.history_archive。客户端测试同时覆盖纯函数与状态化组件：归档请求自动携带 request_id / expected_surface_seq、无预览 surface 时省略 expected_surface_seq、预览未变时复用同一请求身份、预览 surface 变化时轮换请求身份、CHANGED 后立即重新 inspect 且下一次点击使用新 request_id / 新 expected_surface_seq、重放回执显示原始前后值而不是 X → X B；IME 组合期间的 Enter 保护由代码检查覆盖。
+- **未验证范围（如实记录）**：没有进行桌面端完全重启后的真人浏览器点击验收，看板“归档会话历史”的清单与搜索只由 Node 单元/路由测试覆盖，未在真实浏览器中手工点击；看板归档按钮的 CHANGED 恢复与重放文案由状态化 Hook 模拟组件测试覆盖，不是真实 DOM 点击。最近 8 个归档的检索上限有单元测试覆盖；2048 源事件 / 4 MiB 文本上限是代码检查，不是大规模压力测试；`history_read(seq)` 返回单条消息对象，单条对象可能超过 65536 字符，65536 上限只约束整段分页。session/request_id/query 长度按 UTF-16 码元计数（历史读取分页按码点）；GET /vctx/history 的 list() 与 outline() 是两次独立读取，若并发归档 POST 恰好落在两次读取之间，卡片可能少显示一条归档行（按 ref 连接时未知 ref 被丢弃）；Fork 子会话不继承父会话归档这一边界已由外来 marker 测试覆盖，但未在真实 DSH Fork 会话上做端到端点击验收。
+- 原位多消息恢复与自动归档策略仍不在本版范围；本版新增测试未调用供应商模型，未证明 Token 节省、缓存收益或答案质量。设计、边界与已知限制见 [HISTORY-VCONTEXT-0.10.0.md](HISTORY-VCONTEXT-0.10.0.md)，节点见 [NODES-0.10.0.md](NODES-0.10.0.md)。
+
+## v0.9.0：会话历史原位归档（2026-10-23）
+
+- 本机159项Node/真实SDK、176项Python测试通过；release元数据、npm包预览与Git差异检查通过。两项旧Node测试需本机符号链接和回环HTTP，受限沙箱分别报EPERM和连接失败；隔离权限下完整回归全部通过。
+- 原生Session测试将两轮旧聊天和工具结果换成一条引用，实际派生上下文字节下降；原事件前缀逐字节序列化保持一致。严格格式V4验证和Session重建后派生消息完全一致，同会话按引用可分段读回原消息，其他会话的引用拒绝读取。
+- 真实Cordis AgentLoop与离线LLM适配器运行四轮：归档前模型请求仍含首轮旧输入，归档后下一真实请求有历史引用、不再含首轮旧输入，同时保留新输入。未调用供应商模型，不宣称真实Token账单或答案质量收益。
+- 本机同源HTTP入口验证预览、实际提交、未知字段拒绝和无Origin写入拒绝。日常Harness进程和用户原会话未作为本次写入对象；未完成桌面端重启/真人浏览器点击验收。原位多消息恢复尚未实现，可使用 `vctx history_read` 按需读回；设计与论文边界见[会话历史归档](HISTORY-ARCHIVE-0.9.0.md)。
+
 ## v0.8.1：审核、投影与接口正确性（2026-10-23）
 
 - 本机完整156项Node/真实SDK、176项Python通过，无跳过。新增覆盖时钟回拨、相同时间戳且后UUID较小、数据库重开时最新审核一致；明确复现并修复新fail回执却仍注入旧pass的问题。顺序以不可变追加表rowid为准，时间仅展示。

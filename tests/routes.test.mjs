@@ -90,6 +90,138 @@ test('state route reports the per-session switch and needs a session', async () 
   assert.equal((await invoke(handler, 'POST', `${ROUTE_PREFIX}state?session=s-1`)).status, 405);
 });
 
+test('history route previews, lists, archives with CAS and replays by request id', async () => {
+  const calls = [];
+  const archive = {
+    async inspect(id) { calls.push(['inspect', id]); return { count: 2, bytes: 2048, surface_seq: 10 }; },
+    async list(id, limit) { calls.push(['list', id, limit]);
+      return { archives: [{ ref: 'vctx://history/aaaaaaaaaaaaaaaa/1' }], total: 1 }; },
+    async outline(id) { calls.push(['outline', id]);
+      return { format: 'vctx-history-v1', available: true,
+        archives: [{ ref: 'vctx://history/aaaaaaaaaaaaaaaa/1', count: 2, bytes: 2048, first: 'outline topic' }],
+        total_archives: 1, total_bytes: 2048, truncated: false }; },
+    async archive(id, keepTurns, options = {}) {
+      calls.push(['archive', id, keepTurns, options]);
+      if (options.expected_surface_seq === 999) throw Object.assign(new Error('changed'), { code: 'CHANGED' });
+      const replay = calls.filter(call => call[0] === 'archive').length > 1;
+      return { status: replay ? 'replayed' : 'archived', replayed: replay, count: 2 };
+    },
+  };
+  const handler = createHandler(CONFIG, transport(), null, null, null, null, null, null, null, null, archive);
+  const preview = await invoke(handler, 'GET', '/vctx/history?session=s');
+  assert.equal(preview.body.preview.count, 2);
+  assert.equal(preview.body.preview.surface_seq, 10);
+  assert.equal(preview.body.archives[0].ref, 'vctx://history/aaaaaaaaaaaaaaaa/1');
+  assert.equal(preview.body.archives[0].first, 'outline topic');
+  assert.equal(preview.body.total, 1);
+  assert.equal(preview.body.outline.format, 'vctx-history-v1');
+  assert.equal(preview.body.outline.available, true);
+  assert.equal(preview.body.outline.archives[0].first, 'outline topic');
+  const body = { session: 's', keep_turns: 2, request_id: 'req-route-1', expected_surface_seq: 10 };
+  const archived = await invoke(handler, 'POST', '/vctx/history', JSON.stringify(body));
+  assert.equal(archived.status, 200);
+  assert.equal(archived.body.result.replayed, false);
+  const replayed = await invoke(handler, 'POST', '/vctx/history', JSON.stringify(body));
+  assert.equal(replayed.status, 200);
+  assert.equal(replayed.body.result.replayed, true);
+  assert.deepEqual(calls, [
+    ['inspect', 's'],
+    ['list', 's', 20],
+    ['outline', 's'],
+    ['archive', 's', 2, { request_id: 'req-route-1', expected_surface_seq: 10 }],
+    ['archive', 's', 2, { request_id: 'req-route-1', expected_surface_seq: 10 }],
+  ]);
+  const stale = await invoke(handler, 'POST', '/vctx/history', JSON.stringify({ session: 's', expected_surface_seq: 999 }));
+  assert.equal(stale.status, 409);
+  assert.equal(stale.body.error_code, 'CHANGED');
+  assert.equal((await invoke(handler, 'POST', '/vctx/history', JSON.stringify({ session: 's', extra: true }))).status, 400);
+  for (const invalid of [{ request_id: '' }, { request_id: 'x'.repeat(257) }, { request_id: 'a\u0000b' },
+    { expected_surface_seq: -1 }, { expected_surface_seq: 1.5 }])
+    assert.equal((await invoke(handler, 'POST', '/vctx/history',
+      JSON.stringify({ session: 's', ...invalid }))).status, 400);
+  assert.equal(calls.length, 6, 'rejected bodies must never reach the archive');
+  const denied = request('POST', '/vctx/history', JSON.stringify({ session: 's' }));
+  denied.headers = { host: 'localhost' };
+  const res = response(); await handler(denied, res);
+  assert.equal(res.captured.status, 403);
+  assert.equal(calls.length, 6);
+});
+
+test('history GET mirrors the injected outline rows so excerpts reach the dashboard', async () => {
+  const ref = index => `vctx://history/aaaaaaaaaaaaaaaa/${index}`;
+  const archive = {
+    async inspect() { return { count: 4, bytes: 4096, surface_seq: 20 }; },
+    async list() {
+      return { archives: Array.from({ length: 10 }, (_, index) => ({
+        ref: ref(index + 1), request_id: null, count: 10 - index, bytes: 1000 + index,
+        created_seq: index + 1, source_start_seq: index, source_end_seq: index,
+      })), total: 10 };
+    },
+    async outline() {
+      return { format: 'vctx-history-v1', available: true,
+        archives: Array.from({ length: 8 }, (_, index) => ({
+          ref: ref(index + 1), count: 10 - index, bytes: 1000 + index, first: `outline topic ${index + 1}`,
+        })),
+        total_archives: 10, total_bytes: 32000, truncated: true };
+    },
+  };
+  const handler = createHandler(CONFIG, transport(), null, null, null, null, null, null, null, null, archive);
+  const result = await invoke(handler, 'GET', '/vctx/history?session=s');
+  assert.equal(result.status, 200);
+  assert.equal(result.body.archives.length, 8);
+  assert.deepEqual(result.body.archives.map(entry => entry.ref),
+    Array.from({ length: 8 }, (_, index) => ref(index + 1)));
+  assert.deepEqual(result.body.archives.map(entry => entry.first),
+    Array.from({ length: 8 }, (_, index) => `outline topic ${index + 1}`));
+  assert.equal(result.body.total, 10);
+  assert.equal(result.body.outline.truncated, true);
+  assert.equal(result.body.archives[0].count, 10, 'list metadata survives the merge');
+  assert.equal(result.body.archives[7].bytes, 1007);
+});
+
+test('history GET falls back to list rows when the outline is unavailable', async () => {
+  const ref = index => `vctx://history/aaaaaaaaaaaaaaaa/${index}`;
+  const listRows = Array.from({ length: 10 }, (_, index) => ({ ref: ref(index + 1), count: 1, bytes: 100 + index }));
+  const archive = {
+    async inspect() { return { count: 1, bytes: 100, surface_seq: 5 }; },
+    async list() { return { archives: listRows, total: 10 }; },
+    async outline() { return { format: 'vctx-history-v1', available: false, archives: [] }; },
+  };
+  const handler = createHandler(CONFIG, transport(), null, null, null, null, null, null, null, null, archive);
+  const result = await invoke(handler, 'GET', '/vctx/history?session=s');
+  assert.equal(result.status, 200);
+  assert.deepEqual(result.body.archives, listRows);
+  assert.equal(result.body.total, 10);
+  assert.equal(result.body.outline.available, false);
+  assert.equal(result.body.preview.count, 1);
+});
+
+test('history search route validates the query, bounds and method', async () => {
+  const calls = [];
+  const archive = {
+    async search(session, query, limit) {
+      calls.push([session, query, limit]);
+      return { query, matches: [{ ref: 'vctx://history/aaaaaaaaaaaaaaaa/1', seq: 1,
+        type: 'tool/result', excerpt: 'private tool result' }], total: 1, truncated: false };
+    },
+  };
+  const handler = createHandler(CONFIG, transport(), null, null, null, null, null, null, null, null, archive);
+  const found = await invoke(handler, 'GET',
+    `/vctx/history/search?session=s&q=${encodeURIComponent('private tool result')}`);
+  assert.equal(found.status, 200);
+  assert.equal(found.body.ok, true);
+  assert.equal(found.body.result.matches[0].type, 'tool/result');
+  assert.equal(found.body.result.matches[0].excerpt, 'private tool result');
+  assert.deepEqual(calls, [['s', 'private tool result', 5]]);
+  assert.equal((await invoke(handler, 'GET', '/vctx/history/search?session=s')).status, 400);
+  assert.equal((await invoke(handler, 'GET', '/vctx/history/search?session=s&q=x&limit=21')).status, 400);
+  assert.equal((await invoke(handler, 'GET', '/vctx/history/search?session=s&q=x&extra=true')).status, 400);
+  assert.equal((await invoke(handler, 'GET', '/vctx/history/search?session=s&q=%20%20%20')).status, 400);
+  assert.equal((await invoke(handler, 'GET', '/vctx/history/search?q=x')).status, 400);
+  assert.equal((await invoke(handler, 'POST', '/vctx/history/search?session=s&q=x', '{}')).status, 405);
+  assert.equal(calls.length, 1, 'rejected requests must never reach the archive search');
+});
+
 test('task routes scope manual reviews and bound evidence pagination', async () => {
   const ref = `vctx://task/${'b'.repeat(32)}`;
   const calls = [];
@@ -259,9 +391,14 @@ test('session route accepts exactly one boolean and rejects everything else', as
 
 test('dashboard route is read only and passes the event window through', async () => {
   const stub = transport({ dashboard: input => ({ budget: 2048, events: input.events }) });
-  let reads = 0;
-  const handler = createHandler(CONFIG, stub, { async read(session) { assert.equal(session, 's-1'); return { revision: ++reads }; } });
+  const summary = { total_archives: 3, total_bytes: 9000, last_ref: 'vctx://history/aaaaaaaaaaaaaaaa/7' };
+  let summaries = 0, reads = 0;
+  const archive = { async summary(session) { assert.equal(session, 's-1'); summaries++; return summary; } };
+  const handler = createHandler(CONFIG, stub, { async read(session) { assert.equal(session, 's-1'); return { revision: ++reads }; } },
+    undefined, undefined, undefined, undefined, undefined, undefined, undefined, archive);
   const ok = await invoke(handler, 'GET', `${ROUTE_PREFIX}dashboard?session=s-1&events=120`);
+  assert.deepEqual(ok.body.dashboard.history_archive, summary);
+  assert.equal(summaries, 1);
   assert.equal(ok.status, 200);
   assert.equal(ok.body.dashboard.live_context.revision, 1);
   assert.equal((await invoke(handler, 'GET', `${ROUTE_PREFIX}dashboard?session=s-1`)).body.dashboard.live_context.revision, 2);
@@ -270,6 +407,17 @@ test('dashboard route is read only and passes the event window through', async (
   assert.equal((await invoke(handler, 'GET', `${ROUTE_PREFIX}dashboard?session=s-1&events=0`)).status, 400);
   assert.equal((await invoke(handler, 'GET', `${ROUTE_PREFIX}dashboard?session=s-1&events=abc`)).status, 400);
   assert.equal((await invoke(handler, 'POST', `${ROUTE_PREFIX}dashboard`, '{}')).status, 405);
+});
+
+test('dashboard keeps reporting when the history summary is unavailable', async () => {
+  const stub = transport({ dashboard: () => ({ budget: 2048 }) });
+  const archive = { async summary() { throw new Error('archive service down'); } };
+  const handler = createHandler(CONFIG, stub, undefined, undefined, undefined, undefined,
+    undefined, undefined, undefined, undefined, archive);
+  const result = await invoke(handler, 'GET', `${ROUTE_PREFIX}dashboard?session=s-1`);
+  assert.equal(result.status, 200);
+  assert.equal(result.body.ok, true);
+  assert.equal(result.body.dashboard.history_archive, null);
 });
 
 test('unknown routes 404 and an unreachable ledger is not a route failure', async () => {

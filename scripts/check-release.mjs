@@ -18,6 +18,8 @@ for (const path of ['index.mjs', 'lib/client.js', 'adapter/context-integration.m
   'vcontext/result_store.py', 'vcontext/server.py', 'vcontext/session_snapshots.py',
   'adapter/session-snapshots.mjs', 'docs/SNAPSHOTS-0.7.0.md', 'docs/NODES-0.7.0.md',
   'vcontext/task_state.py', 'adapter/task-controller.mjs', 'docs/TASKS-0.8.0.md', 'docs/NODES-0.8.0.md',
-  'docs/NODES-0.8.1.md'])
+  'docs/NODES-0.8.1.md', 'adapter/history-archive.mjs', 'tests/history-archive.test.mjs',
+  'docs/HISTORY-ARCHIVE-0.9.0.md', 'docs/NODES-0.9.0.md',
+  'adapter/plugin.mjs', 'adapter/routes.mjs', 'docs/HISTORY-VCONTEXT-0.10.0.md', 'docs/NODES-0.10.0.md'])
   await read(path);
 console.log(`Release metadata and entry points verified: v${version}`);

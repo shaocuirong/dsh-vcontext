@@ -58,7 +58,7 @@ function localCarrier(request) {
     && (request.method !== 'POST' || Boolean(request.headers?.origin));
 }
 
-export function createHandler(config, transport, liveContext, diagnostics, replacement, sessionBridge, resultProjection, resultJobs, sessionSnapshots, taskController) {
+export function createHandler(config, transport, liveContext, diagnostics, replacement, sessionBridge, resultProjection, resultJobs, sessionSnapshots, taskController, historyArchive) {
   const settings = validateConfig(config);
   return async function handle(request, response) {
     let url;
@@ -76,6 +76,75 @@ export function createHandler(config, transport, liveContext, diagnostics, repla
     }
     if (foreignOrigin || request.headers?.['sec-fetch-site'] === 'cross-site')
       return send(response, 403, { ok: false, error: 'same-origin request required' });
+
+    // Match the search path before the exact history route. Search is a
+    // read-only convenience over the same immutable markers, never a body read.
+    if (url.pathname === `${ROUTE_PREFIX}history/search`) {
+      if (!localCarrier(request)) return send(response, 403, { ok: false, error: '仅接受本机同源请求。' });
+      if (!historyArchive) return send(response, 503, { ok: false, error: '会话历史归档服务尚未就绪。' });
+      if (request.method !== 'GET') return send(response, 405, { ok: false, error: 'GET only' });
+      try {
+        const session = sessionOf(url);
+        if (!session) throw new Error('session required');
+        if ([...url.searchParams.keys()].some(key => !['session', 'q', 'limit'].includes(key))) throw new Error('invalid query');
+        const q = (url.searchParams.get('q') ?? '').trim();
+        if (!q || q.length > 256) throw new Error('q must be 1..256 characters');
+        let limit = 5;
+        if (url.searchParams.has('limit')) {
+          const raw = url.searchParams.get('limit'), value = Number(raw);
+          if (!/^\d+$/.test(raw) || !Number.isSafeInteger(value) || value < 1 || value > 20)
+            throw new Error('limit must be 1..20');
+          limit = value;
+        }
+        return send(response, 200, { ok: true, result: await historyArchive.search(session, q, limit) });
+      } catch (error) {
+        return send(response, 400, { ok: false, error_code: error?.code ?? 'failed', error: String(error?.message ?? error) });
+      }
+    }
+
+    if (url.pathname === `${ROUTE_PREFIX}history`) {
+      if (!localCarrier(request)) return send(response, 403, { ok: false, error: '仅接受本机同源请求。' });
+      if (!historyArchive) return send(response, 503, { ok: false, error: '会话历史归档服务尚未就绪。' });
+      try {
+        if (request.method === 'GET') {
+          const session = sessionOf(url);
+          if (!session) throw new Error('session required');
+          const preview = await historyArchive.inspect(session);
+          const list = await historyArchive.list(session, 20);
+          const outline = await historyArchive.outline(session);
+          // list() is metadata only, so its rows carry no excerpt. The dashboard
+          // must show exactly the rows injected into the model context: mirror
+          // the outline's order and copy each `first` across, including when the
+          // outline was byte-truncated. Without an outline (degraded service)
+          // the raw list rows are still the best available summary.
+          let rows = list.archives;
+          if (outline?.available === true && Array.isArray(outline.archives)) {
+            const byRef = new Map(list.archives.map(entry => [entry.ref, entry]));
+            rows = outline.archives.flatMap(entry => {
+              const listed = byRef.get(entry.ref);
+              return listed ? [{ ...listed, first: entry.first ?? null }] : [];
+            });
+          }
+          return send(response, 200, { ok: true, preview, archives: rows, total: list.total, outline });
+        }
+        if (request.method !== 'POST') return send(response, 405, { ok: false, error: 'GET or POST only' });
+        const body = JSON.parse(await readBody(request));
+        if (!body || typeof body.session !== 'string' || !body.session || body.session.length > 256
+          || Object.keys(body).some(key => !['session', 'keep_turns', 'request_id', 'expected_surface_seq'].includes(key)))
+          throw new Error('invalid request');
+        if (body.request_id !== undefined && (typeof body.request_id !== 'string'
+          || body.request_id.length < 1 || body.request_id.length > 256 || /[\u0000-\u001f]/u.test(body.request_id)))
+          throw new Error('invalid request_id');
+        if (body.expected_surface_seq !== undefined && (!Number.isSafeInteger(body.expected_surface_seq)
+          || body.expected_surface_seq < 0)) throw new Error('invalid expected_surface_seq');
+        const options = {};
+        if (body.request_id !== undefined) options.request_id = body.request_id;
+        if (body.expected_surface_seq !== undefined) options.expected_surface_seq = body.expected_surface_seq;
+        return send(response, 200, { ok: true,
+          result: await historyArchive.archive(body.session, body.keep_turns ?? 2, options) });
+      } catch (error) { return send(response, ['BUSY', 'CHANGED', 'ROOT_CHANGED'].includes(error?.code) ? 409 : 400,
+        { ok: false, error_code: error?.code ?? 'failed', error: String(error?.message ?? error) }); }
+    }
 
     if (url.pathname === `${ROUTE_PREFIX}tasks` || url.pathname.startsWith(`${ROUTE_PREFIX}tasks/`)) {
       if (!localCarrier(request)) return send(response, 403, { ok: false, error: '仅接受本机同源请求。' });
@@ -295,6 +364,12 @@ export function createHandler(config, transport, liveContext, diagnostics, repla
           const context = await transport.call(session, 'task_context', {});
           dashboard.task_state = { status, context: context.revision === status.revision ? context : null };
         }
+        if (historyArchive) {
+          // The archive summary is metadata only; losing it must not take down
+          // the rest of the dashboard payload.
+          try { dashboard.history_archive = await historyArchive.summary(session); }
+          catch { dashboard.history_archive = null; }
+        }
         if (diagnostics) dashboard.diagnostics = diagnostics.snapshot();
         return send(response, 200, { ok: true, namespace: settings.namespace, session, dashboard });
       } catch (error) {
@@ -308,7 +383,7 @@ export function createHandler(config, transport, liveContext, diagnostics, repla
   };
 }
 
-export function mountRoutes(ctx, config, transport, liveContext, diagnostics, replacement, sessionBridge, resultProjection, resultJobs, sessionSnapshots, taskController) {
+export function mountRoutes(ctx, config, transport, liveContext, diagnostics, replacement, sessionBridge, resultProjection, resultJobs, sessionSnapshots, taskController, historyArchive) {
   const webServer = ctx.get('webServer');
   // The shipped web and desktop profiles always carry the HTTP carrier. A CLI
   // or SDK-only composition has none, and then there is simply no route to
@@ -316,5 +391,5 @@ export function mountRoutes(ctx, config, transport, liveContext, diagnostics, re
   // service-resolution waterfall and can corrupt the value other plugins read,
   // which is exactly what the real-SDK test caught.
   if (!webServer || typeof webServer.register !== 'function') return () => {};
-  return webServer.register({ kind: 'prefix', path: ROUTE_PREFIX.slice(0, -1), handler: createHandler(config, transport, liveContext, diagnostics, replacement, sessionBridge, resultProjection, resultJobs, sessionSnapshots, taskController) });
+  return webServer.register({ kind: 'prefix', path: ROUTE_PREFIX.slice(0, -1), handler: createHandler(config, transport, liveContext, diagnostics, replacement, sessionBridge, resultProjection, resultJobs, sessionSnapshots, taskController, historyArchive) });
 }

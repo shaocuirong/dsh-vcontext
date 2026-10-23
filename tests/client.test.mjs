@@ -38,7 +38,7 @@ function findNode(node, predicate) {
   }
 }
 
-async function loadClient(prefs) {
+async function loadClient(prefs, react = React) {
   const source = await readFile(new URL('../lib/client.js', import.meta.url), 'utf-8');
   const loader = {};
   const window = { localStorage: { getItem: () => prefs ? JSON.stringify(prefs) : null, setItem() {} }, __ModuleLoader__: { load: definition => { loader.definition = definition; } } };
@@ -46,9 +46,66 @@ async function loadClient(prefs) {
   assert.ok(loader.definition, 'the bundle must register itself with the module loader');
   const module = loader.definition.factory(specifier => {
     assert.equal(specifier, 'react', `the bundle must only resolve react, asked for ${specifier}`);
-    return React;
+    return react;
   });
   return { definition: loader.definition, module };
+}
+
+// A stateful React double for one component test: hook slots survive renders,
+// changed effects queue up, and settle() replays the render/effect/state loop
+// until the tree is stable. The default double above stays static on purpose.
+function createHookRenderer() {
+  const hooks = [];
+  let cursor = 0;
+  let dirty = false;
+  let queued = [];
+  const sameDeps = (left, right) => left.length === right.length
+    && left.every((value, index) => Object.is(value, right[index]));
+  const react = {
+    createElement: React.createElement,
+    useState(initial) {
+      const index = cursor++;
+      if (hooks[index] === undefined)
+        hooks[index] = { value: typeof initial === 'function' ? initial() : initial };
+      const slot = hooks[index];
+      return [slot.value, next => {
+        const value = typeof next === 'function' ? next(slot.value) : next;
+        if (Object.is(value, slot.value)) return;
+        slot.value = value;
+        dirty = true;
+      }];
+    },
+    useEffect(effect, deps) {
+      const index = cursor++;
+      const slot = hooks[index];
+      if (slot && deps !== undefined && sameDeps(slot.deps, deps)) return;
+      hooks[index] = { deps: deps ?? [] };
+      queued.push(effect);
+    },
+    useMemo(factory, deps) {
+      const index = cursor++;
+      const slot = hooks[index];
+      if (slot && deps !== undefined && sameDeps(slot.deps, deps)) return slot.value;
+      const value = factory();
+      hooks[index] = { deps: deps ?? [], value };
+      return value;
+    },
+  };
+  async function settle(render) {
+    let output;
+    for (let round = 0; round < 10; round++) {
+      cursor = 0;
+      dirty = false;
+      queued = [];
+      output = render();
+      for (const effect of queued) await effect();
+      // Let async effects (fetch -> setState continuations) land before the check.
+      await new Promise(resolve => setTimeout(resolve, 0));
+      if (!dirty) return output;
+    }
+    throw new Error('the stateful renderer did not settle');
+  }
+  return { react, settle };
 }
 
 function mount(module) {
@@ -175,4 +232,111 @@ test('the global preference still removes every surface', async () => {
   const props = { sessionId: 'session-1', useStore: () => ({ enabled: false, showTab: true, showPanel: true }) };
   assert.equal(expand(find('conversation.view').component(props)), null);
   assert.equal(expand(find('sidebar.right.pane.tab').component(props)), null);
+});
+
+test('historyArchiveRequest carries the retry id and the preview CAS token', async () => {
+  const { module } = await loadClient();
+  assert.equal(typeof module.historyArchiveRequest, 'function');
+  assert.equal(typeof module.historyArchiveAttempt, 'function');
+  assert.equal(module.name, 'dsh-virtual-context');
+  assert.deepEqual(module.historyArchiveRequest('session-1', { count: 2, bytes: 10, surface_seq: 42 }, 'req-1'),
+    { session: 'session-1', keep_turns: 2, request_id: 'req-1', expected_surface_seq: 42 });
+});
+
+test('historyArchiveRequest omits expected_surface_seq without a preview surface', async () => {
+  const { module } = await loadClient();
+  for (const preview of [null, undefined, { count: 2 }, { surface_seq: '42' }, { surface_seq: 1.5 }]) {
+    const body = module.historyArchiveRequest('session-1', preview, 'req-1');
+    assert.deepEqual(body, { session: 'session-1', keep_turns: 2, request_id: 'req-1' });
+    assert.equal(Object.hasOwn(body, 'expected_surface_seq'), false);
+  }
+});
+
+test('historyArchiveAttempt reuses an id for an unchanged preview and rotates on refresh', async () => {
+  const { module } = await loadClient();
+  // The harness window has no crypto: ids must fall back to a nonempty string.
+  const first = module.historyArchiveAttempt(null, 7);
+  assert.equal(typeof first.id, 'string');
+  assert.ok(first.id.length > 0);
+  assert.deepEqual(first.attempt, { surface: 7, id: first.id });
+  const same = module.historyArchiveAttempt(first.attempt, 7);
+  assert.equal(same.id, first.id);
+  assert.deepEqual(same.attempt, { surface: 7, id: first.id });
+  const refreshed = module.historyArchiveAttempt(first.attempt, 8);
+  assert.notEqual(refreshed.id, first.id);
+  assert.deepEqual(refreshed.attempt, { surface: 8, id: refreshed.id });
+  const unknown = module.historyArchiveAttempt(same.attempt, null);
+  assert.notEqual(unknown.id, first.id);
+  assert.deepEqual(unknown.attempt, { surface: null, id: unknown.id });
+});
+
+test('a CHANGED archive refreshes the preview and retries with a new request identity', async () => {
+  const calls = [];
+  let posts = 0;
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    if (options.method === 'POST') {
+      posts += 1;
+      if (posts === 1) return { ok: false, status: 409,
+        json: async () => ({ ok: false, error_code: 'CHANGED', error: '会话历史已变化，请刷新后重试。' }) };
+      return { ok: true, status: 200, json: async () => ({ ok: true, result: {
+        ref: 'vctx://history/0000000000000000/9', status: 'archived', replayed: false, count: 2,
+        bytes: 10, before: { messages: 4, bytes: 120 }, after: { messages: 2, bytes: 60 },
+        surface_seq_before: 2, surface_seq_after: 3, request_id: 'server-echo',
+      } }) };
+    }
+    const inspections = calls.filter(call => call.url.startsWith('/vctx/history?')).length;
+    return { ok: true, status: 200, json: async () => ({ ok: true,
+      preview: { count: 2, bytes: 10, surface_seq: inspections === 1 ? 1 : 2 },
+      archives: [], outline: null }) };
+  };
+  const { react, settle } = createHookRenderer();
+  const { module } = await loadClient(null, react);
+  const render = () => module.HistoryArchive({ sessionId: 'session-changed', reload: () => {} });
+  const getCount = () => calls.filter(call => call.url.startsWith('/vctx/history?')).length;
+  let tree = await settle(render);
+  const archiveButton = () => findNode(tree, node => node.type === 'button' && text(node).includes('归档旧聊天'));
+
+  assert.ok(archiveButton(), 'the archive button must render after the initial inspection');
+  assert.equal(getCount(), 1);
+  await archiveButton().props.onClick();
+  tree = await settle(render);
+  // The CHANGED path re-inspects immediately instead of leaving a stale preview.
+  assert.equal(getCount(), 2);
+  assert.match(text(findNode(tree, node => node.type === 'p' && node.props.role === 'status')), /预览已刷新/);
+
+  await archiveButton().props.onClick();
+  tree = await settle(render);
+  const bodies = calls.filter(call => call.options?.method === 'POST').map(call => JSON.parse(call.options.body));
+  assert.equal(bodies.length, 2);
+  assert.equal(bodies[0].expected_surface_seq, 1);
+  assert.equal(bodies[1].expected_surface_seq, 2);
+  assert.notEqual(bodies[0].request_id, bodies[1].request_id);
+  assert.equal(getCount(), 3, 'the successful archive re-inspects once more');
+});
+
+test('a replayed archive receipt keeps the original reduction instead of X -> X B', async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    if (options.method === 'POST') return { ok: true, status: 200, json: async () => ({ ok: true, result: {
+      ref: 'vctx://history/0000000000000000/9', status: 'replayed', replayed: true, count: 2, bytes: 10,
+      before: { messages: 5, bytes: 120 }, after: { messages: 3, bytes: 60 },
+      surface_seq_before: 9, surface_seq_after: 10, request_id: 'req-replay',
+    } }) };
+    return { ok: true, status: 200, json: async () => ({ ok: true,
+      preview: { count: 2, bytes: 10, surface_seq: 2 }, archives: [], outline: null }) };
+  };
+  const { react, settle } = createHookRenderer();
+  const { module } = await loadClient(null, react);
+  const render = () => module.HistoryArchive({ sessionId: 'session-replay', reload: () => {} });
+  let tree = await settle(render);
+  await findNode(tree, node => node.type === 'button' && text(node).includes('归档旧聊天')).props.onClick();
+  tree = await settle(render);
+  const status = text(findNode(tree, node => node.type === 'p' && node.props.role === 'status'));
+  assert.match(status, /重放原回执，未追加新记录/);
+  assert.match(status, /120 B/);
+  assert.match(status, /60 B/);
+  assert.equal(status.includes('60 B → 60 B'), false);
+  assert.equal(status.includes('已将'), false);
 });
