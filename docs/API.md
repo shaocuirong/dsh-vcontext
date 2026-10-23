@@ -332,6 +332,8 @@ ref 形如 `vctx://snapshot/<32位小写十六进制>`，显式引用可在同 n
 
 ### 请求与本机接口
 
+0.8.1起，最新人工审核及审核历史按不可变追加表的数据库提交顺序判定；created_at仅用于展示，时钟回拨及相同时间戳不改变先后。任务变更JSON正文最多32768个UTF8字节，同时仍按各字段Unicode字符限制校验；其他路由限额不变。当前任务区在task revision未变时也更新审核有效性；任务列表/明细为上次手动读取，可刷新重新核查，编辑草稿保留。
+
 动态变量vctx_task_state在原pages/资源target之后附加一行JSON。focus包含ref、title、goal、status、summary、next_action、version、verification，path保留根到焦点的身份/标题/状态。总UTF8≤8192字节，超限明确truncated，仅缩短注入文字，不截断持久原文。该段在插件页面预算之外，不代表精确Token。旧runtime快照可能留在历史，以当前请求最后一份任务JSON为准；同步失败注入available=false而不冒用旧已审核状态，不阻断宿主生成。
 
 | 路由 | 方法与输入 | 行为 |
