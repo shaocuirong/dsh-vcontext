@@ -196,6 +196,32 @@ test('history GET falls back to list rows when the outline is unavailable', asyn
   assert.equal(result.body.preview.count, 1);
 });
 
+test('history search route validates the query, bounds and method', async () => {
+  const calls = [];
+  const archive = {
+    async search(session, query, limit) {
+      calls.push([session, query, limit]);
+      return { query, matches: [{ ref: 'vctx://history/aaaaaaaaaaaaaaaa/1', seq: 1,
+        type: 'tool/result', excerpt: 'private tool result' }], total: 1, truncated: false };
+    },
+  };
+  const handler = createHandler(CONFIG, transport(), null, null, null, null, null, null, null, null, archive);
+  const found = await invoke(handler, 'GET',
+    `/vctx/history/search?session=s&q=${encodeURIComponent('private tool result')}`);
+  assert.equal(found.status, 200);
+  assert.equal(found.body.ok, true);
+  assert.equal(found.body.result.matches[0].type, 'tool/result');
+  assert.equal(found.body.result.matches[0].excerpt, 'private tool result');
+  assert.deepEqual(calls, [['s', 'private tool result', 5]]);
+  assert.equal((await invoke(handler, 'GET', '/vctx/history/search?session=s')).status, 400);
+  assert.equal((await invoke(handler, 'GET', '/vctx/history/search?session=s&q=x&limit=21')).status, 400);
+  assert.equal((await invoke(handler, 'GET', '/vctx/history/search?session=s&q=x&extra=true')).status, 400);
+  assert.equal((await invoke(handler, 'GET', '/vctx/history/search?session=s&q=%20%20%20')).status, 400);
+  assert.equal((await invoke(handler, 'GET', '/vctx/history/search?q=x')).status, 400);
+  assert.equal((await invoke(handler, 'POST', '/vctx/history/search?session=s&q=x', '{}')).status, 405);
+  assert.equal(calls.length, 1, 'rejected requests must never reach the archive search');
+});
+
 test('task routes scope manual reviews and bound evidence pagination', async () => {
   const ref = `vctx://task/${'b'.repeat(32)}`;
   const calls = [];

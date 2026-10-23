@@ -9,6 +9,13 @@ const OUTLINE_LIMIT = 8;
 const OUTLINE_LIMIT_MAX = 16;
 const OUTLINE_BYTES = 2048;
 const EXCERPT = 80;
+const SEARCH_ARCHIVES = 8;
+const SEARCH_EVENTS = 2048;
+const SEARCH_BYTES = 4 * 1024 * 1024;
+const SEARCH_QUERY_MAX = 256;
+const SEARCH_LIMIT_DEFAULT = 5;
+const SEARCH_LIMIT_MAX = 20;
+const SEARCH_EXCERPT = 160;
 const ARCHIVE_SOURCE = 'vcontext-history';
 const VISIBLE = new Set(['user/message', 'assistant/message', 'tool/result']);
 const ERRORS = {
@@ -34,6 +41,18 @@ const textOf = event => {
   if (!Array.isArray(blocks)) return null;
   return blocks.find(block => block?.type === 'text' && typeof block.text === 'string')?.text ?? null;
 };
+
+/** Searchable text of one derived message: text blocks and tool-call arguments only. */
+function messageSearchText(message) {
+  const content = message?.content;
+  if (!Array.isArray(content)) return '';
+  const parts = [];
+  for (const block of content) {
+    if (block?.type === 'text' && typeof block.text === 'string') parts.push(block.text);
+    else if (block?.type === 'tool-call') parts.push(String(block.arguments ?? ''));
+  }
+  return parts.join('\n');
+}
 
 /** Read the opaque archive marker carried by a Surface replacement, or null when the event is not one. */
 function parseArchiveMarker(event) {
@@ -321,6 +340,39 @@ export function createHistoryArchive(ctx, diagnostics) {
       const agent = await resolve(id);
       const { markers } = scanArchives(agent);
       return { archives: markers.slice(0, limit).map(markerMetadata), total: markers.length };
+    },
+    async search(id, query, limit = SEARCH_LIMIT_DEFAULT) {
+      if (typeof query !== 'string') fail('INVALID_INPUT');
+      const trimmed = query.trim();
+      if (trimmed.length < 1 || trimmed.length > SEARCH_QUERY_MAX
+        || !Number.isSafeInteger(limit) || limit < 1 || limit > SEARCH_LIMIT_MAX) fail('INVALID_INPUT');
+      const agent = await resolve(id);
+      const { events, markers } = scanArchives(agent);
+      const needle = trimmed.toLowerCase();
+      const matches = [];
+      let total = 0, truncated = markers.length > SEARCH_ARCHIVES;
+      let scannedEvents = 0, scannedBytes = 0, stopped = false;
+      for (const marker of markers.slice(0, SEARCH_ARCHIVES)) {
+        for (const seq of marker.event.sourceEventSeqs) {
+          if (scannedEvents >= SEARCH_EVENTS) { truncated = true; stopped = true; break; }
+          scannedEvents += 1;
+          const event = events[seq];
+          if (!event || !VISIBLE.has(event.type)) continue;
+          const text = messageSearchText(agent.session.deriveEventMessage(event));
+          const size = Buffer.byteLength(text, 'utf8');
+          if (scannedBytes + size > SEARCH_BYTES) { truncated = true; stopped = true; break; }
+          scannedBytes += size;
+          const index = text.toLowerCase().indexOf(needle);
+          if (index < 0) continue;
+          total += 1;
+          if (matches.length >= limit) continue;
+          const start = Math.max(0, index - 60);
+          matches.push({ ref: marker.ref, seq, type: event.type,
+            excerpt: collapsedExcerpt(text.slice(start, index + trimmed.length + 60), SEARCH_EXCERPT) ?? '' });
+        }
+        if (stopped) break;
+      }
+      return { query: trimmed, matches, total, truncated };
     },
     async outline(id, limit = OUTLINE_LIMIT) {
       if (!validId(id) || !Number.isSafeInteger(limit) || limit < 1 || limit > OUTLINE_LIMIT_MAX) fail('INVALID_INPUT');

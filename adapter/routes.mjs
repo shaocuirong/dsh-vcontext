@@ -77,6 +77,31 @@ export function createHandler(config, transport, liveContext, diagnostics, repla
     if (foreignOrigin || request.headers?.['sec-fetch-site'] === 'cross-site')
       return send(response, 403, { ok: false, error: 'same-origin request required' });
 
+    // Match the search path before the exact history route. Search is a
+    // read-only convenience over the same immutable markers, never a body read.
+    if (url.pathname === `${ROUTE_PREFIX}history/search`) {
+      if (!localCarrier(request)) return send(response, 403, { ok: false, error: '仅接受本机同源请求。' });
+      if (!historyArchive) return send(response, 503, { ok: false, error: '会话历史归档服务尚未就绪。' });
+      if (request.method !== 'GET') return send(response, 405, { ok: false, error: 'GET only' });
+      try {
+        const session = sessionOf(url);
+        if (!session) throw new Error('session required');
+        if ([...url.searchParams.keys()].some(key => !['session', 'q', 'limit'].includes(key))) throw new Error('invalid query');
+        const q = (url.searchParams.get('q') ?? '').trim();
+        if (!q || q.length > 256) throw new Error('q must be 1..256 characters');
+        let limit = 5;
+        if (url.searchParams.has('limit')) {
+          const raw = url.searchParams.get('limit'), value = Number(raw);
+          if (!/^\d+$/.test(raw) || !Number.isSafeInteger(value) || value < 1 || value > 20)
+            throw new Error('limit must be 1..20');
+          limit = value;
+        }
+        return send(response, 200, { ok: true, result: await historyArchive.search(session, q, limit) });
+      } catch (error) {
+        return send(response, 400, { ok: false, error_code: error?.code ?? 'failed', error: String(error?.message ?? error) });
+      }
+    }
+
     if (url.pathname === `${ROUTE_PREFIX}history`) {
       if (!localCarrier(request)) return send(response, 403, { ok: false, error: '仅接受本机同源请求。' });
       if (!historyArchive) return send(response, 503, { ok: false, error: '会话历史归档服务尚未就绪。' });

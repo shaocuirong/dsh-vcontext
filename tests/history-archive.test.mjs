@@ -401,3 +401,59 @@ test('outline is bounded and drops oldest archives', async t => {
   await assert.rejects(() => archive.outline(agent.id, 0), { code: 'INVALID_INPUT' });
   await assert.rejects(() => archive.outline(agent.id, 17), { code: 'INVALID_INPUT' });
 });
+
+test('history_search finds archived text with bounded excerpts', async t => {
+  const fixture = historyFixture();
+  t.after(() => fixture.dispose());
+  const { agent, archive } = fixture;
+  await archive.archive(agent.id, 2);
+  const result = await archive.search(agent.id, 'private tool result');
+  assert.equal(result.query, 'private tool result');
+  assert.ok(result.matches.length >= 1);
+  assert.equal(result.matches[0].type, 'tool/result');
+  assert.ok(result.matches[0].excerpt.length <= 160);
+  assert.match(result.matches[0].excerpt, /private tool result/);
+  assert.equal(result.truncated, false);
+  // Tool-call arguments are searchable too; image and unknown blocks are not.
+  const argumentsMatch = await archive.search(agent.id, '{}');
+  assert.equal(argumentsMatch.matches[0].type, 'assistant/message');
+  // Only bounded excerpts leave the archive; archived message bodies never do.
+  assert.equal(JSON.stringify(result).includes('private question 1'.repeat(40)), false);
+  assert.equal(JSON.stringify(result).includes('private tool result'.repeat(120)), false);
+});
+
+test('history_search scans only the newest eight archives', async t => {
+  const fixture = historyFixture();
+  t.after(() => fixture.dispose());
+  const { session, agent, archive } = fixture;
+  const refs = [];
+  for (let index = 0; index < 9; index++)
+    refs.push(syntheticArchive(session, index, `search topic ${index}`, null).ref);
+  const result = await archive.search(agent.id, 'search topic', 20);
+  assert.equal(result.truncated, true);
+  assert.equal(result.total, 8);
+  assert.equal(result.matches.length, 8);
+  // Newest first, and the ninth (oldest) archive is outside the scan bound.
+  assert.deepEqual(result.matches.map(match => match.ref), refs.slice(1).reverse());
+});
+
+test('history_search bounds results and handles no match', async t => {
+  const fixture = historyFixture();
+  t.after(() => fixture.dispose());
+  const { agent, archive } = fixture;
+  await archive.archive(agent.id, 2);
+  const none = await archive.search(agent.id, 'definitely-not-present', 5);
+  assert.equal(none.matches.length, 0);
+  assert.equal(none.total, 0);
+  assert.equal(none.truncated, false);
+  const bounded = await archive.search(agent.id, 'private', 2);
+  assert.equal(bounded.matches.length, 2);
+  assert.ok(bounded.total > bounded.matches.length);
+  const insensitive = await archive.search(agent.id, 'PRIVATE TOOL RESULT');
+  assert.ok(insensitive.matches.length >= 1);
+  assert.equal(insensitive.matches[0].type, 'tool/result');
+  await assert.rejects(() => archive.search(agent.id, '   '), { code: 'INVALID_INPUT' });
+  await assert.rejects(() => archive.search(agent.id, 'x'.repeat(257)), { code: 'INVALID_INPUT' });
+  await assert.rejects(() => archive.search(agent.id, 'x', 0), { code: 'INVALID_INPUT' });
+  await assert.rejects(() => archive.search(agent.id, 'x', 21), { code: 'INVALID_INPUT' });
+});
