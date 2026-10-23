@@ -13,6 +13,8 @@ import { validateConfig } from './bridge.mjs';
 
 export const ROUTE_PREFIX = '/vctx/';
 const MAX_BODY_BYTES = 16384;
+// A valid update can contain 4096 + 1024 Unicode code points, plus metadata.
+const MAX_TASK_BODY_BYTES = 32768;
 
 function send(response, status, payload) {
   const body = Buffer.from(JSON.stringify(payload), 'utf-8');
@@ -24,13 +26,13 @@ function send(response, status, payload) {
   response.end(body);
 }
 
-function readBody(request) {
+function readBody(request, maximum = MAX_BODY_BYTES) {
   return new Promise((resolve, reject) => {
     let size = 0;
     const chunks = [];
     request.on('data', chunk => {
       size += chunk.length;
-      if (size > MAX_BODY_BYTES) {
+      if (size > maximum) {
         reject(new Error('body too large'));
         request.destroy();
         return;
@@ -111,7 +113,7 @@ export function createHandler(config, transport, liveContext, diagnostics, repla
         }
         if (request.method !== 'POST') return send(response, 405, { ok: false, error: 'GET or POST only' });
         if (!['create', 'update', 'select', 'fork', 'attach', 'review'].includes(action)) return send(response, 404, { ok: false, error: 'unknown route' });
-        const body = JSON.parse(await readBody(request));
+        const body = JSON.parse(await readBody(request, MAX_TASK_BODY_BYTES));
         if (!body || typeof body.session !== 'string' || !body.session || body.session.length > 256) throw new Error('session required');
         const { session, ...input } = body;
         return send(response, 200, { ok: true, result: await taskController.mutate(session, action, input) });
