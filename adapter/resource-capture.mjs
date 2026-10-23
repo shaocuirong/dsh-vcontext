@@ -15,9 +15,20 @@ export async function captureResource(ctx, transport, bridge, exec, input, { ena
   if (typeof input.request_id !== 'string' || !input.request_id || input.request_id.length > 256)
     throw new Error('resource_capture requires a stable request_id');
   exec.signal?.throwIfAborted();
+  // An already-pinned session must not even resolve the live workspace during
+  // bridge synchronization. Recheck after binding as synchronization can race
+  // another explicit snapshot selection; resource_store is the final guard.
+  const previousSnapshot = await transport.call(exec.agent.id, 'snapshot_status', {}, exec.signal);
+  if (previousSnapshot?.target?.mode === 'pinned')
+    throw new Error('session is pinned to a resource snapshot; detach or branch before capturing current files');
   const synced = await bridge.sync(exec.agent, exec.signal);
   if (synced.state !== 'synced') throw new Error(`session bridge unavailable: ${synced.error_code ?? synced.state}`);
   const state = await transport.call(exec.agent.id, 'state_status', {}, exec.signal);
+  const snapshot = await transport.call(exec.agent.id, 'snapshot_status', {}, exec.signal);
+  if (snapshot?.target?.mode === 'pinned')
+    throw new Error('session is pinned to a resource snapshot; detach or branch before capturing current files');
+  if (snapshot?.target?.mode !== 'working')
+    throw new Error('session resource target is unavailable; inspect the snapshot binding before capture');
   const project = await resolveProjectRoot(ctx, exec.agent);
   const binding = state.binding;
   if (!binding || !project || binding.project_id !== project.project_id || binding.target_commit !== null)

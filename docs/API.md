@@ -227,7 +227,7 @@ Bridge 仅重复解析上一 cursor 边界并解析新增后缀，数据库核�
 
 ### 迁移与恢复
 
-首次打开已发布 schema 1–6 的磁盘库，使用 SQLite backup 在同目录创建唯一 `.pre-schema7-<id>.bak`，成功后再事务迁移到主 schema7 / 结构化 schema2。保留旧页面、修订、配置、检查点、用量与渲染指纹；迁移失败回滚，不覆盖已有备份。未知未来 schema 或未发布结构化草稿 schema1 均拒绝打开。回退旧插件不能直接读 schema7：先关闭所有使用该库的宿主，再人工选择备份恢复，不自动替换数据库。
+当前 0.7.0 首次打开已发布 schema 1–7 的磁盘库，使用 SQLite backup 在同目录创建唯一 `.pre-schema8-<id>.bak`，成功后再事务迁移到主 schema8 / vc2 / vcr1 / vcs1。保留旧页面、修订、配置、检查点、用量与渲染指纹；迁移失败回滚，不覆盖已有备份。未知未来 schema 或未发布结构化草稿 schema1 均拒绝打开。升级前必须完全关闭所有使用该库的旧宿主：旧版本的新连接拒绝 schema8，升级前已打开的连接却不能靠版本号阻止继续写。降级须人工保留升级后数据并选择旧备份，不自动替换数据库。
 
 ## 可恢复工具结果（0.6.0）
 
@@ -256,3 +256,43 @@ job completed 只表示计划保存完成，message 明确等待下一次模型�
 同会话相同运行任务合并，不同变更返回BUSY；任务状态有界，重启后以持久化计划与当前Surface为准。新接口只接受本机 Host、loopback 对端及完整同源请求，POST必须携带Origin；它不是远程认证API。字节减少不等于精确Token或供应商缓存收益。
 
 主 schema7 / vc2保持，新增结果扩展vcr1前为已有库生成唯一 `.pre-result1-<id>.bak`。降级前先取消未应用计划并恢复仍驻留引用、确认应用，再退出宿主切换代码；旧版无result_read。完整协议和论文映射见 [PROJECTION-0.6.0.md](PROJECTION-0.6.0.md)。
+
+以上是 0.6.0 的历史迁移行为；0.7.0 当前迁移以 schema8 规则为准。
+
+## 会话资源快照（0.7.0）
+
+范围始终是 `coverage: registered-resources`，不是全工作区文件集合。所有操作由宿主注入 namespace/session；模型不能更换项目、会话或伪造来源。`snapshot_status` 无绑定时返回 binding/target 为 null，其余操作需要已绑定项目。目标形态：
+
+```json
+{"mode":"working","snapshot_ref":null,"base_ref":null,"revision":0}
+```
+
+| 操作 | 输入 | 返回 / 语义 |
+|---|---|---|
+| snapshot_status | {} | binding、target、effective_count、working_count、coverage；元数据，不加载正文 |
+| snapshot_create | request_id, expected_revision, label? | snapshot、target、replayed；事务冻结整个有效集合，最多10000项 |
+| snapshot_list | limit=20，最大100 | snapshots；仅本会话，最近优先 |
+| snapshot_read | ref, offset=0, limit=100 | snapshot、entries、offset、next_offset、has_more；limit最大100 |
+| snapshot_diff | left_ref, right_ref, offset=0, limit=100 | left、right、counts、changes及分页；counts区分added/removed/changed/identity_changed |
+| snapshot_checkout | ref, expected_revision, request_id | snapshot_ref、target、replayed；固定明确的同项目清单，保留原工作集 |
+| snapshot_detach | expected_revision, request_id | target、replayed；返回保留工作集，不复制固定清单 |
+| snapshot_branch | ref, expected_revision, request_id | snapshot_ref、safety_snapshot_ref、target、replayed；先同事务保存原工作集，再复制所选清单到独立可写集合 |
+
+ref 形如 `vctx://snapshot/<32位小写十六进制>`，显式引用可在同 namespace/project 读取和选择；不同项目拒绝。清单项包括 path、ref、content_hash、version、source_revision、source_session_id、operation_id、char_count、byte_count；不返回原文。manifest_hash 对规范排序的身份/来源元数据求哈希，不是纯正文树哈希。branch 新资源有本会话新版本号，parent_ref 保留源引用，operation_id 不冒充本会话操作。正文相同但版本/来源身份不同单列 identity_changed。
+
+四种变更均需目标 CAS；真实 resource_store 也推进修订，幂等重放不推进。相同 request_id/输入返回原回执及**当前** target，不重新执行，也不撤销后续切换；同 ID 不同输入拒绝。working create 更新基线，pinned create 保留 working 基线，新快照 parent 指向所选清单。branch 的安全快照保存的是被替换的完整 working 集合，包含固定时暂时不可见的路径。
+
+每会话最多新增10000个当前资源路径，更新已有路径和幂等重放仍允许。旧版合法超限集合可迁移并继续读原文/历史，status返回真实数量、entry_limit、working_over_limit；working超限时 effective_manifest_hash 为 null，不把截断集合伪装成完整快照。该集合的 create 和需安全备份的 branch 拒绝，checkout/detach仍可。历史批量查询在单事务内复用一次已校验的固定清单，不跨请求缓存有效性。
+
+固定期间 resource_read(path) 仅解析 manifest，缺 path 失败；显式 resource_read(ref) 仍是历史读取。resource_store 和 resource_capture 拒绝；捕获在宿主文件访问前预检查，并由数据库原子守卫兜底。current_in_session 根据有效目标计算。resource_history 仍是本会话历史，不据其列表推断快照完整集合。选择/创建会校验 manifest 与版本元数据，正文仅在显式读取时校验哈希。
+
+模型上下文在原页面前缀后附加一行 `format: vctx-session-target-v1` JSON，包含项目、target、有效/保留数量和范围。此小段元数据不计入插件页面字节预算，也不是精确 Token；它不自动加载资源全文，不删历史工具结果，不改变结果投影计划。原生文件工具仍读写真实工作区，DSH Fork 不自动继承资源切点。
+
+| 本机路由 | 方法与输入 | 行为 |
+|---|---|---|
+| /vctx/snapshots?session=… | GET | 恢复/同步选定宿主会话，返回 snapshots:{status,snapshots} |
+| /vctx/snapshots/read | GET session,ref,offset?,limit? | 返回 result，与 snapshot_read 相同 |
+| /vctx/snapshots/diff | GET session,left_ref,right_ref,offset?,limit? | 返回 result，与 snapshot_diff 相同 |
+| /vctx/snapshots/create 或 checkout/detach/branch | POST {session,...对应操作参数} | 经公开 runMaintenance、Bridge 和 SQLite CAS；200返回result，BUSY/CHANGED/ROOT_CHANGED为409 |
+
+仅本机完整同源请求，POST必需Origin；不作远程认证API。单会话变更互斥，总pending最多32；卸载取消并等待，异常不自动重试写入。日志只记录操作、session哈希、耗时及固定错误码。未确认响应时先刷新目标；API重试同一逻辑动作保留原request_id和输入。设计及论文见 [SNAPSHOTS-0.7.0.md](SNAPSHOTS-0.7.0.md)。

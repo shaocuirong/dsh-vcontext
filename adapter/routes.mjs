@@ -47,7 +47,16 @@ function sessionOf(url) {
   return session && session.length <= 256 ? session : null;
 }
 
-export function createHandler(config, transport, liveContext, diagnostics, replacement, sessionBridge, resultProjection, resultJobs) {
+function localCarrier(request) {
+  let host = false;
+  try { host = ['localhost', '127.0.0.1', '[::1]'].includes(new URL(`http://${request.headers?.host}`).hostname); }
+  catch { /* Not a local browser origin. */ }
+  const peer = request.socket?.remoteAddress;
+  return host && (!peer || ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(peer))
+    && (request.method !== 'POST' || Boolean(request.headers?.origin));
+}
+
+export function createHandler(config, transport, liveContext, diagnostics, replacement, sessionBridge, resultProjection, resultJobs, sessionSnapshots) {
   const settings = validateConfig(config);
   return async function handle(request, response) {
     let url;
@@ -66,13 +75,47 @@ export function createHandler(config, transport, liveContext, diagnostics, repla
     if (foreignOrigin || request.headers?.['sec-fetch-site'] === 'cross-site')
       return send(response, 403, { ok: false, error: 'same-origin request required' });
 
+    if (url.pathname === `${ROUTE_PREFIX}snapshots` || url.pathname.startsWith(`${ROUTE_PREFIX}snapshots/`)) {
+      if (!localCarrier(request)) return send(response, 403, { ok: false, error: '仅接受本机同源请求。' });
+      if (!sessionSnapshots) return send(response, 503, { ok: false, error: '会话资源快照服务尚未就绪。' });
+      const action = url.pathname === `${ROUTE_PREFIX}snapshots` ? '' : url.pathname.slice(`${ROUTE_PREFIX}snapshots/`.length);
+      try {
+        if (request.method === 'GET') {
+          const session = sessionOf(url);
+          if (!session) throw new Error('session required');
+          if (!action) return send(response, 200, { ok: true, snapshots: await sessionSnapshots.inspect(session) });
+          if (!['read', 'diff'].includes(action)) return send(response, 404, { ok: false, error: 'unknown route' });
+          const keys = action === 'read' ? ['ref'] : ['left_ref', 'right_ref'];
+          if ([...url.searchParams.keys()].some(key => !['session', 'offset', 'limit', ...keys].includes(key))) throw new Error('invalid query');
+          const input = {};
+          for (const key of keys) {
+            const value = url.searchParams.get(key);
+            if (!/^vctx:\/\/snapshot\/[a-f0-9]{32}$/.test(value ?? '')) throw new Error('snapshot ref required');
+            input[key] = value;
+          }
+          for (const [key, minimum, maximum] of [['offset', 0, Number.MAX_SAFE_INTEGER], ['limit', 1, 100]]) {
+            if (!url.searchParams.has(key)) continue;
+            const raw = url.searchParams.get(key);
+            const value = Number(raw);
+            if (!/^\d+$/.test(raw) || !Number.isSafeInteger(value) || value < minimum || value > maximum) throw new Error('invalid pagination');
+            input[key] = value;
+          }
+          return send(response, 200, { ok: true, result: await transport.call(session, `snapshot_${action}`, input) });
+        }
+        if (request.method !== 'POST') return send(response, 405, { ok: false, error: 'GET or POST only' });
+        if (!['create', 'checkout', 'detach', 'branch'].includes(action)) return send(response, 404, { ok: false, error: 'unknown route' });
+        const body = JSON.parse(await readBody(request));
+        if (!body || typeof body.session !== 'string' || !body.session || body.session.length > 256) throw new Error('session required');
+        const { session, ...input } = body;
+        return send(response, 200, { ok: true, result: await sessionSnapshots[action](session, input) });
+      } catch (error) {
+        return send(response, ['BUSY', 'CHANGED', 'ROOT_CHANGED'].includes(error?.code) ? 409 : 400,
+          { ok: false, error_code: error?.code ?? 'failed', error: String(error?.message ?? error) });
+      }
+    }
+
     if (url.pathname === `${ROUTE_PREFIX}results` || url.pathname.startsWith(`${ROUTE_PREFIX}results/`)) {
-      let localHost = false;
-      try { localHost = ['localhost', '127.0.0.1', '[::1]'].includes(new URL(`http://${request.headers?.host}`).hostname); }
-      catch { /* Invalid or absent Host is never a local browser origin. */ }
-      const peer = request.socket?.remoteAddress;
-      const localPeer = !peer || ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(peer);
-      if (!localHost || !localPeer || (request.method === 'POST' && !origin))
+      if (!localCarrier(request))
         return send(response, 403, { ok: false, error: '仅接受本机同源请求。' });
       if (!resultProjection) return send(response, 503, { ok: false, error: '工具结果投影服务尚未就绪。' });
       try {
@@ -198,6 +241,7 @@ export function createHandler(config, transport, liveContext, diagnostics, repla
         dashboard.live_context = await liveContext?.read(session) ?? { current: null, last_request: null, source: 'unavailable' };
         dashboard.context_replacement = replacement?.read(session) ?? null;
         dashboard.session_bridge = sessionBridge?.status(session) ?? null;
+        dashboard.session_snapshot = sessionSnapshots ? await transport.call(session, 'snapshot_status', {}) : null;
         if (diagnostics) dashboard.diagnostics = diagnostics.snapshot();
         return send(response, 200, { ok: true, namespace: settings.namespace, session, dashboard });
       } catch (error) {
@@ -211,7 +255,7 @@ export function createHandler(config, transport, liveContext, diagnostics, repla
   };
 }
 
-export function mountRoutes(ctx, config, transport, liveContext, diagnostics, replacement, sessionBridge, resultProjection, resultJobs) {
+export function mountRoutes(ctx, config, transport, liveContext, diagnostics, replacement, sessionBridge, resultProjection, resultJobs, sessionSnapshots) {
   const webServer = ctx.get('webServer');
   // The shipped web and desktop profiles always carry the HTTP carrier. A CLI
   // or SDK-only composition has none, and then there is simply no route to
@@ -219,5 +263,5 @@ export function mountRoutes(ctx, config, transport, liveContext, diagnostics, re
   // service-resolution waterfall and can corrupt the value other plugins read,
   // which is exactly what the real-SDK test caught.
   if (!webServer || typeof webServer.register !== 'function') return () => {};
-  return webServer.register({ kind: 'prefix', path: ROUTE_PREFIX.slice(0, -1), handler: createHandler(config, transport, liveContext, diagnostics, replacement, sessionBridge, resultProjection, resultJobs) });
+  return webServer.register({ kind: 'prefix', path: ROUTE_PREFIX.slice(0, -1), handler: createHandler(config, transport, liveContext, diagnostics, replacement, sessionBridge, resultProjection, resultJobs, sessionSnapshots) });
 }

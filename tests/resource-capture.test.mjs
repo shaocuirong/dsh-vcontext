@@ -90,3 +90,45 @@ test('capture is opt-in and respects denied filesystem providers without a Node 
     f.transport, f.bridge, f.exec, input, { enabled: true }), /filesystem world/);
   assert.equal(attempts, 1);
 });
+
+test('pinned capture rejects before resolving a project or accessing the filesystem provider', async t => {
+  const f = await setup(t);
+  const saved = await f.transport.call(f.agent.id, 'snapshot_create', { expected_revision: 0, request_id: 'empty-snapshot' });
+  await f.transport.call(f.agent.id, 'snapshot_checkout', {
+    ref: saved.snapshot.ref, expected_revision: saved.target.revision, request_id: 'pin-before-capture',
+  });
+  let accesses = 0;
+  const ctx = { get() { accesses++; throw new Error('filesystem must not be reached'); } };
+  const bridge = { sync() { accesses++; throw new Error('bridge project resolution must not be reached'); } };
+  await assert.rejects(captureResource(ctx, f.transport, bridge, f.exec,
+    { path: 'private.txt', request_id: 'pinned-capture' }, { enabled: true }), /pinned/);
+  assert.equal(accesses, 0);
+  assert.equal((await f.transport.call(f.agent.id, 'state_status', {})).counts.resource_versions, 0);
+});
+
+test('a concurrent pin after the early check is rejected by the atomic resource-store guard', async t => {
+  const f = await setup(t);
+  await writeFile(join(f.root, 'core.py'), 'original');
+  const captured = await captureResource(f.ctx, f.transport, f.bridge, f.exec,
+    { path: 'core.py', request_id: 'initial' }, { enabled: true });
+  const status = await f.transport.call(f.agent.id, 'snapshot_status', {});
+  const saved = await f.transport.call(f.agent.id, 'snapshot_create', {
+    expected_revision: status.target.revision, request_id: 'save-original',
+  });
+  await writeFile(join(f.root, 'core.py'), 'changed on disk');
+  let stored = 0;
+  const transport = { async call(id, operation, input, signal) {
+    if (operation === 'resource_store') {
+      stored++;
+      await f.transport.call(id, 'snapshot_checkout', {
+        ref: saved.snapshot.ref, expected_revision: saved.target.revision, request_id: 'concurrent-pin',
+      }, signal);
+    }
+    return f.transport.call(id, operation, input, signal);
+  } };
+  await assert.rejects(captureResource(f.ctx, transport, f.bridge, f.exec,
+    { path: 'core.py', request_id: 'racing-capture', expected_ref: captured.resource.ref }, { enabled: true }), /pinned/);
+  assert.equal(stored, 1);
+  assert.equal((await f.transport.call(f.agent.id, 'state_status', {})).counts.resource_versions, 1);
+  assert.equal((await f.transport.call(f.agent.id, 'resource_read', { path: 'core.py' })).content, 'original');
+});

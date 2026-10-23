@@ -57,6 +57,47 @@ test('state route reports the per-session switch and needs a session', async () 
   assert.equal((await invoke(handler, 'POST', `${ROUTE_PREFIX}state?session=s-1`)).status, 405);
 });
 
+test('snapshot routes preserve CAS receipts and bounded explicit metadata selection', async () => {
+  const ref = `vctx://snapshot/${'a'.repeat(32)}`;
+  const calls = [];
+  const controller = {
+    async inspect(session) { calls.push(['inspect', session]); return { status: { target: { revision: 3 } }, snapshots: [] }; },
+    async checkout(session, input) { calls.push(['checkout', session, input]); return { target: { mode: 'pinned', revision: 4 } }; },
+    async branch() { throw Object.assign(new Error('刷新后重试'), { code: 'CHANGED' }); },
+  };
+  const stub = transport({ snapshot_read: { entries: [], has_more: false }, snapshot_diff: { changes: [] } });
+  const handler = createHandler(CONFIG, stub, null, null, null, null, null, null, controller);
+  assert.equal((await invoke(handler, 'GET', '/vctx/snapshots?session=s')).body.snapshots.status.target.revision, 3);
+  const input = { session: 's', request_id: 'attempt-1', expected_revision: 3, ref };
+  assert.equal((await invoke(handler, 'POST', '/vctx/snapshots/checkout', JSON.stringify(input))).body.result.target.mode, 'pinned');
+  assert.deepEqual(calls, [['inspect', 's'], ['checkout', 's', { request_id: 'attempt-1', expected_revision: 3, ref }]]);
+  assert.equal((await invoke(handler, 'GET', `/vctx/snapshots/read?session=s&ref=${encodeURIComponent(ref)}&offset=1&limit=50`)).status, 200);
+  assert.deepEqual(stub.calls[0], { session: 's', operation: 'snapshot_read', input: { ref, offset: 1, limit: 50 } });
+  for (const suffix of ['limit=101', 'offset=-1', 'limit=NaN', 'force=true'])
+    assert.equal((await invoke(handler, 'GET', `/vctx/snapshots/read?session=s&ref=${encodeURIComponent(ref)}&${suffix}`)).status, 400);
+  assert.equal(stub.calls.length, 1);
+  const stale = await invoke(handler, 'POST', '/vctx/snapshots/branch', JSON.stringify(input));
+  assert.equal(stale.status, 409); assert.equal(stale.body.error_code, 'CHANGED');
+  assert.equal((await invoke(handler, 'POST', '/vctx/snapshots/read', JSON.stringify(input))).status, 404);
+});
+
+test('snapshot reads and mutations reject remote carriers before accessing state', async () => {
+  let calls = 0;
+  const handler = createHandler(CONFIG, {}, null, null, null, null, null, null, { inspect() { calls++; } });
+  for (const [method, headers, peer] of [
+    ['GET', { host: 'public.example', origin: 'http://public.example' }, '127.0.0.1'],
+    ['GET', { host: 'localhost' }, '192.168.1.2'],
+    ['POST', { host: 'localhost' }, '127.0.0.1'],
+    ['GET', { host: 'localhost', origin: 'https://localhost' }, '127.0.0.1'],
+  ]) {
+    const req = request(method, '/vctx/snapshots?session=s');
+    req.headers = headers; req.socket = { remoteAddress: peer };
+    const res = response(); await handler(req, res);
+    assert.equal(res.captured.status, 403);
+  }
+  assert.equal(calls, 0);
+});
+
 test('conversation replacement accepts a fast job and exposes status without using policy_tick', async () => {
   const calls = [];
   const jobs = { start(session) { calls.push(session); return { id: 'job', status: 'running' }; },

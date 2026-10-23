@@ -306,8 +306,10 @@ class PublishedSchemaSevenUpgradeTests(unittest.TestCase):
             store.checkpoint('published')
             store.set_session_enabled(True)
         db = sqlite3.connect(self.path)
-        for table in ('vcr_plans', 'vcr_marks', 'vcr_results', 'vcr_schema'):
+        for table in ('vcs_targets', 'vcs_entries', 'vcs_snapshots', 'vcs_schema',
+                      'vcr_plans', 'vcr_marks', 'vcr_results', 'vcr_schema'):
             db.execute('DROP TABLE ' + table)
+        db.execute("UPDATE metadata SET value='7' WHERE key='schema'")
         db.commit()
         db.close()
 
@@ -317,12 +319,12 @@ class PublishedSchemaSevenUpgradeTests(unittest.TestCase):
     def test_schema_seven_addition_is_backed_up_once_and_preserves_page_state(self):
         with ContextStore(self.path, 'legacy') as store:
             backup_path = Path(store.migration_backup)
-            self.assertIn('.pre-result1-', backup_path.name)
+            self.assertIn('.pre-schema8-', backup_path.name)
             self.assertEqual(store.snapshot()['sha'], self.sha)
             self.assertEqual(store.read(self.page)['content'], 'schema7 原文')
             self.assertTrue(store.session_state()['enabled'])
             self.assertEqual(store.checkpoints()[0]['label'], 'published')
-            self.assertEqual(store.db.execute("SELECT value FROM metadata WHERE key='schema'").fetchone()[0], '7')
+            self.assertEqual(store.db.execute("SELECT value FROM metadata WHERE key='schema'").fetchone()[0], '8')
         backup = sqlite3.connect(backup_path)
         self.assertEqual(backup.execute("SELECT COUNT(*) FROM sqlite_master WHERE name='vcr_schema'").fetchone()[0], 0)
         self.assertEqual(backup.execute("SELECT value FROM metadata WHERE key='schema'").fetchone()[0], '7')
