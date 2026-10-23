@@ -272,7 +272,7 @@ for (const [position, sourceIndex, expectedCount] of [
   });
 }
 
-function historyFixture() {
+function historyFixture(options = {}) {
   const root = new Context();
   const sessions = new SessionStore(root);
   const session = sessions.create('history-fixture', { meta: { cwd: tmpdir(), delegationDepth: 0 } });
@@ -293,7 +293,7 @@ function historyFixture() {
       session.append('tool/call', { turn, step: 1, callId: 'read-1', name: 'read', arguments: '{}' });
       session.append('tool/result', { turn, step: 1, message: {
         id: 'result', role: 'tool', toolCallId: 'read-1', source: { kind: 'tool', callId: 'read-1' },
-        content: [{ type: 'text', text: 'private tool result'.repeat(120) }],
+        content: [{ type: 'text', text: options.largeResult ?? 'private tool result'.repeat(120) }],
       } }, { surfaceOp: 'append' });
     }
     session.append('assistant/message', { turn, step: 1, stream: [], message: text(`a${turn}`, 'assistant',
@@ -410,6 +410,53 @@ test('history_read with seq returns one original message', async t => {
   assert.match(JSON.stringify(one.message), /private question 1/);
   assert.equal('content' in one, false);
   await assert.rejects(() => archive.read(agent.id, result.ref, 0, 65536, 99999), { code: 'NOT_FOUND' });
+});
+
+test('history_read paginates oversized messages within the response budget', async t => {
+  const large = '中文🌏'.repeat(30000);
+  const fixture = historyFixture({ largeResult: large });
+  t.after(() => fixture.dispose());
+  const { session, agent, archive } = fixture;
+  const result = await archive.archive(agent.id, 2);
+  const marker = session.snapshotEvents().find(event => event.surfaceOp?.op === 'replace');
+  const events = session.snapshotEvents();
+  const seq = marker.sourceEventSeqs.find(node => events[node]?.type === 'tool/result');
+  assert.ok(seq !== undefined);
+  const expected = JSON.stringify({ ref: result.ref, seq, type: 'tool/result',
+    message: session.deriveEventMessage(events[seq]) });
+  assert.ok(expected.length > 65536);
+  const first = await archive.read(agent.id, result.ref, 0, 65536, seq);
+  assert.equal(typeof first.content, 'string');
+  assert.equal(first.total, [...expected].length);
+  assert.ok(first.next_offset !== null);
+  assert.equal(first.truncated, true);
+  assert.match(first.content_hash, /^[a-f0-9]{64}$/);
+  assert.ok(Buffer.byteLength(JSON.stringify(first), 'utf8') <= 128 * 1024);
+  let content = first.content;
+  let next = first.next_offset;
+  while (next !== null) {
+    const part = await archive.read(agent.id, result.ref, next, 65536, seq, first.content_hash);
+    assert.ok(Buffer.byteLength(JSON.stringify(part), 'utf8') <= 128 * 1024);
+    content += part.content;
+    next = part.next_offset;
+  }
+  assert.equal(content, expected);
+  await assert.rejects(() => archive.read(agent.id, result.ref, 0, 65536, seq, '0'.repeat(64)), { code: 'CHANGED' });
+
+  // Full-span reads use the same code-point and UTF-8 response bound.
+  const full = await archive.read(agent.id, result.ref);
+  assert.ok(Buffer.byteLength(JSON.stringify(full), 'utf8') <= 128 * 1024);
+  assert.ok(full.next_offset !== null);
+  let fullContent = full.content;
+  let fullNext = full.next_offset;
+  while (fullNext !== null) {
+    const part = await archive.read(agent.id, result.ref, fullNext, 65536, null, full.content_hash);
+    fullContent += part.content;
+    fullNext = part.next_offset;
+  }
+  const parsed = JSON.parse(fullContent);
+  assert.equal(parsed.ref, result.ref);
+  assert.ok(parsed.source.some(entry => entry.seq === seq));
 });
 
 test('legacy 0.9.0 markers without meta still list and read', async t => {

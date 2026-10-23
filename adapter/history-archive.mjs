@@ -4,6 +4,9 @@ import { describeContext } from './live-context.mjs';
 const MAX_NODES = 256;
 const MAX_BYTES = 8 * 1024 * 1024;
 const MAX_READ = 65536;
+// A read response includes JSON wrappers, refs and metadata on top of content.
+// Bound the whole serialized response, not only the content characters.
+const MAX_RESPONSE_BYTES = 128 * 1024;
 const OUTLINE_FORMAT = 'vctx-history-v1';
 const OUTLINE_LIMIT = 8;
 const OUTLINE_BYTES = 2048;
@@ -25,6 +28,8 @@ const ERRORS = {
 };
 const fail = code => { throw Object.assign(new Error(ERRORS[code]), { code }); };
 const hash = value => createHash('sha256').update(value).digest('hex').slice(0, 16);
+const sha = value => createHash('sha256').update(value).digest('hex');
+const validContentHash = value => typeof value === 'string' && /^[a-f0-9]{64}$/u.test(value);
 const validId = value => typeof value === 'string' && value.length > 0 && value.length <= 256 && !/[\u0000-\u001f]/u.test(value);
 const validRequestId = value => validId(value);
 const validSeq = value => Number.isSafeInteger(value) && value >= 0;
@@ -206,6 +211,37 @@ export function selectArchiveSpan(session, keepTurns = 2) {
     keep_turns: keepTurns, protected_turns: protectedTurns.size };
 }
 
+/**
+ * Paginate a serialized history payload by Unicode code points and by UTF-8
+ * response bytes. The caller's wrapper decides the response shape; this helper
+ * guarantees that the whole JSON response (not only content) stays bounded.
+ */
+function paginateHistoryRead(content, offset, limit, wrap) {
+  const contentHash = sha(content);
+  let total = 0;
+  const part = [];
+  for (const character of content) {
+    if (total >= offset && total < offset + limit) part.push(character);
+    total += 1;
+  }
+  const make = (slice, count) => {
+    const nextOffset = offset + count < total ? offset + count : null;
+    return wrap(slice, { total, contentHash, nextOffset, truncated: nextOffset !== null || offset > 0 });
+  };
+  let slice = part.join('');
+  let response = make(slice, part.length);
+  while (Buffer.byteLength(JSON.stringify(response), 'utf8') > MAX_RESPONSE_BYTES && part.length > 1) {
+    const current = Buffer.byteLength(JSON.stringify(response), 'utf8');
+    const ratio = Math.max(0.5, (MAX_RESPONSE_BYTES - 512) / current);
+    const nextLength = Math.max(1, Math.floor(part.length * ratio));
+    if (nextLength >= part.length) break;
+    part.length = nextLength;
+    slice = part.join('');
+    response = make(slice, part.length);
+  }
+  return response;
+}
+
 /** Native log is authoritative; archiving changes only the model-visible Surface. */
 export function createHistoryArchive(ctx, diagnostics) {
   const pending = new Map();
@@ -365,10 +401,12 @@ export function createHistoryArchive(ctx, diagnostics) {
         }
       });
     },
-    async read(id, ref, offset = 0, limit = MAX_READ, seq = null) {
+    async read(id, ref, offset = 0, limit = MAX_READ, seq = null, expectedContentHash = null) {
       if (!validId(id) || typeof ref !== 'string' || !Number.isSafeInteger(offset) || offset < 0
         || !Number.isSafeInteger(limit) || limit < 1 || limit > MAX_READ
-        || (seq !== null && seq !== undefined && !validSeq(seq))) fail('INVALID_INPUT');
+        || (seq !== null && seq !== undefined && !validSeq(seq))
+        || (expectedContentHash !== null && expectedContentHash !== undefined && !validContentHash(expectedContentHash)))
+        fail('INVALID_INPUT');
       const match = /^vctx:\/\/history\/([a-f0-9]{16})\/(\d+)$/u.exec(ref);
       if (!match || match[1] !== hash(id)) fail('NOT_FOUND');
       const agent = await resolve(id);
@@ -376,11 +414,30 @@ export function createHistoryArchive(ctx, diagnostics) {
       const marker = events[Number(match[2])];
       const parsed = parseArchiveMarker(marker);
       if (!owned(parsed, id) || parsed.ref !== ref) fail('NOT_FOUND');
+      const checkHash = content => {
+        const contentHash = sha(content);
+        if (expectedContentHash !== null && expectedContentHash !== undefined && contentHash !== expectedContentHash)
+          fail('CHANGED');
+        return contentHash;
+      };
       if (seq !== null && seq !== undefined) {
         if (!marker.sourceEventSeqs.includes(seq)) fail('NOT_FOUND');
         const event = events[seq];
         if (!event || !VISIBLE.has(event.type)) fail('NOT_FOUND');
-        return { ref, seq, type: event.type, message: agent.session.deriveEventMessage(event) };
+        const message = agent.session.deriveEventMessage(event);
+        const content = JSON.stringify({ ref, seq, type: event.type, message });
+        checkHash(content);
+        // Small single-message reads keep the original object shape. If the
+        // message itself is too large, return paginated JSON text instead of
+        // pretending the truncated slice is the complete message.
+        if (offset === 0 && content.length <= limit
+          && Buffer.byteLength(content, 'utf8') <= MAX_RESPONSE_BYTES) {
+          return { ref, seq, type: event.type, message };
+        }
+        return paginateHistoryRead(content, offset, limit, (text, meta) => ({
+          ref, seq, type: event.type, offset, total: meta.total, content: text,
+          content_hash: meta.contentHash, next_offset: meta.nextOffset, truncated: meta.truncated,
+        }));
       }
       const source = marker.sourceEventSeqs.map(node => {
         const event = events[node];
@@ -388,14 +445,15 @@ export function createHistoryArchive(ctx, diagnostics) {
         return { seq: node, type: event.type, message: agent.session.deriveEventMessage(event) };
       });
       const content = JSON.stringify({ ref, source });
-      let total = 0;
-      const part = [];
-      for (const character of content) {
-        if (total >= offset && total < offset + limit) part.push(character);
-        total++;
-      }
-      return { ref, offset, total, content: part.join(''),
-        next_offset: offset + limit < total ? offset + limit : null };
+      checkHash(content);
+      const response = paginateHistoryRead(content, offset, limit, (text, meta) => ({
+        ref, offset, total: meta.total, content: text,
+        content_hash: meta.contentHash, next_offset: meta.nextOffset, truncated: meta.truncated,
+      }));
+      diagnostics?.record('context.history.read', 'debug', {
+        session_hash: hash(id), content_chars: content.length,
+        response_bytes: Buffer.byteLength(JSON.stringify(response), 'utf8'), offset });
+      return response;
     },
     async list(id, limit = 20) {
       if (!validId(id) || !Number.isSafeInteger(limit) || limit < 1 || limit > 100) fail('INVALID_INPUT');
