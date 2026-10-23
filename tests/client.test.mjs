@@ -176,3 +176,39 @@ test('the global preference still removes every surface', async () => {
   assert.equal(expand(find('conversation.view').component(props)), null);
   assert.equal(expand(find('sidebar.right.pane.tab').component(props)), null);
 });
+
+test('historyArchiveRequest carries the retry id and the preview CAS token', async () => {
+  const { module } = await loadClient();
+  assert.equal(typeof module.historyArchiveRequest, 'function');
+  assert.equal(typeof module.historyArchiveAttempt, 'function');
+  assert.equal(module.name, 'dsh-virtual-context');
+  assert.deepEqual(module.historyArchiveRequest('session-1', { count: 2, bytes: 10, surface_seq: 42 }, 'req-1'),
+    { session: 'session-1', keep_turns: 2, request_id: 'req-1', expected_surface_seq: 42 });
+});
+
+test('historyArchiveRequest omits expected_surface_seq without a preview surface', async () => {
+  const { module } = await loadClient();
+  for (const preview of [null, undefined, { count: 2 }, { surface_seq: '42' }, { surface_seq: 1.5 }]) {
+    const body = module.historyArchiveRequest('session-1', preview, 'req-1');
+    assert.deepEqual(body, { session: 'session-1', keep_turns: 2, request_id: 'req-1' });
+    assert.equal(Object.hasOwn(body, 'expected_surface_seq'), false);
+  }
+});
+
+test('historyArchiveAttempt reuses an id for an unchanged preview and rotates on refresh', async () => {
+  const { module } = await loadClient();
+  // The harness window has no crypto: ids must fall back to a nonempty string.
+  const first = module.historyArchiveAttempt(null, 7);
+  assert.equal(typeof first.id, 'string');
+  assert.ok(first.id.length > 0);
+  assert.deepEqual(first.attempt, { surface: 7, id: first.id });
+  const same = module.historyArchiveAttempt(first.attempt, 7);
+  assert.equal(same.id, first.id);
+  assert.deepEqual(same.attempt, { surface: 7, id: first.id });
+  const refreshed = module.historyArchiveAttempt(first.attempt, 8);
+  assert.notEqual(refreshed.id, first.id);
+  assert.deepEqual(refreshed.attempt, { surface: 8, id: refreshed.id });
+  const unknown = module.historyArchiveAttempt(same.attempt, null);
+  assert.notEqual(unknown.id, first.id);
+  assert.deepEqual(unknown.attempt, { surface: null, id: unknown.id });
+});

@@ -18,7 +18,7 @@
 - `request_id`（可选）：1–256 字符，不含 C0 控制字符。归档在宿主维护锁内、追加之前查找本会话同 ID 的 marker：相同 ID 且 `keep_turns` 相同直接返回原回执（`replayed:true`，不再追加第二条 marker）；相同 ID 但 `keep_turns` 不同返回 CHANGED。
 - `expected_surface_seq`（可选）：非负安全整数。其值来自预览返回的 `surface_seq`；归档在维护锁内先比较当前 Surface 序号，不匹配在追加前返回 CHANGED。
 - 两个字段都可省略；省略时行为与 0.9.0 相同，旧调用方和旧界面保持兼容。
-- 提交结果不确定时，不要换新 ID 盲目重试：同一会话同一 `keep_turns` 复用原 `request_id` 只会返回原回执。当前浏览器卡片的归档按钮仍只提交 `session` 与 `keep_turns`，尚未携带这两个字段；幂等与 CAS 目前通过路由/API 调用使用。
+- 看板归档按钮每次尝试生成一个 `request_id`，把预览的 `surface_seq` 作为 `expected_surface_seq` 发送；预览未变时重试复用同一 `request_id`，成功后或预览刷新后换新。提交结果不确定时，先刷新预览/实际上下文再决定下一步，不要仅因响应丢失就手工换新 ID；同一会话同一 `keep_turns` 复用原 `request_id` 只会返回原回执。
 
 ## 模型可见的有界大纲
 
@@ -50,9 +50,9 @@
 | `/vctx/history/search` | GET | `session`、`q`（1–256）、`limit`（1–20，默认 5） | `{ok:true,result}`；拒绝未知查询参数 |
 | `/vctx/dashboard` | GET | `session`、`events` | 增加 `history_archive:{total_archives,total_bytes,last_ref}`；摘要失败置 null，不影响其余看板 |
 
-所有路由保持本机同源：Host 必须为本机、对端必须是 loopback、POST 必须携带 Origin；跨来源返回 403，方法不符返回 405，归档服务未就绪返回 503。history POST 正文最多 16 KiB；BUSY / CHANGED / ROOT_CHANGED 映射 409，其余参数或校验错误 400。
+所有路由保持本机同源：Host 必须为本机、对端必须是 loopback、POST 必须携带 Origin；跨来源返回 403，方法不符返回 405，归档服务未就绪返回 503。history POST 正文最多 16 KiB。归档操作错误中仅 BUSY / CHANGED / ROOT_CHANGED 映射 409；其余（INVALID_INPUT / UNAVAILABLE / PERSISTENCE_FAILED / NO_ELIGIBLE / NOT_FOUND）映射 400，带稳定 `error_code` 与中文消息。路由层参数校验（缺 session、未知字段或查询参数、非法 request_id / expected_surface_seq、非法 q/limit、JSON 解析失败）也返回 400，但 `error_code` 为 `failed`，消息为英文。
 
-错误代码：`INVALID_INPUT`（参数与边界）、`UNAVAILABLE`（宿主服务/会话不可用或插件已卸载）、`BUSY`（会话运行/维护中或已有归档在进行）、`CHANGED`（request_id 冲突、expected_surface_seq 不匹配或归档期间 Surface 变化）、`PERSISTENCE_FAILED`（宿主未确认已保存）、`NOT_FOUND`（ref/seq 不属于本会话或该 marker）、`NO_ELIGIBLE`（没有完整旧轮次可归档）。错误消息为中文，错误代码稳定供调用方分支。
+归档操作错误使用以下稳定代码与中文消息：`INVALID_INPUT`（参数与边界）、`UNAVAILABLE`（宿主服务/会话不可用或插件已卸载）、`BUSY`（会话运行/维护中或已有归档在进行）、`CHANGED`（request_id 冲突、expected_surface_seq 不匹配或归档期间 Surface 变化）、`PERSISTENCE_FAILED`（宿主未确认已保存）、`NOT_FOUND`（ref/seq 不属于本会话或该 marker）、`NO_ELIGIBLE`（没有完整旧轮次可归档）。路由层参数校验不使用这些代码，统一为 `failed` + 英文消息。
 
 ## 明确不在本版范围
 
@@ -64,7 +64,6 @@
 
 ## 已知限制
 
-- 看板搜索框按 Enter 提交时未检查 IME composition；中文输入法确认候选词时可能误触发一次搜索。
 - session / request_id / query 的长度校验以及 first/excerpt 摘录上限按 JS UTF-16 码元计数，不是 Unicode 码点；恰好跨越代理对边界的极长输入或摘录可能与按码点计算的预期差 1。`history_read` 分页按码点迭代。
 - 检索的 2048 事件 / 4 MiB 文本上限由代码检查与单元测试覆盖，未做大规模数据压力测试；超出时 `truncated:true`，不代表没有更早的命中。
 - GET `/vctx/history` 的 list() 与 outline() 是两次独立读取；若并发归档 POST 恰好落在两次读取之间，卡片可能少显示一条新归档行（按 ref 连接时未知 ref 被丢弃）。

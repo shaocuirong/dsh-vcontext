@@ -25,12 +25,12 @@
 | `POST /vctx/policy` | 校验并保存统一替换策略 |
 | `POST /vctx/replace` | 用户手动将当前会话工作页换出到归档，正文保留 |
 | `GET /vctx/history?session=…` | 读取归档预览、归档清单与有界大纲（archives/total/outline） |
-| `POST /vctx/history` | 将旧聊天与工具结果通过宿主 Surface 换成可读取引用；可选 request_id / expected_surface_seq，当前卡片只提交会话与保留轮数 |
+| `POST /vctx/history` | 将旧聊天与工具结果通过宿主 Surface 换成可读取引用；卡片自动生成 request_id 并携带预览的 expected_surface_seq |
 | `GET /vctx/history/search?session=…&q=…&limit=…` | 在最近归档原文中做有界词法检索，返回 ref/seq/type 与 ≤160 字符摘录 |
 
 HTTP 前缀注册为 `/vctx`，处理器内部匹配 `/vctx/` 下的路径。宿主入口等待 `webServer` 和 `commands` 服务就绪后分别注册路由与命令。
 
-0.9.0 的会话历史归档与上述插件工作页换出为两个独立卡片。前者改变模型可见聊天与工具结果，显示实际上下文的前后字节；原始日志仍保留。0.10.0 起卡片读取 GET /vctx/history 后列出最多 8 条归档（ref、条数、字节、首条摘录），并可输入关键词调用搜索路由，最多显示 5 条有界摘录；大纲被截断时显示 truncated。归档按钮仍复用 0.9.0 的提交形态（会话与保留轮数），尚未自动携带 request_id / expected_surface_seq；幂等与预览 CAS 目前由 API 调用方使用。搜索框按 Enter 提交时未检查输入法组合状态，可能误触发一次搜索。接口契约、错误代码和恢复限制见 [API](API.md#会话历史归档查询010) 与 [会话历史虚拟上下文](HISTORY-VCONTEXT-0.10.0.md)。
+0.9.0 的会话历史归档与上述插件工作页换出为两个独立卡片。前者改变模型可见聊天与工具结果，显示实际上下文的前后字节；原始日志仍保留。0.10.0 起卡片读取 GET /vctx/history 后列出最多 8 条归档（ref、条数、字节、首条摘录），并可输入关键词调用搜索路由，最多显示 5 条有界摘录；大纲被截断时显示 truncated。归档按钮每次尝试生成一个 request_id，并把预览的 surface_seq 作为 expected_surface_seq 发送；预览未变时重试复用同一 request_id，成功后或预览刷新后换新。提交结果不确定时先刷新再重试同一身份，不要换新 ID。搜索框按 Enter 只在非输入法组合状态下提交。接口契约、错误代码和恢复限制见 [API](API.md#会话历史归档查询010) 与 [会话历史虚拟上下文](HISTORY-VCONTEXT-0.10.0.md)。
 
 ## 自动替换
 
