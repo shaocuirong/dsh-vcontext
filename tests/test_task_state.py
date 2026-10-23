@@ -365,6 +365,60 @@ class TaskTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 review(op)
 
+    def test_review_commit_order_survives_clock_rollback_and_uuid_ties(self):
+        # The later failure must win even if its wall clock and UUID sort lower.
+        cases = (("rollback", (2000, 1999)), ("same-time", (2000, 2000)))
+        for number, (name, timestamps) in enumerate(cases):
+            with self.subTest(case=name):
+                task = self.create(title=name)
+                self.select(task)
+                op = self.operation(call=name)
+                receipts = []
+                ids = ("f" * 31 + str(number), "0" * 31 + str(number))
+                for outcome, timestamp, review_id in zip(
+                    ("pass", "fail"), timestamps, ids
+                ):
+                    with patch("vcontext.task_state.time.time", return_value=timestamp):
+                        with patch(
+                            "vcontext.task_state.uuid.uuid4",
+                            return_value=type("ReviewId", (), {"hex": review_id})(),
+                        ):
+                            receipts.append(
+                                self.mutate(
+                                    "task_review",
+                                    ref=task["ref"],
+                                    expected_version=task["version"],
+                                    outcome=outcome,
+                                    reason="human inspected evidence",
+                                    operation_ids=[op["operation_id"]],
+                                )
+                            )
+                self.assertEqual(receipts[0]["task"]["verification"], "reviewed_pass")
+                self.assertEqual(receipts[1]["review"]["outcome"], "fail")
+                self.assertEqual(receipts[1]["task"]["verification"], "reviewed_fail")
+                self.assertEqual(
+                    self.a.task_context()["focus"]["verification"], "reviewed_fail"
+                )
+                read = self.a.task_read(task["ref"])
+                self.assertEqual(read["task"]["verification"], "reviewed_fail")
+                self.assertEqual(
+                    [r["outcome"] for r in read["reviews"]], ["fail", "pass"]
+                )
+                self.assertEqual(
+                    [r["created_at"] for r in read["reviews"]],
+                    list(reversed(timestamps)),
+                )
+                with ContextStore(self.path, self.store.scope) as reopened:
+                    state = TaskState(reopened.db, reopened.scope)
+                    restored = state.task_read(task["ref"])
+                    self.assertEqual(restored["task"]["verification"], "reviewed_fail")
+                    self.assertEqual(
+                        [r["outcome"] for r in restored["reviews"]], ["fail", "pass"]
+                    )
+                    self.assertEqual(
+                        state.task_context()["focus"]["verification"], "reviewed_fail"
+                    )
+
     def test_restart_multiple_connection_cas_and_history_integrity(self):
         task = self.create()
         self.select(task)
@@ -398,6 +452,43 @@ class TaskTests(unittest.TestCase):
         self.assertTrue(context["truncated"])
         self.assertEqual(len(context["path"]), 16)
         self.assertEqual(len(self.a.task_read(parent["ref"])["task"]["summary"]), 4096)
+
+    def test_deep_path_projection_preserves_nonblank_title_after_whitespace_trim(self):
+        from vcontext.task_state import JS_TRIM_CHARS
+
+        titles = (" " * 159 + "x", "\ufeff\u3000" * 79 + "\ufeffx")
+        for original in titles:
+            with self.subTest(title=repr(original)):
+                root = self.create(title=original)
+                task = root
+                for _ in range(15):
+                    task = self.create(title="界" * 160, parent_ref=task["ref"])
+                self.select(task)
+                context = self.a.task_context()
+                self.assertTrue(context["truncated"])
+                self.assertEqual(len(context["path"]), 16)
+                self.assertEqual(context["path"][0]["title"], "x")
+                self.assertTrue(
+                    all(
+                        entry["title"].strip(JS_TRIM_CHARS) for entry in context["path"]
+                    )
+                )
+                self.assertTrue(
+                    all(set(entry["title"]) == {"界"} for entry in context["path"][1:])
+                )
+                encoded = json.dumps(
+                    context, ensure_ascii=False, separators=(",", ":")
+                ).encode("utf-8")
+                self.assertLessEqual(len(encoded), 8192)
+                self.assertEqual(
+                    self.a.task_read(root["ref"])["task"]["title"], original
+                )
+                self.assertEqual(
+                    self.a.task_history(root["ref"])["versions"][0]["title"], original
+                )
+                self.assertEqual(
+                    self.a.task_read(task["ref"])["task"]["title"], "界" * 160
+                )
 
     def test_focused_goal_survives_restart_without_summary(self):
         goal = "Acceptance: restore the exact pinned file and keep complete source evidence."

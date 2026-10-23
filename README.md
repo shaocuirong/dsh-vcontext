@@ -1,6 +1,6 @@
 # dsh-vcontext
 
-当前版本：**[v0.8.0](https://github.com/shaocuirong/dsh-vcontext/releases/tag/v0.8.0)** · [任务执行状态](docs/TASKS-0.8.0.md) · [优化 Git 节点](docs/NODES-0.8.0.md) · [会话资源快照](docs/SNAPSHOTS-0.7.0.md) · [16 篇参考论文](docs/RESEARCH.md) · [更新日志](CHANGELOG.md) · [验证记录](docs/VALIDATION.md)
+当前版本：**[v0.8.1](https://github.com/shaocuirong/dsh-vcontext/releases/tag/v0.8.1)** · [任务执行状态](docs/TASKS-0.8.0.md) · [补丁 Git 节点](docs/NODES-0.8.1.md) · [功能 Git 节点](docs/NODES-0.8.0.md) · [会话资源快照](docs/SNAPSHOTS-0.7.0.md) · [16 篇参考论文](docs/RESEARCH.md) · [更新日志](CHANGELOG.md) · [验证记录](docs/VALIDATION.md)
 
 **DeepSeek Harness 客户端虚拟上下文管理器**：结构化操作、可追溯资源版本、有来源的摘要、按需换页与会话内看板。
 
@@ -41,6 +41,10 @@
 <summary>0.8.0 原生任务状态：目标、有效路径与可追溯进度</summary>
 
 ![任务与执行状态](docs/images/tasks-080.png)
+
+0.8.1 修复任务修订不变时的审核过期刷新；列表和明细明确标记为上次手动读取。
+
+![资源变化后的当前审核过期](docs/images/tasks-081.png)
 
 </details>
 
@@ -85,7 +89,7 @@
 
 要求：DeepSeek Harness、Python 3.10+、Node.js 22+。基础 SDK 回归基于 `0.2.0-rc.2`，工具结果投影和会话压缩已在本机 Harness `0.2.1-rc.2` 验证；投影需要公开维护、查询和持久化服务，并在真实 pre-step 应用，压缩需要 `compactNow`。缺少能力时显示原因，原始历史保留。
 
-**0.8.0 数据库升级注意**：先完全退出所有使用同一数据库的旧宿主，再更新并重启（包括托盘）。主schema1–8先生成唯一 `.pre-schema9-<id>.bak` 再事务迁移至schema9/vc2/vcr1/vcs1/vct1。旧0.7拒绝新库，但不能隔离升级前已打开的旧连接，因此禁止混跑版本。降级需人工保留升级后数据并选择旧备份；插件不自动覆盖数据库、备份或profile。
+**0.8.x 数据库升级注意**：先完全退出所有使用同一数据库的旧宿主，再更新并重启（包括托盘）。主schema1–8先生成唯一 `.pre-schema9-<id>.bak` 再事务迁移至schema9/vc2/vcr1/vcs1/vct1。0.8.1沿用0.8.0结构，无新增迁移；旧0.7拒绝新库，但不能隔离升级前已打开的旧连接，因此禁止混跑版本。降级需人工保留升级后数据并选择旧备份；插件不自动覆盖数据库、备份或profile。
 
 先完全退出桌面端，包括系统托盘，再安装：
 

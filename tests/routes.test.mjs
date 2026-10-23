@@ -4,8 +4,41 @@ import { createHandler, ROUTE_PREFIX } from '../adapter/routes.mjs';
 import { createCommand } from '../adapter/command.mjs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { createServer } from 'node:http';
+import { once } from 'node:events';
 
 const CONFIG = { dbPath: join(tmpdir(), 'vctx-route-test.db'), namespace: 'project' };
+
+test('task HTTP bodies accept full Unicode field limits while retaining a byte cap', async t => {
+  const calls = [];
+  const controller = { async mutate(session, action, input) {
+    calls.push({ session, action, input }); return { revision: calls.length };
+  } };
+  const handler = createHandler(CONFIG, transport(), undefined, undefined, undefined, undefined,
+    undefined, undefined, undefined, controller);
+  const server = createServer(handler);
+  server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve); }));
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  const common = { session: 's', request_id: 'unicode-test', expected_revision: 0,
+    ref: 'vctx://task/' + 'a'.repeat(32), expected_version: 1 };
+  const examples = [['review', { ...common, outcome: 'fail', reason: '😀'.repeat(4096),
+    operation_ids: ['b'.repeat(32)], expected_manifest_hash: 'sha256:' + 'c'.repeat(64),
+    expected_activity_hash: 'sha256:' + 'd'.repeat(64) }],
+  ['update', { ...common, summary: '😀'.repeat(4096), next_action: '😀'.repeat(1024) }]];
+  for (const [action, input] of examples) {
+    const body = JSON.stringify(input);
+    assert.ok(Buffer.byteLength(body) > 16384);
+    const response = await fetch(`${origin}/vctx/tasks/${action}`, {
+      method: 'POST', headers: { origin, 'content-type': 'application/json' }, body,
+    });
+    assert.equal(response.status, 200); assert.equal((await response.json()).ok, true);
+    assert.deepEqual(calls.at(-1).input, Object.fromEntries(Object.entries(input).filter(([key]) => key !== 'session')));
+  }
+  const oversized = await invoke(handler, 'POST', '/vctx/tasks/update', JSON.stringify({ ...common, summary: 'x'.repeat(32768) }));
+  assert.equal(oversized.status, 400); assert.match(oversized.body.error, /body too large/);
+  assert.equal(calls.length, 2, 'over-cap data must never reach the task controller');
+});
 
 function response() {
   const captured = { status: 0, body: '' };
