@@ -15,6 +15,7 @@ for (const path of ['index.mjs', 'lib/client.js', 'adapter/context-integration.m
   'adapter/session-bridge.mjs', 'adapter/resource-capture.mjs', 'vcontext/state.py', 'vcontext/migrations.py',
   'docs/RESEARCH.md', 'docs/ARCHITECTURE-0.5.0.md', 'docs/PROJECTION-0.6.0.md',
   'adapter/result-projection.mjs', 'adapter/result-jobs.mjs', 'docs/NODES-0.6.0.md',
-  'vcontext/result_store.py', 'vcontext/server.py'])
+  'vcontext/result_store.py', 'vcontext/server.py', 'vcontext/session_snapshots.py',
+  'adapter/session-snapshots.mjs', 'docs/SNAPSHOTS-0.7.0.md', 'docs/NODES-0.7.0.md'])
   await read(path);
 console.log(`Release metadata and entry points verified: v${version}`);
