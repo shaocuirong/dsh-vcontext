@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { describeContext } from './live-context.mjs';
+import { segmentHistoryPages } from './history-segmenter.mjs';
 
 const MAX_NODES = 256;
 const MAX_BYTES = 8 * 1024 * 1024;
@@ -286,6 +287,10 @@ export function createHistoryArchive(ctx, diagnostics) {
     try { return await operation; } finally { pending.delete(id); }
   }
   return {
+    async pages(id, options = {}) {
+      const agent = await resolve(id);
+      return segmentHistoryPages(agent.session, options);
+    },
     async inspect(id, keepTurns = 2) {
       const agent = await resolve(id);
       const span = selectArchiveSpan(agent.session, keepTurns);

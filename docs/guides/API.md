@@ -2,7 +2,7 @@
 
 所有操作通过 `ContextStore.dispatch(operation, arguments)` 调用；CLI 从 stdin 读取 arguments 对象；Harness `vctx` 的 `input` 是此对象的 JSON 字符串。
 
-`history_read`、`history_list` 与 `history_search` 是 Harness 宿主侧的 `vctx` 操作，不属于 Python `ContextStore.dispatch`：`history_read` 以 `{"ref":"vctx://history/<会话哈希>/<事件序号>","offset":0,"limit":65536,"seq":<可选>,"expected_content_hash":<可选>}` 读取；省略 `seq` 读整段，给出 `seq` 读单条。小消息保持 `{ref,seq,type,message}`；大消息或带 offset 时返回分页 JSON 文本 `content`、`total`、`next_offset`、`content_hash`、`truncated`。整段与单条都受字符上限（≤65536）和 UTF-8 响应字节上限（≤128 KiB）约束；`expected_content_hash` 不匹配返回 CHANGED；`history_list` 以 `{"limit":20}` 列举最多100条归档元数据；`history_search` 以 `{"query":"...","limit":5}` 在最近归档中做有界检索。引用只能在当前会话读取；读取本身会进入新的工具历史，不做多条消息的原位恢复。归档入口是本机同源的 `GET /vctx/history?session=<id>` 预览与 `POST /vctx/history`，正文 `{"session":"<id>","keep_turns":2,"request_id":"...","expected_surface_seq":42}`（后两项可选）；保护轮数允许1–20，每次最多256个可见节点、8MiB正文；宿主原日志保持权威。0.10.0 的清单、检索、CAS 与详细边界见[会话历史虚拟上下文](../architecture/HISTORY-VCONTEXT-0.10.0.md)，0.9.0 归档契约仍见[归档契约](../architecture/HISTORY-ARCHIVE-0.9.0.md)。
+`history_read`、`history_list`、`history_search` 与 `history_pages` 是 Harness 宿主侧的 `vctx` 操作，不属于 Python `ContextStore.dispatch`：`history_read` 以 `{"ref":"vctx://history/<会话哈希>/<事件序号>","offset":0,"limit":65536,"seq":<可选>,"expected_content_hash":<可选>}` 读取；省略 `seq` 读整段，给出 `seq` 读单条。小消息保持 `{ref,seq,type,message}`；大消息或带 offset 时返回分页 JSON 文本 `content`、`total`、`next_offset`、`content_hash`、`truncated`。整段与单条都受字符上限（≤65536）和 UTF-8 响应字节上限（≤128 KiB）约束；`expected_content_hash` 不匹配返回 CHANGED；`history_list` 以 `{"limit":20}` 列举最多100条归档元数据；`history_search` 以 `{"query":"...","limit":5}` 在最近归档中做有界检索；`history_pages` 以 `{"target_bytes":32768,"include_open":false}` 只读预览当前 Surface 的分页计划，不修改 Surface、日志或数据库。引用只能在当前会话读取；读取本身会进入新的工具历史，不做多条消息的原位恢复。归档入口是本机同源的 `GET /vctx/history?session=<id>` 预览与 `POST /vctx/history`，正文 `{"session":"<id>","keep_turns":2,"request_id":"...","expected_surface_seq":42}`（后两项可选）；保护轮数允许1–20，每次最多256个可见节点、8MiB正文；宿主原日志保持权威。0.10.0 的清单、检索、CAS 与详细边界见[会话历史虚拟上下文](../architecture/HISTORY-VCONTEXT-0.10.0.md)，0.9.0 归档契约仍见[归档契约](../architecture/HISTORY-ARCHIVE-0.9.0.md)。
 
 写操作成功结果通常只含页面引用，避免向宿主历史重复回传正文。接口不存在任意 SQL、任意方法调用、跨 scope 访问或模型可改写的数据库路径。
 
@@ -362,6 +362,9 @@ inspect的revision重读保证显式任务变更一致性，不是运行中所�
 | history_list | limit 默认20，范围1–100 | `archives[]`（ref、request_id、count、bytes、created_seq、source_start_seq、source_end_seq）与 `total`；从新到旧，只含元数据不含正文；旧 0.9.0 marker 的 request_id/bytes 为 null，count 回退为 sourceEventSeqs 长度 |
 | history_search | query 去空白后1–256字符；limit 默认5，范围1–20 | `query`、`matches[]`（ref、seq、type、excerpt）、`total`、`truncated`；excerpt ≤160字符；大小写不敏感子串，只检索最近8个归档、最多2048个源事件 / 4 MiB文本；只匹配 text block 与 tool-call arguments；无命中返回空数组 |
 | history_read | ref；offset 默认0、非负；limit 默认65536、范围1–65536；seq 可选非负安全整数；expected_content_hash 可选 64 位小写十六进制 | 省略 seq：整段分页 `content`、`total`、`next_offset`、`content_hash`、`truncated`；给出 seq：小消息返回 `{ref,seq,type,message}`，大消息或 offset>0 返回分页 JSON 文本；seq 必须是该 marker 的 sourceEventSeqs 成员，否则 NOT_FOUND；hash 不匹配返回 CHANGED。响应总字符/字节有界 |
+| history_pages | target_bytes 默认32768、范围1–8MiB；include_open 默认false；max_pages 默认256、范围1–256 | 只读 `vctx-history-pages-v1` 计划：`surface_generation` 与 `pages`（page_id、kind、turn、step、source_seqs、bytes、sealed、tool_balanced、oversize、opaque）；不创建 marker、不写 SQLite、不修改 Surface；超过页数上限置 `truncated:true` |
+
+`history_pages` 是只读预览：执行前必须重新校验 `surface_generation`；它不产生副作用。完整 page 模型与切分规则见 [v0.11 设计](../architecture/HISTORY-PAGING-0.11.0.md)。
 
 归档后，模型请求会看到有界 `vctx_history` 变量（format `vctx-history-v1`）：最多8条归档的 ref / count / bytes / first，整个 JSON ≤2048 UTF-8 字节，超限从最旧开始丢弃并置 `truncated:true`；归档服务不可用时为 `{"format":"vctx-history-v1","available":false}`，只记录元数据诊断，不阻断宿主步骤。`first` 是归档时保存的首条用户消息摘录（≤80字符），不是正文。该大纲不进入插件页面字节预算，也不代表精确 Token。
 

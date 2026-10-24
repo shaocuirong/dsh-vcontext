@@ -1,6 +1,6 @@
 # v0.11.0：细粒度会话历史分页（设计）
 
-状态：设计稿，未实现。基线：v0.10.3（main 6538fef，PR #10 已合并）。
+状态：设计稿；`history-segmenter` 与 `history_pages` 只读预览在 codex/history-segmenter-011 实现（未发布）。基线：v0.10.3（main 6538fef，PR #10 已合并）。
 目标：在已结束的 turn 内按 step / tool-call group 建立合法 page，先提供只读分页预览；下一阶段再做手动 page-out。自动策略、page-in、MCP、Git DAG 不在本设计范围内。
 
 路线图见 [History Paging Roadmap](../planning/ROADMAP-HISTORY-PAGING.md)。v0.10.3 的读取边界见 [HISTORY-VCONTEXT-0.10.0](HISTORY-VCONTEXT-0.10.0.md)。
@@ -190,7 +190,7 @@ v0.11.0 第一步只提供一个只读操作：
 |---|---|---|
 | 1 | 有界历史读取（v0.10.3） | 已合并 #10 |
 | 2 | 本设计文档与容量/状态口径 | 本分支 |
-| 3 | history-segmenter + history_pages 只读预览 | 下一步 |
+| 3 | history-segmenter + history_pages 只读预览 | 实现中（codex/history-segmenter-011） |
 | 4 | vh_* 页面注册表与增量迁移 | 后续 |
 | 5 | 手动 Page-Out executor 与操作对账 | 后续 |
 | 6 | 配额账本试算（v0.12 前置） | 后续 |
