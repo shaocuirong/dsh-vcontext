@@ -30,7 +30,42 @@ export function validateConfig(config) {
     throw new Error('contextIntegration must be a boolean');
   if (config.resourceCapture !== undefined && typeof config.resourceCapture !== 'boolean')
     throw new Error('resourceCapture must be a boolean');
-  return { ...config, budget, timeoutMs, maxPending, maxScopes, python: config.python ?? 'python' };
+  const rawVirtual = config.virtualContext ?? {};
+  if (!rawVirtual || typeof rawVirtual !== 'object' || Array.isArray(rawVirtual))
+    throw new Error('virtualContext must be an object');
+  const virtualContext = {
+    mode: rawVirtual.mode ?? 'enforce',
+    sessionMaxOnlineTokens: rawVirtual.sessionMaxOnlineTokens ?? 1000000,
+    projectMaxOnlineTokens: rawVirtual.projectMaxOnlineTokens ?? 4000000,
+    highWatermark: rawVirtual.highWatermark ?? 0.85,
+    lowWatermark: rawVirtual.lowWatermark ?? 0.70,
+    protectRecentPages: rawVirtual.protectRecentPages ?? 6,
+    protectRecentTokens: rawVirtual.protectRecentTokens ?? 8192,
+    minResidentSteps: rawVirtual.minResidentSteps ?? 2,
+    historyRead: { maxReturnedTokens: 8192, maxResponseBytes: 131072, ...(rawVirtual.historyRead ?? {}) },
+    storage: { maxPluginStorageBytes: 2147483648, allowAutomaticSourceDeletion: false, ...(rawVirtual.storage ?? {}) },
+  };
+  if (virtualContext.mode !== 'enforce')
+    throw new Error("virtualContext.mode must be 'enforce'");
+  for (const name of ['sessionMaxOnlineTokens', 'projectMaxOnlineTokens']) {
+    const value = virtualContext[name];
+    if (!Number.isSafeInteger(value) || value < 1 || value > 9000000000000)
+      throw new Error(`${name} must be an integer in 1..9000000000000`);
+  }
+  for (const name of ['highWatermark', 'lowWatermark']) {
+    const value = virtualContext[name];
+    if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0 || value >= 1)
+      throw new Error(`${name} must be in (0,1)`);
+  }
+  if (!(virtualContext.lowWatermark < virtualContext.highWatermark))
+    throw new Error('lowWatermark must be smaller than highWatermark');
+  for (const name of ['protectRecentPages', 'protectRecentTokens', 'minResidentSteps']) {
+    const value = virtualContext[name];
+    if (!Number.isSafeInteger(value) || value < 0)
+      throw new Error(`${name} must be a nonnegative integer`);
+  }
+  return { ...config, budget, timeoutMs, maxPending, maxScopes,
+    python: config.python ?? 'python', virtualContext };
 }
 
 export class Bridge {

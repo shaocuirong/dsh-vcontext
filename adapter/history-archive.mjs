@@ -13,9 +13,9 @@ const OUTLINE_FORMAT = 'vctx-history-v1';
 const OUTLINE_LIMIT = 8;
 const OUTLINE_BYTES = 2048;
 const EXCERPT = 80;
-const SEARCH_ARCHIVES = 8;
-const SEARCH_EVENTS = 2048;
-const SEARCH_BYTES = 4 * 1024 * 1024;
+const SEARCH_PAGES = 256;
+const SEARCH_EVENTS = 8192;
+const SEARCH_BYTES = 16 * 1024 * 1024;
 const SEARCH_QUERY_MAX = 256;
 const SEARCH_LIMIT_DEFAULT = 5;
 const SEARCH_LIMIT_MAX = 20;
@@ -636,9 +636,9 @@ export function createHistoryArchive(ctx, diagnostics) {
       const { events, markers } = scanArchives(agent, id);
       const needle = trimmed.toLowerCase();
       const matches = [];
-      let total = 0, truncated = markers.length > SEARCH_ARCHIVES;
+      let total = 0, truncated = markers.length > SEARCH_PAGES;
       let scannedEvents = 0, scannedBytes = 0, stopped = false;
-      for (const marker of markers.slice(0, SEARCH_ARCHIVES)) {
+      for (const marker of markers.slice(0, SEARCH_PAGES)) {
         for (const seq of marker.event.sourceEventSeqs) {
           if (scannedEvents >= SEARCH_EVENTS) { truncated = true; stopped = true; break; }
           scannedEvents += 1;

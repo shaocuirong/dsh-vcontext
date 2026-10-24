@@ -27,7 +27,14 @@
 | `fold` | — | `keep=12` | 把最旧的若干大纲索引项折叠成一条里程碑，正文全部保留 |
 | `usage` | — | `limit=200` | 供应商计费记录与命中率 |
 | `record_usage` | — | `input_tokens`, `cache_read_tokens`, `cache_write_tokens`, `output_tokens`, `turn`, `step`, `source` | 记下一次模型调用的计费 |
-| `status` | — | — | 页面引用、scope、后端信息与快照 |
+| `quota_status` | — | — | L2 在线单元用量、会话/项目上限、预留、水位与估算器 |
+| `quota_configure` | — | `session_max_tokens`, `project_max_tokens`, `high_watermark`, `low_watermark` | 更新本 scope 的在线配额；允许调到当前占用以下并返回超限状态 |
+| `quota_admit` | `units` | `operation`, `enforce=true` | 原子准入逻辑单元；同一 unit_key 幂等，项目共享单元按引用计数去重 |
+| `quota_release` | `unit_keys` | `operation`, `strict=false` | 将在线成员降为 cold 并释放引用计数 |
+| `quota_reserve` | `tokens` | `operation`, `ttl_seconds=300` | 在容量上限内预留，不预占具体单元 |
+| `quota_commit` | `reservation_id`, `units` | — | 提交预留并入单元；实际值可小于预留值 |
+| `quota_release_reservation` | `reservation_id` | — | 释放 pending 预留 |
+| `status` | — | — | 页面引用、scope、后端信息、快照与 quota |
 | `compact` | `page_id`, `summary`, `expected_version` | — | 将更短摘要写成新修订，保留原文 |
 | `organize` | `page_id` | `threshold=0.55`, `limit=3` | 基于相似性候选添加双向链接，版本化变更 |
 | `checkpoint` | — | `label` | 保存 scope 内所有页面的版本与驻留层 |
@@ -35,6 +42,8 @@
 | `restore` | `checkpoint_id` | — | 原子恢复内容与驻留层，旧内容形成新修订 |
 | `schedule` | `holder`, `executors`, `page_bytes` | `congestion=0`, `pages` | 根据手工提供的指标给出执行位置建议 |
 | `prepare_task` | `query`, `holder`, `executors` | `congestion=0`, `limit=5` | 先换入相关页，再按这些页的缓存位置给出建议 |
+
+`quota_status` / `quota_configure` 管理的是 L2 在线虚拟集合，不是模型当前请求的 L1 字节。估算器固定为 `utf8-bytes-div3-v1`（UTF-8 字节数 / 3，向上取整），只用于容量试算，不宣称等于供应商 token。`write`、`page_in`、`recall` 在页面变在线时原子准入；`_fit`、`page_out`、`fold` 释放；`restore` 用最终驻留集同步。当前版本不在超限时自动整理到低水位，也不把资源/摘要自动纳入页面配额。
 
 `write` 的 `importance` 是 0..1，默认 0.5；`tier` 对新页面默认 archive，对现有页面默认保留原层。更新需要匹配 `expected_version`。**其余字段为完整替换，不是部分 patch**，要保留的标签和关联应一并提供。`links` 只能引用本 scope 内已存在的页面，最多 32 条；tags 最多 64 个。单次内容最多 1 MB，长文应先使用 ingest 或由调用者分批。
 
@@ -360,7 +369,7 @@ inspect的revision重读保证显式任务变更一致性，不是运行中所�
 | operation | 参数 | 返回 / 限制 |
 |---|---|---|
 | history_list | limit 默认20，范围1–100 | `archives[]`（ref、request_id、count、bytes、created_seq、source_start_seq、source_end_seq）与 `total`；从新到旧，只含元数据不含正文；旧 0.9.0 marker 的 request_id/bytes 为 null，count 回退为 sourceEventSeqs 长度 |
-| history_search | query 去空白后1–256字符；limit 默认5，范围1–20 | `query`、`matches[]`（ref、seq、type、excerpt）、`total`、`truncated`；excerpt ≤160字符；大小写不敏感子串，只检索最近8个归档、最多2048个源事件 / 4 MiB文本；只匹配 text block 与 tool-call arguments；无命中返回空数组 |
+| history_search | query 去空白后1–256字符；limit 默认5，范围1–20 | `query`、`matches[]`（ref、seq、type、excerpt）、`total`、`truncated`；excerpt ≤160字符；大小写不敏感子串，最多扫描256个 page-out marker、8192个源事件 / 16 MiB文本；只匹配 text block 与 tool-call arguments；无命中返回空数组 |
 | history_read | ref；offset 默认0、非负；limit 默认65536、范围1–65536；seq 可选非负安全整数；expected_content_hash 可选 64 位小写十六进制 | 省略 seq：整段分页 `content`、`total`、`next_offset`、`content_hash`、`truncated`；给出 seq：小消息返回 `{ref,seq,type,message}`，大消息或 offset>0 返回分页 JSON 文本；seq 必须是该 marker 的 sourceEventSeqs 成员，否则 NOT_FOUND；hash 不匹配返回 CHANGED。响应总字符/字节有界 |
 | history_pages | target_bytes 默认32768、范围1–8MiB；include_open 默认false；max_pages 默认256、范围1–256 | 只读 `vctx-history-pages-v1` 计划：`surface_generation` 与 `pages`（page_id、kind、turn、step、source_seqs、bytes、sealed、tool_balanced、oversize、opaque）；不创建 marker、不写 SQLite、不修改 Surface；超过页数上限置 `truncated:true`；同时返回 `quota_trial`（pages、total_bytes、protected_bytes、eligible_bytes、protected_pages、eligible_pages），仅为试算 |
 | history_page_out（宿主 HTTP） | target_bytes、max_pages、include_open 须与预览一致；page_id；expected_surface_generation 可选 `sha256:<64位>`；request_id 可选；protect_recent_pages 0–32 默认2；allow_recent 可选布尔 | 手动换出 1 个 sealed、tool_balanced、非 opaque 页面；append 一个 user/message Surface replace marker，sourceEventSeqs 覆盖页面；返回 ref、status、count、bytes、before/after；同一 page/request 重试返回原回执；最近页面默认 PROTECTED；过期 generation 返回 CHANGED；不按原角色原位恢复 |
@@ -377,7 +386,9 @@ inspect的revision重读保证显式任务变更一致性，不是运行中所�
 | /vctx/history | GET | session | `{ok:true,preview,archives,total,outline}`；archives 镜像 outline 顺序与前8条并带 first；无大纲时回退 list 元数据 |
 | /vctx/history | POST | `{session,keep_turns?,request_id?,expected_surface_seq?}` | 严格拒绝其他字段；request_id 为1–256字符且无C0；expected_surface_seq 为非负安全整数；返回 `{ok:true,result}` |
 | /vctx/history/search | GET | session、q（1–256）、limit（1–20，默认5） | `{ok:true,result}`；拒绝未知查询参数 |
-| /vctx/dashboard | GET | session、events | 增加 `history_archive:{total_archives,total_bytes,last_ref}`；摘要失败为 null，不影响其他看板字段 |
+| /vctx/quota | GET | session | `{ok:true,result}`：`quota_status` 的会话/项目用量、上限、预留、水位与估算器 |
+| /vctx/quota | POST | `{session,session_max_tokens?,project_max_tokens?,high_watermark?,low_watermark?}` | 至少一个配额字段；严格拒绝未知字段；返回 `{ok:true,result}` |
+| /vctx/dashboard | GET | session、events | 增加 `history_archive:{total_archives,total_bytes,last_ref}` 与 `quota`；摘要失败为 null，不影响其他看板字段 |
 
 路由要求本机 Host、loopback 对端与完整同源，POST 必须携带 Origin；跨来源返回403，方法不符405，归档服务未就绪503。history POST 正文最多16 KiB。归档操作错误中仅 BUSY / CHANGED / ROOT_CHANGED 映射409，其余（INVALID_INPUT / UNAVAILABLE / PERSISTENCE_FAILED / NO_ELIGIBLE / NOT_FOUND）映射400，均带稳定 `error_code` 与中文消息；路由层参数校验（缺 session、未知字段或查询参数、非法 request_id / expected_surface_seq、非法 q/limit、JSON 解析失败）同样返回400，但 `error_code` 为 `failed`，消息为英文。看板卡片每次归档尝试生成一个 `request_id`，把预览的 `surface_seq` 作为 `expected_surface_seq` 发送；预览未变时重试复用同一 `request_id`，成功后或预览刷新后换新。服务端返回 CHANGED 时，卡片清空本次身份并重新读取预览，下一次点击使用新的 `request_id`；重放成功会标注“重放原回执，未追加新记录”。
 
@@ -387,7 +398,7 @@ inspect的revision重读保证显式任务变更一致性，不是运行中所�
 
 归档操作错误使用以下稳定代码与中文消息：`INVALID_INPUT`（参数或边界）、`UNAVAILABLE`（宿主服务/会话不可用或插件已卸载）、`BUSY`（会话运行/维护中或已有归档进行）、`CHANGED`（幂等冲突或预览已过期）、`PERSISTENCE_FAILED`（宿主未确认保存）、`NOT_FOUND`（ref/seq 不属于本会话或该 marker）、`NO_ELIGIBLE`（没有完整旧轮次可归档）。路由层参数校验不使用这些代码，统一为 `failed` + 英文消息，见上。
 
-`history_list` 与 `history_search` 不返回正文；`history_read` 返回的是不可信历史证据，读取会增加普通工具历史。检索是离线词法子串匹配，不是语义检索；最近 8 个归档的上限有单元测试覆盖，2048事件 / 4 MiB上限为代码检查、未做大规模压力测试。`history_read` 的整段与单条读取都受 65536 字符和 128 KiB UTF-8 响应上限约束；单条大消息或带 offset 的读取返回 JSON 文本分页和 `content_hash`，小消息保持对象形状；续读时把上一次的 `content_hash` 作为 `expected_content_hash`，不匹配返回 CHANGED。offset/limit 按 Unicode 码点计；session / request_id / query 的长度校验仍按 JS UTF-16 码元。完整限制与设计决定见[会话历史虚拟上下文](../architecture/HISTORY-VCONTEXT-0.10.0.md)。
+`history_list` 与 `history_search` 不返回正文；`history_read` 返回的是不可信历史证据，读取会增加普通工具历史。检索是离线词法子串匹配，不是语义检索；256 个 marker、8192 事件 / 16 MiB 文本上限为有界扫描，不代表已建立跨全部历史页面的持久索引，也未做大规模压力测试。`history_read` 的整段与单条读取都受 65536 字符和 128 KiB UTF-8 响应上限约束；单条大消息或带 offset 的读取返回 JSON 文本分页和 `content_hash`，小消息保持对象形状；续读时把上一次的 `content_hash` 作为 `expected_content_hash`，不匹配返回 CHANGED。offset/limit 按 Unicode 码点计；session / request_id / query 的长度校验仍按 JS UTF-16 码元。完整限制与设计决定见[会话历史虚拟上下文](../architecture/HISTORY-VCONTEXT-0.10.0.md)。
 
 
 v0.11.1 宿主分页入口（本机同源，JSON 正文上限 16 KiB）：

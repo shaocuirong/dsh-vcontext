@@ -16,6 +16,8 @@ from .result_store import ResultStore, OPERATIONS as RESULT_OPERATIONS, install_
 from .session_snapshots import SnapshotState, OPERATIONS as SNAPSHOT_OPERATIONS, install_snapshot_schema
 from .task_state import TaskState, OPERATIONS as TASK_OPERATIONS, install_task_schema
 from .migrations import backup_legacy
+from .quota import (OPERATIONS as QUOTA_OPERATIONS, QuotaExceeded, QuotaLedger,
+                   install_quota_schema)
 
 
 class ContextError(ValueError):
@@ -82,7 +84,9 @@ MUTATING_OPERATIONS = frozenset({
     'set_policy', 'policy_tick', 'set_session_enabled', 'record_usage',
     'state_bind', 'state_sync', 'resource_store', 'summary_store', 'result_store', 'result_mark',
     'result_plan', 'result_plan_finish', 'snapshot_create', 'snapshot_checkout', 'snapshot_detach', 'snapshot_branch',
-    'task_create','task_update','task_select','task_fork','task_attach','task_review'})
+    'task_create','task_update','task_select','task_fork','task_attach','task_review',
+    'quota_configure','quota_admit','quota_release','quota_reserve','quota_commit',
+    'quota_release_reservation'})
 
 STRUCTURED_OPERATIONS = frozenset({'state_bind', 'state_sync', 'state_status',
     'operation_list', 'operation_read', 'resource_store', 'resource_read',
@@ -225,6 +229,9 @@ class ContextStore:
         install_result_schema(self.db)
         install_snapshot_schema(self.db)
         install_task_schema(self.db)
+        install_quota_schema(self.db)
+        self.quota = QuotaLedger(self.db, self.scope, project='default')
+        self.quota.sync(self._resident_units(), enforce=False, operation='initialize')
         self.db.execute("INSERT OR REPLACE INTO metadata VALUES('schema','9')")
 
     def close(self):
@@ -312,6 +319,11 @@ class ContextStore:
 
     def _page_bytes(self, row):
         return len(self._row_text(row).encode('utf-8'))
+
+    def _resident_units(self):
+        """Logical units currently resident in this scope, for quota sync."""
+        return [self.quota.page_unit(row['id'], row['version'], self._row_text(row))
+                for row in self._all(resident=True)]
 
     def _ordered(self, rows, tier, outline):
         return sorted((r for r in rows if r['tier'] == tier and bool(r['outline']) == outline),
@@ -409,6 +421,7 @@ class ContextStore:
                 victim = candidates.popleft()
                 self.db.execute("UPDATE pages SET tier='archive' WHERE id=? AND scope=?", (victim['id'], self.scope))
                 self._record_residency(victim['id'], 'working', 'archive', operation, 'evicted', victim)
+                self.quota.release_page(victim['id'], victim['version'], strict=False)
                 total -= costs[victim['id']] + (separator if resident > 1 else 0)
                 resident -= 1
                 evicted.append(victim['id'])
@@ -419,6 +432,7 @@ class ContextStore:
             victim = candidates.popleft()
             self.db.execute("UPDATE pages SET tier='archive' WHERE id=? AND scope=?", (victim['id'], self.scope))
             self._record_residency(victim['id'], 'working', 'archive', operation, 'evicted', victim)
+            self.quota.release_page(victim['id'], victim['version'], strict=False)
             victim['tier'] = 'archive'
             evicted.append(victim['id'])
         return evicted
@@ -449,6 +463,7 @@ class ContextStore:
             raise ContextError('outline must be a boolean')
         now = time.time()
         previous_tier = None
+        previous_version = None
         previous_outline = 0
         if page_id is not None:
             old = self._head(page_id)
@@ -456,6 +471,7 @@ class ContextStore:
                 raise ContextError('version conflict: read the current version before editing')
             version = old['version'] + 1
             previous_tier = old['tier']
+            previous_version = old['version']
             previous_outline = int(old['outline'])
         else:
             if expected_version is not None:
@@ -495,6 +511,14 @@ class ContextStore:
         self.db.execute('UPDATE pages SET version=?,tier=?,touched=?,outline=? WHERE id=? AND scope=?',
                         (version, tier, now, int(outline), page_id, self.scope))
         current = self._head(page_id)
+        # Release the old logical version before admitting the new one. Both
+        # changes share the caller's transaction, so a rejected admission rolls
+        # the page write back instead of leaving a half-admitted revision.
+        if previous_tier in ('core', 'working') and previous_version is not None:
+            self.quota.release_page(page_id, previous_version, strict=False)
+        if tier in ('core', 'working'):
+            self.quota.admit([self.quota.page_unit(page_id, version, self._row_text(current))],
+                             operation='write')
         self._record_residency(page_id, previous_tier, tier, 'write',
                                'created' if previous_tier is None else 'updated', current)
         evicted = self._fit(protect=[page_id], operation='write')
@@ -581,6 +605,8 @@ class ContextStore:
         current = self._head(page_id)
         if current['tier'] == 'core':
             tier = 'core'
+        self.quota.admit([self.quota.page_unit(page_id, current['version'], self._row_text(current))],
+                         operation='page_in')
         self.db.execute('UPDATE pages SET tier=?,touched=?,hits=hits+1 WHERE id=? AND scope=?',
                         (tier, time.time(), page_id, self.scope))
         self._record_residency(page_id, current['tier'], tier, 'page_in', 'admitted', self._head(page_id))
@@ -596,6 +622,7 @@ class ContextStore:
             raise ContextError('core page is pinned; explicitly unpin first')
         self.db.execute("UPDATE pages SET tier='archive' WHERE id=? AND scope=?", (page_id, self.scope))
         self._record_residency(page_id, row['tier'], 'archive', 'page_out', 'archived', self._head(page_id))
+        self.quota.release_page(page_id, row['version'], strict=False)
         return self._ref(self._head(page_id))
 
     @mutation
@@ -620,6 +647,8 @@ class ContextStore:
             try:
                 before = self._head(page_id)
                 target = 'core' if before['tier'] == 'core' else 'working'
+                self.quota.admit([self.quota.page_unit(page_id, before['version'], self._row_text(before))],
+                                 operation='recall')
                 self.db.execute("UPDATE pages SET tier=CASE WHEN tier='core' THEN tier ELSE 'working' END, touched=?,hits=hits+1 WHERE id=? AND scope=?",
                                 (time.time(), page_id, self.scope))
                 self._record_residency(page_id, before['tier'], target, 'recall', 'admitted', self._head(page_id))
@@ -627,6 +656,10 @@ class ContextStore:
                 self.db.execute('RELEASE admission')
                 protected.append(page_id)
                 admitted.append(dict(id=page_id, score=hit['score'], evicted=evicted))
+            except QuotaExceeded:
+                self.db.execute('ROLLBACK TO admission')
+                self.db.execute('RELEASE admission')
+                skipped.append(dict(id=page_id, reason='quota'))
             except ContextError:
                 self.db.execute('ROLLBACK TO admission')
                 self.db.execute('RELEASE admission')
@@ -953,7 +986,7 @@ class ContextStore:
                 folded_pages=len(folded),
                 working_pages=len(by_tier['working']), archive_pages=len(by_tier['archive'])),
             pages=sorted(pages, key=lambda p: (p['segment'] is None, p['segment'] or 9, -p['bytes'], p['id'])),
-            renders=renders, residency=residency, usage=self._usage_summary(),
+            renders=renders, residency=residency, usage=self._usage_summary(), quota=self.quota.status(),
             replacement=dict(policy=self.replacement_policy(), state=self.replacement_state()),
             structured_state=TaskState(self.db, self.scope).state_status(),
             totals=dict(renders=len(renders),
@@ -968,7 +1001,8 @@ class ContextStore:
     @atomic
     def status(self):
         return dict(scope=self.scope, embedding=self.embedder.model_id,
-                    pages=[self._ref(r) for r in self._all()], context=self.render())
+                    pages=[self._ref(r) for r in self._all()], context=self.render(),
+                    quota=self.quota.status())
 
     @atomic
     def checkpoint(self, label=''):
@@ -1007,6 +1041,7 @@ class ContextStore:
             if was is None or was[0] != tier or was[1] != head['version']:
                 self._record_residency(page_id, was[0] if was else None, tier, 'restore', 'restored', head)
         self._fit(protect=[r['id'] for r in self._all() if r['tier']!='archive'], operation='restore')
+        self.quota.sync(self._resident_units(), enforce=True, operation='restore')
         return self.status()
 
     @mutation
@@ -1034,6 +1069,7 @@ class ContextStore:
         for row in victims:
             self.db.execute("UPDATE pages SET tier='archive' WHERE id=? AND scope=?", (row['id'], self.scope))
             self._record_residency(row['id'], 'core', 'archive', 'fold', 'folded', row)
+            self.quota.release_page(row['id'], row['version'], strict=False)
         created = self.write(content, title=f'里程碑 {victims[0]["seq"]}–{victims[-1]["seq"]}', summary=summary,
                              outline=True, links=[row['id'] for row in victims], source='fold')
         milestone = created['page']['id']
@@ -1088,6 +1124,8 @@ class ContextStore:
                     policy='relevance-first admission followed by cache-aware placement')
 
     def dispatch(self, operation, arguments):
+        if operation in QUOTA_OPERATIONS:
+            return self.quota.dispatch(operation, arguments)
         if operation in RESULT_OPERATIONS:
             return ResultStore(self.db, self.scope).dispatch(operation, arguments)
         if operation in STRUCTURED_OPERATIONS or operation in SNAPSHOT_OPERATIONS or operation in TASK_OPERATIONS:

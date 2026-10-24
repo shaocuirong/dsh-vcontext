@@ -728,7 +728,7 @@ test('history_search finds archived text with bounded excerpts', async t => {
   assert.equal(JSON.stringify(result).includes('private tool result'.repeat(120)), false);
 });
 
-test('history_search scans only the newest eight archives', async t => {
+test('history_search scans all marker pages within event and byte bounds', async t => {
   const fixture = historyFixture();
   t.after(() => fixture.dispose());
   const { session, agent, archive } = fixture;
@@ -736,11 +736,11 @@ test('history_search scans only the newest eight archives', async t => {
   for (let index = 0; index < 9; index++)
     refs.push(syntheticArchive(session, index, `search topic ${index}`, null).ref);
   const result = await archive.search(agent.id, 'search topic', 20);
-  assert.equal(result.truncated, true);
-  assert.equal(result.total, 8);
-  assert.equal(result.matches.length, 8);
-  // Newest first, and the ninth (oldest) archive is outside the scan bound.
-  assert.deepEqual(result.matches.map(match => match.ref), refs.slice(1).reverse());
+  assert.equal(result.truncated, false);
+  assert.equal(result.total, 9);
+  assert.equal(result.matches.length, 9);
+  // Newest first; the oldest marker is no longer hidden by an eight-page limit.
+  assert.deepEqual(result.matches.map(match => match.ref), refs.reverse());
 });
 
 test('history_search bounds results and handles no match', async t => {
