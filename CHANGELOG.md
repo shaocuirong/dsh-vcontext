@@ -2,6 +2,19 @@
 
 版本规则：重大功能更新升级次版本号（例如 0.1.0 → 0.2.0），修复升级补丁号（例如 0.2.0 → 0.2.1）。不兼容变更需明确标注；进入 1.0 后按语义化版本升级主版本号。每次发布同步版本元数据、更新日志、Git 标签和 GitHub Release。
 
+## [0.12.0] - 2026-10-24
+
+### 可配置虚拟配额与有界检索
+
+- 新增 `vcontext/quota.py` 与 `vq_schema(version=1)`：`vq_config`、`vq_units`、`vq_memberships`、`vq_reservations`、`vq_events`；主 metadata schema 仍为 9，不改 vc/vcr/vcs/vct。
+- 新增 `quota_status` / `quota_configure` / `quota_admit` / `quota_release` / `quota_reserve` / `quota_commit` / `quota_release_reservation`。估算器固定为 `utf8-bytes-div3-v1`，只做容量试算，不是供应商 token。
+- 页面接入：`write`（core/working）、`page_in`、`recall` 在变在线时原子准入；`_fit`、`page_out`、`fold` 释放；`restore` 按最终驻留集同步；拒绝时页面/quota 一起回滚，recall 记 `reason=quota`。
+- 新增 `GET/POST /vctx/quota` 与看板“在线配额（L2）”卡：显示会话/项目用量、预留、在线/冷单元、水位和估算器，并提供限额/水位表单。
+- `history_search` 从最近 8 个归档改为最多 256 个 page-out marker、8192 个源事件、16 MiB 文本的有界扫描；仍是离线扫描，不是持久全文索引。
+- 验证：本机 208 项 Node/真实 SDK、190 项 Python 测试通过；`npm run check:release` 输出 v0.12.0；客户端语法检查通过。未验证桌面重启、真人浏览器表单提交、严格 V4 回放、真实 AgentLoop 请求、真实项目绑定或供应商 Token/缓存收益。
+- 边界：project 固定 `default`；资源和摘要未自动接入页面配额；超限不自动整理到低水位；不创建 tag/Release（按当前 PR 流程另行处理）。
+- 设计见[可配置虚拟配额](docs/architecture/QUOTA-0.12.0.md)，节点见[NODES-0.12.0](docs/releases/nodes/NODES-0.12.0.md)。
+
 ## [0.11.2] - 2026-10-24
 
 ### 历史分页边界修复

@@ -1,6 +1,6 @@
 # dsh-vcontext
 
-当前版本：**[v0.11.2](https://github.com/shaocuirong/dsh-vcontext/releases/tag/v0.11.2)** · [细粒度历史分页](docs/architecture/HISTORY-PAGING-0.11.0.md) · [0.11.0 节点](docs/releases/nodes/NODES-0.11.0.md) · [会话历史虚拟上下文](docs/architecture/HISTORY-VCONTEXT-0.10.0.md) · [0.10.3 优化节点](docs/releases/nodes/NODES-0.10.3.md) · [任务执行状态](docs/architecture/TASKS-0.8.0.md) · [16 篇参考论文](docs/research/RESEARCH.md) · [更新日志](CHANGELOG.md) · [验证记录](docs/releases/VALIDATION.md)
+当前版本：**[v0.12.0](https://github.com/shaocuirong/dsh-vcontext/releases/tag/v0.12.0)** · [可配置虚拟配额](docs/architecture/QUOTA-0.12.0.md) · [0.12.0 节点](docs/releases/nodes/NODES-0.12.0.md) · [细粒度历史分页](docs/architecture/HISTORY-PAGING-0.11.0.md) · [0.11.0 节点](docs/releases/nodes/NODES-0.11.0.md) · [会话历史虚拟上下文](docs/architecture/HISTORY-VCONTEXT-0.10.0.md) · [任务执行状态](docs/architecture/TASKS-0.8.0.md) · [16 篇参考论文](docs/research/RESEARCH.md) · [更新日志](CHANGELOG.md) · [验证记录](docs/releases/VALIDATION.md)
 
 **DeepSeek Harness 客户端虚拟上下文管理器**：结构化操作、可追溯资源版本、有来源的摘要、按需换页与会话内看板。
 
@@ -22,6 +22,7 @@
 - **会话历史归档**：通过宿主 Surface 将完整旧轮次的聊天和工具结果换成短引用；下一次模型请求不再携带原文，宿主原始日志保留。最近两轮及宿主指令受保护；含工具结果投影等替换节点的轮次整体保留，无法确定归属时拒绝归档。可用 `vctx history_read` 按引用读取旧证据，不调用摘要模型。
 - **可发现与可管理的归档**：归档支持 request_id 幂等与预览 CAS；模型上下文注入有界 `vctx_history` 大纲（≤2 KiB、最多 8 条），可用 `history_list` 列举、`history_search` 有界词法检索、`history_read(seq)` 按单条原始消息读取；看板显示归档清单并支持搜索。清单、检索与重放只认本会话引用，Fork 子会话不继承父会话的归档登记。不新增数据库表，不改变宿主日志权威。
 - **细粒度历史分页与手动换出**：在已结束 turn 内按 step / tool-call group 建页；history_pages 只读预览分页与 quota_trial，宿主空闲时通过 `POST /vctx/history/page-out` 单页换出并生成 vctx://history 引用，history_page_list 列出 marker 派生页面注册表。默认保护最近两页，只接受 sealed、tool_balanced、非 opaque 页；不写 SQLite vh_*，不做 page-in 或多消息原位恢复。
+- **可配置在线配额（L2）**：SQLite `vq_*` 账本记录在线逻辑单元、会话/项目上限、预留与引用计数；`write`、`page_in`、`recall` 在页面进入在线集合时原子准入，`_fit`、`page_out`、`fold` 释放，`restore` 按最终驻留集同步。`/vctx/quota` 与看板配额卡提供设置，`history_search` 扩展为最多 256 个 marker / 8192 事件 / 16 MiB 文本的有界扫描。估算器按 UTF-8 字节 / 3，不是供应商 token；当前 project 固定 default，资源/摘要未自动接入，超限不自动整理到低水位。
 - **压缩会话上下文**：通过 Harness 官方压缩服务将旧历史替换为摘要，保留原始日志；原“会话上下文替换”按钮更名，行为及已有 API 保持兼容。
 - **dsh-context 联动**：可选读取公开会话投影，展示上下文组成、压缩次数和供应商累计用量；优先使用宿主 token-meter，无数据时明确显示估算或未连接状态。
 - **运行诊断**：有界结构化日志、请求编号、耗时、错误分类、慢调用与健康检查；不记录正文或原始错误内容。

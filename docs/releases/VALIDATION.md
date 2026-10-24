@@ -1,5 +1,12 @@
 # 验证记录
 
+## v0.12.0：可配置虚拟配额与有界检索（2026-10-24）
+
+- 本机完整 Node/真实 SDK **208/208** 通过（0 失败、0 跳过）；Python **190/190** 通过（新增 quota 账本 8 项、core 页面接入 6 项）。新增覆盖：估算器标签与确定性、幂等准入、跨 scope 项目去重、会话/项目超卖拒绝、预留提交/释放、上限下调保留在线单元、sync、页面写入回滚、page_in/recall 拒绝、_fit 释放、dashboard/status 暴露 quota、quota HTTP 路由字段校验、history_search 跨 9 个 marker 的有界扫描。
+- `npm run check:release` 输出 v0.12.0；`node --check lib/client.js` 通过；本地 Markdown 链接通过。
+- 新增附加子 schema `vq_schema(version=1)`，主 schema9 / vc2 / vcr1 / vcs1 / vct1 不变；无破坏性迁移，不覆盖数据库或本地配置。
+- 未验证：桌面重启后的真人浏览器表单提交、严格 V4 回放、真实 AgentLoop 请求是否变小、真实项目绑定/跨项目并发、资源/摘要自动准入、高水位自动整理、供应商 Token/缓存费用或答案质量。project 固定为 `default`；估算单位是 UTF-8 字节 / 3，不是供应商 token。
+
 ## v0.11.2：合并前分页边界修复（2026-10-24）
 
 - 本机完整 Node/真实 SDK 207/207 通过，0 失败、0 跳过；Python 176/176 通过。新增 5 项回归覆盖整轮归档后无关/后续页面换出、混合归属嵌套替换的 scope 保护与隔离、截断预览的最近页保护及 quota trial；另覆盖本会话合法换页标记的校验、先换出独立用户页再连续换出同一步骤 3 个工具组页面、损坏标记继续保护。

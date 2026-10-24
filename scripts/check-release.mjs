@@ -24,6 +24,8 @@ for (const path of ['index.mjs', 'lib/client.js', 'adapter/context-integration.m
   'docs/releases/nodes/NODES-0.10.3.md', 'adapter/history-segmenter.mjs',
   'adapter/history-planner.mjs', 'tests/history-segmenter.test.mjs',
   'docs/architecture/HISTORY-PAGING-0.11.0.md', 'docs/releases/nodes/NODES-0.11.0.md',
-  'docs/releases/nodes/NODES-0.11.1.md', 'docs/releases/nodes/NODES-0.11.2.md'])
+  'docs/releases/nodes/NODES-0.11.1.md', 'docs/releases/nodes/NODES-0.11.2.md',
+  'vcontext/quota.py', 'tests/test_quota.py', 'tests/test_core_quota.py',
+  'docs/architecture/QUOTA-0.12.0.md', 'docs/releases/nodes/NODES-0.12.0.md'])
   await read(path);
 console.log(`Release metadata and entry points verified: v${version}`);
