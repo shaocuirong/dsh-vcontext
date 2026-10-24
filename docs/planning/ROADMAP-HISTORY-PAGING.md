@@ -7,8 +7,8 @@
 ## 状态（2026-10-24）
 
 - PR 1 有界历史读取：已合并 #10，v0.10.3。
-- v0.11.0：设计、Segmenter、只读预览、Planner、手动 Page-Out、marker 派生页面注册表、页面级 quota_trial 已在 codex/history-segmenter-011 实现；SQLite `vh_*` 推迟到 v0.11.1。
-- 待办：完整测试、版本 0.11.0 与发布说明；完成后只开一个 PR，不创建 tag/Release（除非用户另行要求）。
+- v0.11.0：设计、Segmenter、只读预览、Planner、手动 Page-Out、marker 派生页面注册表、页面级 quota_trial 已在 codex/history-segmenter-011 实现；版本 0.11.0、CHANGELOG、VALIDATION、NODES 已准备；199 Node / 176 Python 通过。SQLite `vh_*` 推迟到 v0.11.1。
+- 按用户要求只开一个最终 PR；不创建 tag/Release（除非用户另行要求）。
 
 ## 目标
 

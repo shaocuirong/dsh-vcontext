@@ -1,8 +1,14 @@
 # 验证记录
 
+## v0.11.0：细粒度历史分页与手动换出（2026-10-24）
+
+- 本机完整 199 项 Node/真实 SDK 测试通过（0 失败、0 跳过）；176 项 Python 通过。新增覆盖：turn 内 step 分页、3 个并行 tool-call 不拆组、100 KB 单组 oversize、open turn 过滤、page ID 稳定、replacement 标记 opaque、只读预览不修改会话、单页换出 marker/来源 seq、request_id 重放、最近页 PROTECTED、过期 generation CHANGED、页面注册表与换出后 history_read。
+- npm run check:release 输出 v0.11.0；页面注册表为 marker 派生，无 SQLite schema 变更；无 Python 内核改动；主 schema9 / vc2 / vcr1 / vcs1 / vct1 保持。
+- 未验证：桌面重启后的真人浏览器点击、严格 V4 回放、下一次真实 AgentLoop 请求不含目标页正文、供应商 Token/缓存收益、答案质量；quota_trial 只是页面字节试算，不强制 L2 容量。
+
 ## v0.10.3：有界历史读取与文档重组（2026-10-23）
 
-- 本机完整 191 项 Node/真实 SDK 测试通过（0 失败、0 跳过）；176 项 Python 通过。新增覆盖：单条 >65,536 字符工具结果的分页读取与拼接、整段读取的字符/UTF-8 响应上限、`expected_content_hash` 续读与不匹配 CHANGED、小消息保持原对象形状。
+- 本机完整 196 项 Node/真实 SDK 测试通过（0 失败、0 跳过）；176 项 Python 通过。发布时记录为 191；PR #10 review 追加的读取修复与 5 个测试使完整套件达到 196。新增覆盖：单条 >65,536 字符工具结果的分页读取与拼接、整段读取的字符/UTF-8 响应上限、`expected_content_hash` 续读与不匹配 CHANGED、小消息保持原对象形状。
 - `npm run check:release` 输出 v0.10.3；`npm run doctor` 退出 0（数据库 configured=true / modified=false）。
 - 无数据库 schema 变更、无 Python 内核改动；主 schema9 / vc2 / vcr1 / vcs1 / vct1 保持。
 - 文档目录重排为 guides / architecture / research / releases / planning / images；本地 Markdown 链接与 check-release 路径检查通过。
