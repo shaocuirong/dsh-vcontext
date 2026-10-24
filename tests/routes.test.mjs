@@ -77,6 +77,26 @@ async function invoke(handler, method, url, body) {
   return { status: res.captured.status, body: JSON.parse(res.captured.body) };
 }
 
+test('history page host routes enforce local origin, method and bounded request fields', async () => {
+  let calls = 0;
+  const archive = { async pages() { calls++; return {}; }, async pageOut() { calls++; return {}; } };
+  const handler = createHandler(CONFIG, {}, null, null, null, null, null, null, null, null, archive);
+  for (const path of ['/vctx/history/pages', '/vctx/history/page-out']) {
+    assert.equal((await invoke(handler, 'GET', path)).status, 405);
+    for (const body of [null, [], {}, { session: 's', unexpected: true },
+      { session: 's', padding: 'x'.repeat(16384) }])
+      assert.equal((await invoke(handler, 'POST', path, JSON.stringify(body))).status, 400);
+    for (const headers of [{ host: 'localhost' }, { host: 'localhost', origin: 'http://foreign' },
+      { host: 'example.com', origin: 'http://example.com' }]) {
+      const req = request('POST', path, '{"session":"s"}');
+      req.headers = headers;
+      const res = response(); await handler(req, res);
+      assert.equal(res.captured.status, 403);
+    }
+  }
+  assert.equal(calls, 0);
+});
+
 test('state route reports the per-session switch and needs a session', async () => {
   const stub = transport({ session_state: { enabled: true, configured: true, params: {} } });
   const handler = createHandler(CONFIG, stub);

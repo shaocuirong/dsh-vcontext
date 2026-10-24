@@ -16,6 +16,7 @@
 - [v0.8 任务与执行状态](architecture/TASKS-0.8.0.md)
 - [v0.9 会话历史原位归档](architecture/HISTORY-ARCHIVE-0.9.0.md)
 - [v0.10 会话历史虚拟上下文](architecture/HISTORY-VCONTEXT-0.10.0.md)
+- [v0.11 细粒度历史分页设计](architecture/HISTORY-PAGING-0.11.0.md)
 
 ## 研究
 

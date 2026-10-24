@@ -2,6 +2,37 @@
 
 版本规则：重大功能更新升级次版本号（例如 0.1.0 → 0.2.0），修复升级补丁号（例如 0.2.0 → 0.2.1）。不兼容变更需明确标注；进入 1.0 后按语义化版本升级主版本号。每次发布同步版本元数据、更新日志、Git 标签和 GitHub Release。
 
+## [0.11.2] - 2026-10-24
+
+### 历史分页边界修复
+
+- 校验本会话 page-out 回执及其原始来源、页面标识和工具配对后，仅隔离该 marker，不把已验证换页的影响扩大到整个 step/turn；支持连续换出同一步骤多页及先换出独立用户页，损坏回执继续保守保护。
+- 替换节点沿来源链记录受影响的 turn/step；混合或未知归属不再把所有历史标记为 opaque，无关及后续完整页面仍可换出。仍保护受影响范围，分页不会跨越隔离节点。
+- 最近页保护按截断前的完整分页数量计算；新增 total_pages，max_pages 仅限制返回的最旧页面数量，不改变换出资格。quota_trial 统计返回页，保护分类使用完整历史位置。
+- 升级：更新插件代码后完全退出并重启 Harness；保留 v0.11.1 标签和预发布，使用新补丁版本。无数据库迁移或本地配置覆盖。
+- 验证记录见[VALIDATION](docs/releases/VALIDATION.md)，修复节点见[NODES-0.11.2](docs/releases/nodes/NODES-0.11.2.md)。
+
+## [0.11.1] - 2026-10-24
+
+### PR #13 审阅修复
+
+- 换出前后两次扫描保留预览的 target_bytes、max_pages、include_open，修复自定义大小页面无法按 ID 执行的问题。
+- 新增本机同源 `POST /vctx/history/pages` 和 `POST /vctx/history/page-out`；换出在空闲宿主维护边界执行，运行期间返回 409 / BUSY。模型工具不再宣传换出操作，旧调用明确返回 HOST_ONLY 并提示宿主入口，避免维护锁重入。
+- 升级：更新插件后完全退出并重启 Harness；HTTP 换出传回与预览相同的分页参数和 generation。原模型 history_page_out 调用需改用宿主 HTTP 入口；只读工具及 history_read 保持。
+- 无数据库迁移，不修改本地机器配置；验证与未验证边界见[验证记录](docs/releases/VALIDATION.md)。
+
+## [0.11.0] - 2026-10-24
+
+### 细粒度历史分页与手动换出
+
+- 新增 history_segmenter：在已结束 turn 内按 step 边界、tool-call group 原子性建立 page；replacement 节点沿 sourceEventSeqs 归属，无法确定归属或受替换影响的 turn/step 标 opaque。
+- 新增 history_pages 只读预览：返回 vctx-history-pages-v1、surface_generation、pages（page_id、kind、turn、step、source_seqs、bytes、sealed、tool_balanced、oversize、opaque）与页面级 quota_trial；不修改 Surface、宿主日志或数据库。
+- 新增 history_page_out：手动换出 1 个 sealed、tool_balanced、非 opaque 页面，append 一个 user/message marker 并生成 vctx://history 引用；默认保护最近 2 页，支持 expected_surface_generation CAS 与 request_id/page 重放。
+- 新增 history_page_list：从宿主日志中的 page-out marker 派生页面注册表，不写 SQLite vh_*、不做迁移；换出后的原文仍用 history_read 读取，不做 page-in 或多消息原位恢复。
+- 新增 history_planner 与 quota trial：页面字节、受保护字节、可换出字节的试算，不强制 L2 容量；自动策略留到 v0.12/v0.13。
+- 验证：本机 199 项 Node/真实 SDK 测试、176 项 Python 测试通过；check:release 输出 v0.11.0；无数据库 schema 变更、无 Python 内核改动。未验证桌面重启、真人浏览器点击、严格 V4 回放、下一次真实 AgentLoop 请求、供应商费用或答案质量。
+- 设计见[细粒度历史分页](docs/architecture/HISTORY-PAGING-0.11.0.md)，节点见[NODES-0.11.0](docs/releases/nodes/NODES-0.11.0.md)。
+
 ## [0.10.3] - 2026-10-23
 
 ### 有界历史读取与文档重组

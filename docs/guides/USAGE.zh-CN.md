@@ -45,6 +45,15 @@
 
 0.10.3 起 `history_read` 的整段与单条读取都受 65536 字符和 128 KiB UTF-8 响应上限约束；单条大消息或带 offset 的读取返回分页 JSON 文本与 `content_hash`，续读时传回 `expected_content_hash`；小消息仍返回原对象形状。offset/limit 按 Unicode 码点计。
 
+v0.11.0 细粒度分页与手动换出：
+
+- 预览：`vctx history_pages {"target_bytes":32768,"include_open":false}` 只读列出当前 Surface 的分页计划（page_id、kind、turn/step、source_seqs、bytes、sealed、tool_balanced、oversize、opaque）与 `quota_trial` 试算。
+- 换出：`vctx history_page_out {"page_id":"hp_...","expected_surface_generation":"sha256:...","request_id":"..."}` 只接受 sealed、tool_balanced、非 opaque 的一页；默认保护最近 2 页，需换更近页面时显式传 `allow_recent:true`。
+- 列表：`vctx history_page_list {"limit":20}` 返回 marker 派生的页面注册表；换出后的原文用 `history_read` 和返回的 ref 取回。
+- 每次换出产生一个 user/message marker，整页替换；不会按原角色原位恢复，也没有 page-in。v0.11.0 不写 SQLite `vh_*`，注册表由宿主日志中的 page-out marker 派生。
+
+完整设计见 [细粒度历史分页](../architecture/HISTORY-PAGING-0.11.0.md)。
+
 0.10.0 增加归档清单、检索和按消息读取：`vctx history_list {"limit":20}` 列出本会话的归档引用与大小（最多100条，不含正文）；`vctx history_search {"query":"关键词","limit":5}` 只扫描最近8个归档、最多2048个源事件 / 4MiB文本，返回不超过160字符的摘录；`vctx history_read {"ref":"...","seq":<原始事件序号>}` 只读回该归档中的一条原始消息。归档本身可带 `request_id` 与 `expected_surface_seq`：同一 request_id 与相同保留轮数重试返回原回执，不会再次追加；预览后会话已变化会拒绝提交。看板卡片也显示归档清单和搜索结果；点击归档时自动生成 `request_id` 并携带预览的 `expected_surface_seq`，预览未变时重试复用同一身份，成功后或预览刷新后换新。提交结果不确定时先刷新再重试，不要换新 ID。若服务端返回 CHANGED（预览已过期），卡片会自动重新读取预览并清空本次身份，下一次点击为新 Surface 生成新的 `request_id`；重放成功时标注“重放原回执，未追加新记录”，显示原归档时的前后消息数与字节。归档清单、检索和重放只认本会话引用，Fork 子会话不继承父会话的归档。检索是大小写不敏感的离线词法匹配，不是语义搜索；最近 8 个归档的上限有单元测试覆盖，2048事件 / 4MiB扫描上限为代码检查、未做大规模压力测试。详见 [0.10.0 设计](../architecture/HISTORY-VCONTEXT-0.10.0.md)。
 
 ## 压缩会话上下文

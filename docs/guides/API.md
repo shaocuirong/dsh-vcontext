@@ -2,7 +2,7 @@
 
 所有操作通过 `ContextStore.dispatch(operation, arguments)` 调用；CLI 从 stdin 读取 arguments 对象；Harness `vctx` 的 `input` 是此对象的 JSON 字符串。
 
-`history_read`、`history_list` 与 `history_search` 是 Harness 宿主侧的 `vctx` 操作，不属于 Python `ContextStore.dispatch`：`history_read` 以 `{"ref":"vctx://history/<会话哈希>/<事件序号>","offset":0,"limit":65536,"seq":<可选>,"expected_content_hash":<可选>}` 读取；省略 `seq` 读整段，给出 `seq` 读单条。小消息保持 `{ref,seq,type,message}`；大消息或带 offset 时返回分页 JSON 文本 `content`、`total`、`next_offset`、`content_hash`、`truncated`。整段与单条都受字符上限（≤65536）和 UTF-8 响应字节上限（≤128 KiB）约束；`expected_content_hash` 不匹配返回 CHANGED；`history_list` 以 `{"limit":20}` 列举最多100条归档元数据；`history_search` 以 `{"query":"...","limit":5}` 在最近归档中做有界检索。引用只能在当前会话读取；读取本身会进入新的工具历史，不做多条消息的原位恢复。归档入口是本机同源的 `GET /vctx/history?session=<id>` 预览与 `POST /vctx/history`，正文 `{"session":"<id>","keep_turns":2,"request_id":"...","expected_surface_seq":42}`（后两项可选）；保护轮数允许1–20，每次最多256个可见节点、8MiB正文；宿主原日志保持权威。0.10.0 的清单、检索、CAS 与详细边界见[会话历史虚拟上下文](../architecture/HISTORY-VCONTEXT-0.10.0.md)，0.9.0 归档契约仍见[归档契约](../architecture/HISTORY-ARCHIVE-0.9.0.md)。
+`history_read`、`history_list`、`history_search`、`history_pages` 与 `history_page_list` 是 Harness 宿主侧的 `vctx` 操作，不属于 Python `ContextStore.dispatch`：`history_read` 以 `{"ref":"vctx://history/<会话哈希>/<事件序号>","offset":0,"limit":65536,"seq":<可选>,"expected_content_hash":<可选>}` 读取；省略 `seq` 读整段，给出 `seq` 读单条。小消息保持 `{ref,seq,type,message}`；大消息或带 offset 时返回分页 JSON 文本 `content`、`total`、`next_offset`、`content_hash`、`truncated`。整段与单条都受字符上限（≤65536）和 UTF-8 响应字节上限（≤128 KiB）约束；`expected_content_hash` 不匹配返回 CHANGED；`history_list` 以 `{"limit":20}` 列举最多100条归档元数据；`history_search` 以 `{"query":"...","limit":5}` 在最近归档中做有界检索；`history_pages` 以 `{"target_bytes":32768,"include_open":false}` 只读预览当前 Surface 的分页计划，不修改 Surface、日志或数据库；宿主侧 `history_page_out`（非模型工具）以 `{"page_id":"hp_...","expected_surface_generation":"sha256:...","request_id":"...","protect_recent_pages":2,"allow_recent":false}` 手动换出 1 页（空闲时调用 `POST /vctx/history/page-out`）；`history_page_list` 以 `{"limit":20}` 列出 marker 派生的页面注册表。引用只能在当前会话读取；读取本身会进入新的工具历史，不做多条消息的原位恢复。归档入口是本机同源的 `GET /vctx/history?session=<id>` 预览与 `POST /vctx/history`，正文 `{"session":"<id>","keep_turns":2,"request_id":"...","expected_surface_seq":42}`（后两项可选）；保护轮数允许1–20，每次最多256个可见节点、8MiB正文；宿主原日志保持权威。0.10.0 的清单、检索、CAS 与详细边界见[会话历史虚拟上下文](../architecture/HISTORY-VCONTEXT-0.10.0.md)，0.9.0 归档契约仍见[归档契约](../architecture/HISTORY-ARCHIVE-0.9.0.md)。
 
 写操作成功结果通常只含页面引用，避免向宿主历史重复回传正文。接口不存在任意 SQL、任意方法调用、跨 scope 访问或模型可改写的数据库路径。
 
@@ -362,6 +362,11 @@ inspect的revision重读保证显式任务变更一致性，不是运行中所�
 | history_list | limit 默认20，范围1–100 | `archives[]`（ref、request_id、count、bytes、created_seq、source_start_seq、source_end_seq）与 `total`；从新到旧，只含元数据不含正文；旧 0.9.0 marker 的 request_id/bytes 为 null，count 回退为 sourceEventSeqs 长度 |
 | history_search | query 去空白后1–256字符；limit 默认5，范围1–20 | `query`、`matches[]`（ref、seq、type、excerpt）、`total`、`truncated`；excerpt ≤160字符；大小写不敏感子串，只检索最近8个归档、最多2048个源事件 / 4 MiB文本；只匹配 text block 与 tool-call arguments；无命中返回空数组 |
 | history_read | ref；offset 默认0、非负；limit 默认65536、范围1–65536；seq 可选非负安全整数；expected_content_hash 可选 64 位小写十六进制 | 省略 seq：整段分页 `content`、`total`、`next_offset`、`content_hash`、`truncated`；给出 seq：小消息返回 `{ref,seq,type,message}`，大消息或 offset>0 返回分页 JSON 文本；seq 必须是该 marker 的 sourceEventSeqs 成员，否则 NOT_FOUND；hash 不匹配返回 CHANGED。响应总字符/字节有界 |
+| history_pages | target_bytes 默认32768、范围1–8MiB；include_open 默认false；max_pages 默认256、范围1–256 | 只读 `vctx-history-pages-v1` 计划：`surface_generation` 与 `pages`（page_id、kind、turn、step、source_seqs、bytes、sealed、tool_balanced、oversize、opaque）；不创建 marker、不写 SQLite、不修改 Surface；超过页数上限置 `truncated:true`；同时返回 `quota_trial`（pages、total_bytes、protected_bytes、eligible_bytes、protected_pages、eligible_pages），仅为试算 |
+| history_page_out（宿主 HTTP） | target_bytes、max_pages、include_open 须与预览一致；page_id；expected_surface_generation 可选 `sha256:<64位>`；request_id 可选；protect_recent_pages 0–32 默认2；allow_recent 可选布尔 | 手动换出 1 个 sealed、tool_balanced、非 opaque 页面；append 一个 user/message Surface replace marker，sourceEventSeqs 覆盖页面；返回 ref、status、count、bytes、before/after；同一 page/request 重试返回原回执；最近页面默认 PROTECTED；过期 generation 返回 CHANGED；不按原角色原位恢复 |
+| history_page_list | limit 默认20、范围1–100 | marker 派生的页面注册表：page_id、ref、request_id、count、bytes、turn、step、page_kind、created_seq、source_start_seq、source_end_seq；只含元数据，不返回正文 |
+
+`history_pages` 是只读预览：执行前必须重新校验 `surface_generation`；它不产生副作用。`history_page_out` 会把整页替换成一个 `vctx://history/...` 引用；页面注册表由宿主日志中的 `kind: "page-out"` marker 派生，v0.11.0 不写 SQLite `vh_*`，也不做 page-in / 多消息原位恢复；取回原文仍用 `history_read`。完整 page 模型与切分规则见 [v0.11 设计](../architecture/HISTORY-PAGING-0.11.0.md)。
 
 归档后，模型请求会看到有界 `vctx_history` 变量（format `vctx-history-v1`）：最多8条归档的 ref / count / bytes / first，整个 JSON ≤2048 UTF-8 字节，超限从最旧开始丢弃并置 `truncated:true`；归档服务不可用时为 `{"format":"vctx-history-v1","available":false}`，只记录元数据诊断，不阻断宿主步骤。`first` 是归档时保存的首条用户消息摘录（≤80字符），不是正文。该大纲不进入插件页面字节预算，也不代表精确 Token。
 
@@ -383,3 +388,15 @@ inspect的revision重读保证显式任务变更一致性，不是运行中所�
 归档操作错误使用以下稳定代码与中文消息：`INVALID_INPUT`（参数或边界）、`UNAVAILABLE`（宿主服务/会话不可用或插件已卸载）、`BUSY`（会话运行/维护中或已有归档进行）、`CHANGED`（幂等冲突或预览已过期）、`PERSISTENCE_FAILED`（宿主未确认保存）、`NOT_FOUND`（ref/seq 不属于本会话或该 marker）、`NO_ELIGIBLE`（没有完整旧轮次可归档）。路由层参数校验不使用这些代码，统一为 `failed` + 英文消息，见上。
 
 `history_list` 与 `history_search` 不返回正文；`history_read` 返回的是不可信历史证据，读取会增加普通工具历史。检索是离线词法子串匹配，不是语义检索；最近 8 个归档的上限有单元测试覆盖，2048事件 / 4 MiB上限为代码检查、未做大规模压力测试。`history_read` 的整段与单条读取都受 65536 字符和 128 KiB UTF-8 响应上限约束；单条大消息或带 offset 的读取返回 JSON 文本分页和 `content_hash`，小消息保持对象形状；续读时把上一次的 `content_hash` 作为 `expected_content_hash`，不匹配返回 CHANGED。offset/limit 按 Unicode 码点计；session / request_id / query 的长度校验仍按 JS UTF-16 码元。完整限制与设计决定见[会话历史虚拟上下文](../architecture/HISTORY-VCONTEXT-0.10.0.md)。
+
+
+v0.11.1 宿主分页入口（本机同源，JSON 正文上限 16 KiB）：
+
+- `POST /vctx/history/pages`：正文 `{"session":"<id>","target_bytes":2000,"max_pages":256,"include_open":false,"protect_recent_pages":2}`，返回 `{ok:true,result:<分页计划>}`。
+- `POST /vctx/history/page-out`：携带相同分页参数并添加 `page_id`、`expected_surface_generation`、可选 `request_id` 与 `allow_recent`；返回 `{ok:true,result:<换出回执>}`。两次执行扫描均使用预览参数；省略分页参数时使用默认值。
+- 换出仅在 Agent 空闲时通过公开 `runMaintenance` 执行；运行期间返回 HTTP 409 / BUSY，Surface 变化返回 409 / CHANGED。模型工具不提供 `history_page_out`，旧调用返回 HOST_ONLY 并提示宿主入口；请勿在工具内重入维护锁。`history_pages`、`history_page_list`、`history_read` 仍为模型可用的只读操作。
+
+
+v0.11.2：分页计划增加 `total_pages`（按 include_open 过滤后、max_pages 截断前的总页数）。返回 pages 是最旧的至多 max_pages 页，quota_trial 的字节与页数只统计返回页；最近页保护使用完整历史中的位置，因此缩短预览不改变页面换出资格。替换节点仅使其来源链上已知的 turn/step 变为 opaque，未知替换被隔离，页面不会跨越它合并。
+
+本会话合法 page-out 回执经页面标识、来源原始事件、字节及工具配对校验后，仅隔离自身 marker，不扩大为整个 step/turn 的 opaque 保护，因此支持连续换页；普通或损坏替换标记继续保守处理。
