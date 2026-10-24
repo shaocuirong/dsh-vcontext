@@ -272,7 +272,7 @@ for (const [position, sourceIndex, expectedCount] of [
   });
 }
 
-function historyFixture() {
+function historyFixture(options = {}) {
   const root = new Context();
   const sessions = new SessionStore(root);
   const session = sessions.create('history-fixture', { meta: { cwd: tmpdir(), delegationDepth: 0 } });
@@ -293,7 +293,7 @@ function historyFixture() {
       session.append('tool/call', { turn, step: 1, callId: 'read-1', name: 'read', arguments: '{}' });
       session.append('tool/result', { turn, step: 1, message: {
         id: 'result', role: 'tool', toolCallId: 'read-1', source: { kind: 'tool', callId: 'read-1' },
-        content: [{ type: 'text', text: 'private tool result'.repeat(120) }],
+        content: [{ type: 'text', text: options.largeResult ?? 'private tool result'.repeat(120) }],
       } }, { surfaceOp: 'append' });
     }
     session.append('assistant/message', { turn, step: 1, stream: [], message: text(`a${turn}`, 'assistant',
@@ -410,6 +410,133 @@ test('history_read with seq returns one original message', async t => {
   assert.match(JSON.stringify(one.message), /private question 1/);
   assert.equal('content' in one, false);
   await assert.rejects(() => archive.read(agent.id, result.ref, 0, 65536, 99999), { code: 'NOT_FOUND' });
+});
+
+for (const limit of [512, 65536]) {
+  test(`history_read preserves the object shape at the ${limit} code-point limit`, async t => {
+    const baseline = historyFixture({ largeResult: '' });
+    t.after(() => baseline.dispose());
+    const archived = await baseline.archive.archive(baseline.agent.id, 2);
+    const marker = baseline.session.snapshotEvents().find(event => event.surfaceOp?.op === 'replace');
+    const events = baseline.session.snapshotEvents();
+    const seq = marker.sourceEventSeqs.find(node => events[node]?.type === 'tool/result');
+    const empty = await baseline.archive.read(baseline.agent.id, archived.ref, 0, 65536, seq);
+    const overhead = [...JSON.stringify(empty)].length;
+    const fixture = historyFixture({ largeResult: '🌏' + 'a'.repeat(limit - overhead - 1) });
+    t.after(() => fixture.dispose());
+    const { session, agent, archive } = fixture;
+    const result = await archive.archive(agent.id, 2);
+    const expected = { ref: result.ref, seq, type: 'tool/result',
+      message: session.deriveEventMessage(session.snapshotEvents()[seq]) };
+    const serialized = JSON.stringify(expected);
+    assert.equal([...serialized].length, limit);
+    assert.equal(serialized.length, limit + 1);
+    assert.ok(Buffer.byteLength(serialized, 'utf8') <= 128 * 1024);
+    assert.deepEqual(await archive.read(agent.id, result.ref, 0, limit, seq), expected);
+
+    const page = await archive.read(agent.id, result.ref, 0, limit - 1, seq);
+    const pageLength = [...page.content].length;
+    assert.ok(pageLength > 0 && pageLength <= limit - 1);
+    assert.ok([...JSON.stringify(page)].length <= 65536);
+    assert.equal(page.content, [...serialized].slice(0, pageLength).join(''));
+    assert.equal(page.total, limit);
+    assert.equal(page.next_offset, pageLength);
+    assert.equal(page.truncated, true);
+    const tail = await archive.read(agent.id, result.ref, page.next_offset, limit, seq, page.content_hash);
+    assert.equal(tail.next_offset, null);
+    assert.equal(page.content + tail.content, serialized);
+  });
+}
+
+for (const [name, value] of [
+  ['ASCII', 'a'.repeat(100000)],
+  ['JSON escaping', '"\\\n'.repeat(30000)],
+  ['Unicode', '中文🌏'.repeat(30000)],
+]) {
+  test(`history_read bounds complete ${name} responses and preserves pagination`, async t => {
+    const fixture = historyFixture({ largeResult: value });
+    t.after(() => fixture.dispose());
+    const { session, agent, archive } = fixture;
+    const result = await archive.archive(agent.id, 2);
+    const events = session.snapshotEvents();
+    const marker = events.find(event => event.surfaceOp?.op === 'replace');
+    const toolSeq = marker.sourceEventSeqs.find(seq => events[seq]?.type === 'tool/result');
+    for (const seq of [null, toolSeq]) {
+      const entry = node => ({ seq: node, type: events[node].type,
+        message: session.deriveEventMessage(events[node]) });
+      const expected = JSON.stringify(seq === null
+        ? { ref: result.ref, source: marker.sourceEventSeqs.map(entry) }
+        : { ref: result.ref, ...entry(seq) });
+      let offset = 0;
+      let contentHash = null;
+      let restored = '';
+      do {
+        const page = await archive.read(agent.id, result.ref, offset, 65536, seq, contentHash);
+        const serialized = JSON.stringify(page);
+        assert.ok([...serialized].length <= 65536, 'whole response exceeds code-point budget');
+        assert.ok(Buffer.byteLength(serialized, 'utf8') <= 128 * 1024, 'whole response exceeds byte budget');
+        const count = [...page.content].length;
+        assert.ok(count > 0 && count <= 65536);
+        assert.equal(page.offset, offset);
+        assert.equal(page.total, [...expected].length);
+        assert.equal(page.truncated, page.next_offset !== null || offset > 0);
+        if (contentHash !== null) assert.equal(page.content_hash, contentHash);
+        contentHash = page.content_hash;
+        restored += page.content;
+        if (page.next_offset === null) break;
+        assert.equal(page.next_offset, offset + count);
+        offset = page.next_offset;
+      } while (true);
+      assert.equal(restored, expected);
+    }
+  });
+}
+
+test('history_read paginates oversized messages within the response budget', async t => {
+  const large = '中文🌏'.repeat(30000);
+  const fixture = historyFixture({ largeResult: large });
+  t.after(() => fixture.dispose());
+  const { session, agent, archive } = fixture;
+  const result = await archive.archive(agent.id, 2);
+  const marker = session.snapshotEvents().find(event => event.surfaceOp?.op === 'replace');
+  const events = session.snapshotEvents();
+  const seq = marker.sourceEventSeqs.find(node => events[node]?.type === 'tool/result');
+  assert.ok(seq !== undefined);
+  const expected = JSON.stringify({ ref: result.ref, seq, type: 'tool/result',
+    message: session.deriveEventMessage(events[seq]) });
+  assert.ok(expected.length > 65536);
+  const first = await archive.read(agent.id, result.ref, 0, 65536, seq);
+  assert.equal(typeof first.content, 'string');
+  assert.equal(first.total, [...expected].length);
+  assert.ok(first.next_offset !== null);
+  assert.equal(first.truncated, true);
+  assert.match(first.content_hash, /^[a-f0-9]{64}$/);
+  assert.ok(Buffer.byteLength(JSON.stringify(first), 'utf8') <= 128 * 1024);
+  let content = first.content;
+  let next = first.next_offset;
+  while (next !== null) {
+    const part = await archive.read(agent.id, result.ref, next, 65536, seq, first.content_hash);
+    assert.ok(Buffer.byteLength(JSON.stringify(part), 'utf8') <= 128 * 1024);
+    content += part.content;
+    next = part.next_offset;
+  }
+  assert.equal(content, expected);
+  await assert.rejects(() => archive.read(agent.id, result.ref, 0, 65536, seq, '0'.repeat(64)), { code: 'CHANGED' });
+
+  // Full-span reads use the same code-point and UTF-8 response bound.
+  const full = await archive.read(agent.id, result.ref);
+  assert.ok(Buffer.byteLength(JSON.stringify(full), 'utf8') <= 128 * 1024);
+  assert.ok(full.next_offset !== null);
+  let fullContent = full.content;
+  let fullNext = full.next_offset;
+  while (fullNext !== null) {
+    const part = await archive.read(agent.id, result.ref, fullNext, 65536, null, full.content_hash);
+    fullContent += part.content;
+    fullNext = part.next_offset;
+  }
+  const parsed = JSON.parse(fullContent);
+  assert.equal(parsed.ref, result.ref);
+  assert.ok(parsed.source.some(entry => entry.seq === seq));
 });
 
 test('legacy 0.9.0 markers without meta still list and read', async t => {

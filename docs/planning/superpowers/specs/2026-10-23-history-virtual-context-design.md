@@ -98,4 +98,4 @@ history_read(id, ref, offset, limit, seq?)：
 
 - 分支：codex/history-vcontext-010（基于 a7a1253 / v0.9.0）
 - 版本：0.10.0
-- 文档：本文件 + docs/superpowers/plans/2026-10-23-history-virtual-context.md + 发布文档更新
+- 文档：本文件 + docs/planning/superpowers/plans/2026-10-23-history-virtual-context.md + 发布文档更新

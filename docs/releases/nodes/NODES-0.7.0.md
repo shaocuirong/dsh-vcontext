@@ -1,6 +1,6 @@
 # v0.7.0 优化节点
 
-本版承接用户架构正文中的结构化数据库、版本化资源和 Session Snapshot，先完成可验证的资源版本隔离。参考论文与边界见 [快照设计](SNAPSHOTS-0.7.0.md) 和 [研究清单](RESEARCH.md)。
+本版承接用户架构正文中的结构化数据库、版本化资源和 Session Snapshot，先完成可验证的资源版本隔离。参考论文与边界见 [快照设计](../../architecture/SNAPSHOTS-0.7.0.md) 和 [研究清单](../../research/RESEARCH.md)。
 
 | 节点 | 提交 | 解决的问题 |
 |---|---|---|

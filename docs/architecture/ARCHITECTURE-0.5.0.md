@@ -4,7 +4,7 @@
 
 本次将现有页面内核扩展为“结构化事件 + 版本化资源 + 有来源的摘要”，保留原有 SQLite 页面、修订、换页、检查点及宿主压缩路径。它是后续任务树、会话快照和工作集调度的基础，不一次实现全部研究功能。
 
-研究清单及具体版本见 [RESEARCH.md](RESEARCH.md)。以下设计借鉴 MemGPT、GCC、MAGE、ACE 与 SEEM，关系模型、幂等约束和资源格式由本项目定义，不声称复现论文算法。
+研究清单及具体版本见 [RESEARCH.md](../research/RESEARCH.md)。以下设计借鉴 MemGPT、GCC、MAGE、ACE 与 SEEM，关系模型、幂等约束和资源格式由本项目定义，不声称复现论文算法。
 
 ## 1. 权威边界
 
@@ -102,7 +102,7 @@ Native 与 PTC 子调用分别保留 `execution_kind=native|ptc`，同一个原�
 | `summary_store` / `summary_read` | 保存或读取摘要及来源版本引用，指定 `level` | `verification` 仅允许 `not_tested`，不自动调用模型 |
 | `resource_capture` | 宿主工具读取显式相对路径，保存完整 UTF-8 文件，返回 ref / hash | 默认关闭，宿主显式启用 `resourceCapture` 后，经宿主 fs 后端有界读取；拒绝越界、符号链接逃逸、过大或二进制内容 |
 
-`resource_capture` 只记录捕获时点。`source_revision=working-tree:sha256:<digest>` 表示内容观测标识，不是 Git commit。模型的 `resource_store` 不能提供该宿主来源字段；调用者提交文本与宿主捕获分开。可关联 `operation_id` 帮助追溯，但不会证明该操作是文件变化的唯一原因。捕获要求宿主 fs 能映射同一工作目录，并通过 `contains / stat / readBytes` 处理，读前后版本不同则拒绝；无 Node 文件读取后备。它不扫描整个仓库、不改文件、不创建 Git 提交。具体输入上限和返回字段以 [API](API.md) 为准。
+`resource_capture` 只记录捕获时点。`source_revision=working-tree:sha256:<digest>` 表示内容观测标识，不是 Git commit。模型的 `resource_store` 不能提供该宿主来源字段；调用者提交文本与宿主捕获分开。可关联 `operation_id` 帮助追溯，但不会证明该操作是文件变化的唯一原因。捕获要求宿主 fs 能映射同一工作目录，并通过 `contains / stat / readBytes` 处理，读前后版本不同则拒绝；无 Node 文件读取后备。它不扫描整个仓库、不改文件、不创建 Git 提交。具体输入上限和返回字段以 [API](../guides/API.md) 为准。
 
 持久化调用者提供的正文意味着该内容会保存在插件数据库中；自动 Bridge 元数据同步不等于自动复制所有会话正文。操作、摘要、路径当前指针和历史列表按会话隔离；明确的资源 `ref` 可以在同 namespace、同 project 的会话间共享读取和作为摘要来源，不能跨项目或 namespace 读取。这种显式共享不改变接收会话的路径当前指针。
 
@@ -116,7 +116,7 @@ Native 与 PTC 子调用分别保留 `execution_kind=native|ptc`，同一个原�
 
 v0.4.0 的“会话上下文替换”继续走 Harness 官方压缩，见 [REPLACEMENT-0.4.0.md](REPLACEMENT-0.4.0.md)。本次 Bridge 不自动压缩旧工具结果，不删会话日志；错误栈、测试结果和关键证据应先保留，未来再按任务及版本有效性调度。
 
-资源引用是插件内部协议标识，不因使用 `vctx://` 语法就成为已注册的 MCP Resources 服务。当前访问入口及具体字段以 [API.md](API.md) 的实际操作为准。MCP 或其他宿主工具读回的文本仍会进入正常工具历史，后续驻留生命周期需要另行管理。
+资源引用是插件内部协议标识，不因使用 `vctx://` 语法就成为已注册的 MCP Resources 服务。当前访问入口及具体字段以 [API.md](../guides/API.md) 的实际操作为准。MCP 或其他宿主工具读回的文本仍会进入正常工具历史，后续驻留生命周期需要另行管理。
 
 ## 6. 指标口径
 

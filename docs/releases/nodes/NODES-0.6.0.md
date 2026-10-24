@@ -1,6 +1,6 @@
 # v0.6.0 优化与验收节点
 
-依据用户《论文总整理与架构重新设计》第六节补齐宿主可见性，研究引用见 [RESEARCH.md](RESEARCH.md)，协议见 [PROJECTION-0.6.0.md](PROJECTION-0.6.0.md)。没有将摘要压缩包装为虚拟换页。
+依据用户《论文总整理与架构重新设计》第六节补齐宿主可见性，研究引用见 [RESEARCH.md](../../research/RESEARCH.md)，协议见 [PROJECTION-0.6.0.md](../../architecture/PROJECTION-0.6.0.md)。没有将摘要压缩包装为虚拟换页。
 
 | 节点 | Git 提交 | 内容 |
 |---|---|---|
@@ -18,4 +18,4 @@
 3. 原文1MiB限制之外还需检查二次JSON编码，排除超过RPC预算的转义密集结果；不放大通用传输上限。
 4. “排队成功”和“实际投影完成”分开。无下一次模型步骤时明确等待，不自动发消息、不伪造轮次、不为应用计划额外请求模型。
 
-126 项 Node/SDK、120 项 Python 测试及原生重启/浏览器验证详见 [VALIDATION.md](VALIDATION.md)。完整 Session Snapshot/Git DAG、MAGE 任务树、事实层、MCP 服务和自动工作集调度仍为后续阶段。
+126 项 Node/SDK、120 项 Python 测试及原生重启/浏览器验证详见 [VALIDATION.md](../VALIDATION.md)。完整 Session Snapshot/Git DAG、MAGE 任务树、事实层、MCP 服务和自动工作集调度仍为后续阶段。

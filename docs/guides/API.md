@@ -2,7 +2,7 @@
 
 所有操作通过 `ContextStore.dispatch(operation, arguments)` 调用；CLI 从 stdin 读取 arguments 对象；Harness `vctx` 的 `input` 是此对象的 JSON 字符串。
 
-`history_read`、`history_list` 与 `history_search` 是 Harness 宿主侧的 `vctx` 操作，不属于 Python `ContextStore.dispatch`：`history_read` 以 `{"ref":"vctx://history/<会话哈希>/<事件序号>","offset":0,"limit":65536}` 分页读取整段归档，额外传原始事件序号 `seq` 时只读该条原始消息；`history_list` 以 `{"limit":20}` 列举最多100条归档元数据；`history_search` 以 `{"query":"...","limit":5}` 在最近归档中做有界检索。引用只能在当前会话读取；读取本身会进入新的工具历史，不做多条消息的原位恢复。归档入口是本机同源的 `GET /vctx/history?session=<id>` 预览与 `POST /vctx/history`，正文 `{"session":"<id>","keep_turns":2,"request_id":"...","expected_surface_seq":42}`（后两项可选）；保护轮数允许1–20，每次最多256个可见节点、8MiB正文；宿主原日志保持权威。0.10.0 的清单、检索、CAS 与详细边界见[会话历史虚拟上下文](HISTORY-VCONTEXT-0.10.0.md)，0.9.0 归档契约仍见[归档契约](HISTORY-ARCHIVE-0.9.0.md)。
+`history_read`、`history_list` 与 `history_search` 是 Harness 宿主侧的 `vctx` 操作，不属于 Python `ContextStore.dispatch`：`history_read` 以 `{"ref":"vctx://history/<会话哈希>/<事件序号>","offset":0,"limit":65536,"seq":<可选>,"expected_content_hash":<可选>}` 读取；省略 `seq` 读整段，给出 `seq` 读单条。小消息保持 `{ref,seq,type,message}`；大消息或带 offset 时返回分页 JSON 文本 `content`、`total`、`next_offset`、`content_hash`、`truncated`。整段与单条都受字符上限（≤65536）和 UTF-8 响应字节上限（≤128 KiB）约束；`expected_content_hash` 不匹配返回 CHANGED；`history_list` 以 `{"limit":20}` 列举最多100条归档元数据；`history_search` 以 `{"query":"...","limit":5}` 在最近归档中做有界检索。引用只能在当前会话读取；读取本身会进入新的工具历史，不做多条消息的原位恢复。归档入口是本机同源的 `GET /vctx/history?session=<id>` 预览与 `POST /vctx/history`，正文 `{"session":"<id>","keep_turns":2,"request_id":"...","expected_surface_seq":42}`（后两项可选）；保护轮数允许1–20，每次最多256个可见节点、8MiB正文；宿主原日志保持权威。0.10.0 的清单、检索、CAS 与详细边界见[会话历史虚拟上下文](../architecture/HISTORY-VCONTEXT-0.10.0.md)，0.9.0 归档契约仍见[归档契约](../architecture/HISTORY-ARCHIVE-0.9.0.md)。
 
 写操作成功结果通常只含页面引用，避免向宿主历史重复回传正文。接口不存在任意 SQL、任意方法调用、跨 scope 访问或模型可改写的数据库路径。
 
@@ -68,7 +68,7 @@ python -m vcontext.dashboard --db ... --scope ... --json   # 只输出模型
 python -m examples.dashboard_demo                          # 造一个示例会话并渲染
 ```
 
-`metrics` 返回最近的重渲染事件：`stable_prefix_bytes`（可复用前缀长度）、`invalidated_bytes`（与上次相比失效的字节数）、`prefix_intact`（首个差异是否落在稳定前缀之后）。**只改 working 页时 `prefix_intact` 必须为真**；core 页被修改是它唯一合理的失效来源。设计与实测见 [CACHE.md](CACHE.md)。
+`metrics` 返回最近的重渲染事件：`stable_prefix_bytes`（可复用前缀长度）、`invalidated_bytes`（与上次相比失效的字节数）、`prefix_intact`（首个差异是否落在稳定前缀之后）。**只改 working 页时 `prefix_intact` 必须为真**；core 页被修改是它唯一合理的失效来源。设计与实测见 [CACHE.md](../architecture/CACHE.md)。
 
 `ingest` 保留原有字符及顺序，返回有序页面数组；page_bytes 32..65536。当前不自动建立相邻页链接，调用者应保存返回顺序或 source 字段以重建文档。summary 是调用者提供的数据，不会额外调用 LLM。`organize` 不代表事实关系已被确认。
 
@@ -184,7 +184,7 @@ HTTP 路由适用于本机单用户宿主，并拒绝跨来源浏览器请求；
 
 ## 结构化状态与资源（0.5.0）
 
-设计、权威边界与论文来源见 [架构](ARCHITECTURE-0.5.0.md) 和 [研究清单](RESEARCH.md)。页面驻留接口继续兼容，以下操作不自动改变页面快照或删除宿主工具历史。
+设计、权威边界与论文来源见 [架构](../architecture/ARCHITECTURE-0.5.0.md) 和 [研究清单](../research/RESEARCH.md)。页面驻留接口继续兼容，以下操作不自动改变页面快照或删除宿主工具历史。
 
 ### 宿主同步与操作索引
 
@@ -257,7 +257,7 @@ job completed 只表示计划保存完成，message 明确等待下一次模型�
 
 同会话相同运行任务合并，不同变更返回BUSY；任务状态有界，重启后以持久化计划与当前Surface为准。新接口只接受本机 Host、loopback 对端及完整同源请求，POST必须携带Origin；它不是远程认证API。字节减少不等于精确Token或供应商缓存收益。
 
-主 schema7 / vc2保持，新增结果扩展vcr1前为已有库生成唯一 `.pre-result1-<id>.bak`。降级前先取消未应用计划并恢复仍驻留引用、确认应用，再退出宿主切换代码；旧版无result_read。完整协议和论文映射见 [PROJECTION-0.6.0.md](PROJECTION-0.6.0.md)。
+主 schema7 / vc2保持，新增结果扩展vcr1前为已有库生成唯一 `.pre-result1-<id>.bak`。降级前先取消未应用计划并恢复仍驻留引用、确认应用，再退出宿主切换代码；旧版无result_read。完整协议和论文映射见 [PROJECTION-0.6.0.md](../architecture/PROJECTION-0.6.0.md)。
 
 以上是 0.6.0 的历史迁移行为；0.7.0 当前迁移以 schema8 规则为准。
 
@@ -297,7 +297,7 @@ ref 形如 `vctx://snapshot/<32位小写十六进制>`，显式引用可在同 n
 | /vctx/snapshots/diff | GET session,left_ref,right_ref,offset?,limit? | 返回 result，与 snapshot_diff 相同 |
 | /vctx/snapshots/create 或 checkout/detach/branch | POST {session,...对应操作参数} | 经公开 runMaintenance、Bridge 和 SQLite CAS；200返回result，BUSY/CHANGED/ROOT_CHANGED为409 |
 
-仅本机完整同源请求，POST必需Origin；不作远程认证API。单会话变更互斥，总pending最多32；卸载取消并等待，异常不自动重试写入。日志只记录操作、session哈希、耗时及固定错误码。未确认响应时先刷新目标；API重试同一逻辑动作保留原request_id和输入。设计及论文见 [SNAPSHOTS-0.7.0.md](SNAPSHOTS-0.7.0.md)。
+仅本机完整同源请求，POST必需Origin；不作远程认证API。单会话变更互斥，总pending最多32；卸载取消并等待，异常不自动重试写入。日志只记录操作、session哈希、耗时及固定错误码。未确认响应时先刷新目标；API重试同一逻辑动作保留原request_id和输入。设计及论文见 [SNAPSHOTS-0.7.0.md](../architecture/SNAPSHOTS-0.7.0.md)。
 
 ## 任务与执行状态（0.8.0）
 
@@ -347,11 +347,11 @@ ref 形如 `vctx://snapshot/<32位小写十六进制>`，显式引用可在同 n
 
 接口要求本机Host、loopback对端、完整同源，POST必须Origin；严格多余参数和分页白名单，非远程认证API。每会话变更互斥、最多32个pending，卸载可取消并等待。日志仅操作/耗时/固定错误码/session哈希，不保存任务文本或审核说明。模型任务变更不重入维护锁，由其真实工具调度边界和SQLite CAS保护；两种入口都不追加伪造会话事件、不调用摘要模型。
 
-inspect的revision重读保证显式任务变更一致性，不是运行中所有新工具活动的跨RPC冻结切面；审核提交仍以双hash原子守卫为准。设计、论文和恢复边界见 [TASKS-0.8.0.md](TASKS-0.8.0.md)。
+inspect的revision重读保证显式任务变更一致性，不是运行中所有新工具活动的跨RPC冻结切面；审核提交仍以双hash原子守卫为准。设计、论文和恢复边界见 [TASKS-0.8.0.md](../architecture/TASKS-0.8.0.md)。
 
 ## 会话历史归档查询（0.10.0）
 
-0.9.0 的归档契约（[归档契约](HISTORY-ARCHIVE-0.9.0.md)）保持不变。本版增加查询、幂等、预览 CAS、有界检索、有界 `vctx_history` 大纲注入和 `dashboard.history_archive` 归档摘要，不新增数据库表、不改 Python 内核，数据库仍为 schema9 / vc2 / vcr1 / vcs1 / vct1；引用格式仍为 `vctx://history/<16位小写十六进制会话哈希>/<事件序号>`。宿主不可变事件日志仍是权威来源，归档 marker 仍是带 `surfaceOp.replace` 的 `user/message`，元数据只写在该引用消息的文本行中。
+0.9.0 的归档契约（[归档契约](../architecture/HISTORY-ARCHIVE-0.9.0.md)）保持不变。本版增加查询、幂等、预览 CAS、有界检索、有界 `vctx_history` 大纲注入和 `dashboard.history_archive` 归档摘要，不新增数据库表、不改 Python 内核，数据库仍为 schema9 / vc2 / vcr1 / vcs1 / vct1；引用格式仍为 `vctx://history/<16位小写十六进制会话哈希>/<事件序号>`。宿主不可变事件日志仍是权威来源，归档 marker 仍是带 `surfaceOp.replace` 的 `user/message`，元数据只写在该引用消息的文本行中。
 
 归档清单、大纲、摘要、检索与 request_id 重放都属于“当前会话”：只接受 ref 等于 `refFor(本会话 id, marker.seq)` 的 marker。DSH Fork 子会话会继承父会话的事件前缀，但不继承父会话的归档登记；继承来的 marker 不会出现在 list/outline/search/summary 中，也不能用其 request_id 重放，`history_read` 对其 ref 返回 NOT_FOUND。这与任务/资源焦点的会话边界一致。
 
@@ -361,7 +361,7 @@ inspect的revision重读保证显式任务变更一致性，不是运行中所�
 |---|---|---|
 | history_list | limit 默认20，范围1–100 | `archives[]`（ref、request_id、count、bytes、created_seq、source_start_seq、source_end_seq）与 `total`；从新到旧，只含元数据不含正文；旧 0.9.0 marker 的 request_id/bytes 为 null，count 回退为 sourceEventSeqs 长度 |
 | history_search | query 去空白后1–256字符；limit 默认5，范围1–20 | `query`、`matches[]`（ref、seq、type、excerpt）、`total`、`truncated`；excerpt ≤160字符；大小写不敏感子串，只检索最近8个归档、最多2048个源事件 / 4 MiB文本；只匹配 text block 与 tool-call arguments；无命中返回空数组 |
-| history_read | ref；offset 默认0、非负；limit 默认65536、范围1–65536；seq 可选非负安全整数 | 省略 seq：整段分页 `content`、`total`、`next_offset`；给出 seq：必须是该 marker 的 sourceEventSeqs 成员，返回 `{ref,seq,type,message}`，否则 NOT_FOUND |
+| history_read | ref；offset 默认0、非负；limit 默认65536、范围1–65536；seq 可选非负安全整数；expected_content_hash 可选 64 位小写十六进制 | 省略 seq：整段分页 `content`、`total`、`next_offset`、`content_hash`、`truncated`；给出 seq：小消息返回 `{ref,seq,type,message}`，大消息或 offset>0 返回分页 JSON 文本；seq 必须是该 marker 的 sourceEventSeqs 成员，否则 NOT_FOUND；hash 不匹配返回 CHANGED。响应总字符/字节有界 |
 
 归档后，模型请求会看到有界 `vctx_history` 变量（format `vctx-history-v1`）：最多8条归档的 ref / count / bytes / first，整个 JSON ≤2048 UTF-8 字节，超限从最旧开始丢弃并置 `truncated:true`；归档服务不可用时为 `{"format":"vctx-history-v1","available":false}`，只记录元数据诊断，不阻断宿主步骤。`first` 是归档时保存的首条用户消息摘录（≤80字符），不是正文。该大纲不进入插件页面字节预算，也不代表精确 Token。
 
@@ -382,4 +382,4 @@ inspect的revision重读保证显式任务变更一致性，不是运行中所�
 
 归档操作错误使用以下稳定代码与中文消息：`INVALID_INPUT`（参数或边界）、`UNAVAILABLE`（宿主服务/会话不可用或插件已卸载）、`BUSY`（会话运行/维护中或已有归档进行）、`CHANGED`（幂等冲突或预览已过期）、`PERSISTENCE_FAILED`（宿主未确认保存）、`NOT_FOUND`（ref/seq 不属于本会话或该 marker）、`NO_ELIGIBLE`（没有完整旧轮次可归档）。路由层参数校验不使用这些代码，统一为 `failed` + 英文消息，见上。
 
-`history_list` 与 `history_search` 不返回正文；`history_read` 返回的是不可信历史证据，读取会增加普通工具历史。检索是离线词法子串匹配，不是语义检索；最近 8 个归档的上限有单元测试覆盖，2048事件 / 4 MiB上限为代码检查、未做大规模压力测试。`history_read` 的 65536 字符上限只约束整段分页；给出 `seq` 时返回单条消息对象，其大小可能超过 65536 字符。session / request_id / query 的长度校验按 JS UTF-16 码元计数，`history_read` 分页按码点迭代。完整限制与设计决定见[会话历史虚拟上下文](HISTORY-VCONTEXT-0.10.0.md)。
+`history_list` 与 `history_search` 不返回正文；`history_read` 返回的是不可信历史证据，读取会增加普通工具历史。检索是离线词法子串匹配，不是语义检索；最近 8 个归档的上限有单元测试覆盖，2048事件 / 4 MiB上限为代码检查、未做大规模压力测试。`history_read` 的整段与单条读取都受 65536 字符和 128 KiB UTF-8 响应上限约束；单条大消息或带 offset 的读取返回 JSON 文本分页和 `content_hash`，小消息保持对象形状；续读时把上一次的 `content_hash` 作为 `expected_content_hash`，不匹配返回 CHANGED。offset/limit 按 Unicode 码点计；session / request_id / query 的长度校验仍按 JS UTF-16 码元。完整限制与设计决定见[会话历史虚拟上下文](../architecture/HISTORY-VCONTEXT-0.10.0.md)。

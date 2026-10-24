@@ -1,6 +1,6 @@
 # v0.10.0：可发现、可管理的会话历史归档
 
-0.9.0 已能把完整旧轮次通过宿主 Surface 换成一条短引用，原文保留、可按引用整段读取（见[会话历史原位归档](HISTORY-ARCHIVE-0.9.0.md)）。0.10.0 不改变那条权威边界，只补齐四项工程能力：可重试、可预览后提交、可列举/检索、按单条消息读回，并把有界大纲注入模型上下文。数据库 schema9 / vc2 / vcr1 / vcs1 / vct1 不变，Python 内核不改，无新增迁移。
+0.9.0 已能把完整旧轮次通过宿主 Surface 换成一条短引用，原文保留、可按引用整段读取（见[会话历史原位归档](HISTORY-ARCHIVE-0.9.0.md)）。0.10.0 不改变那条权威边界，只补齐四项工程能力：可重试、可预览后提交、可列举/检索、按单条消息读回，并把有界大纲注入模型上下文。数据库 schema9 / vc2 / vcr1 / vcs1 / vct1 不变，Python 内核不改，无新增迁移。0.10.3 补充：`history_read` 的整段与单条读取都使用字符 + UTF-8 响应上限；大消息分页返回，小消息保持原对象形状，`expected_content_hash` 用于续读校验。
 
 ## 权威边界不变
 
@@ -39,7 +39,7 @@
 |---|---|---|
 | `history_list` | `limit` 默认 20，范围 1–100 | `archives`（ref、request_id、count、bytes、created_seq、source_start_seq、source_end_seq）与 `total`；只含元数据，不含正文，按从新到旧排列 |
 | `history_search` | `query` 去空白后 1–256 字符；`limit` 默认 5，范围 1–20 | `query`、`matches`（ref、seq、type、excerpt）、`total`、`truncated`；excerpt ≤160 字符；大小写不敏感子串检索，只查最新 8 个归档、最多 2048 个源事件 / 4 MiB 文本；只匹配 text block 与 tool-call arguments；无命中返回空数组 |
-| `history_read` | `ref`；`offset` 默认 0，非负；`limit` 默认 65536，范围 1–65536；`seq` 可选，非负安全整数 | 省略 `seq`：整段分页返回 `content`、`total`、`next_offset`；给出 `seq`：必须是该 marker 的 `sourceEventSeqs` 成员，返回 `{ref,seq,type,message}`，否则 NOT_FOUND |
+| `history_read` | `ref`；`offset` 默认 0，非负；`limit` 默认 65536，范围 1–65536；`seq` 可选，非负安全整数；`expected_content_hash` 可选 64 位小写十六进制 | 省略 `seq`：整段分页返回 `content`、`total`、`next_offset`、`content_hash`、`truncated`；给出 `seq`：小消息返回 `{ref,seq,type,message}`，大消息或 offset>0 返回分页 JSON 文本；必须是该 marker 的 `sourceEventSeqs` 成员，否则 NOT_FOUND；hash 不匹配返回 CHANGED |
 
 读取（无论整段还是按 seq）都会形成新的普通工具历史，可能增加后续上下文；它不改变归档状态，也不做多条消息的原位恢复。
 
@@ -68,8 +68,8 @@
 
 - session / request_id / query 的长度校验以及 first/excerpt 摘录上限按 JS UTF-16 码元计数，不是 Unicode 码点；恰好跨越代理对边界的极长输入或摘录可能与按码点计算的预期差 1。`history_read` 分页按码点迭代。
 - 检索只扫描最近 8 个归档，该上限有单元测试覆盖；2048 事件 / 4 MiB 文本上限为代码检查、未做大规模数据压力测试；超出时 `truncated:true`，不代表没有更早的命中。
-- `history_read(seq)` 返回单条原始消息对象，单条对象可能超过 65536 字符；65536 的上限只约束省略 `seq` 时的整段分页读取。
+- `history_read` 的整段与单条读取都受 65536 字符和 128 KiB UTF-8 响应上限约束；单条大消息或带 offset 的读取返回分页 JSON 文本和 `content_hash`，小消息保持对象形状；续读使用 `expected_content_hash`，不匹配返回 CHANGED。
 - GET `/vctx/history` 的 list() 与 outline() 是两次独立读取；若并发归档 POST 恰好落在两次读取之间，卡片可能少显示一条新归档行（按 ref 连接时未知 ref 被丢弃）。
 - 未进行桌面端重启后的真人浏览器点击验收；看板的归档清单与搜索只做了单元/路由测试，归档按钮的 CHANGED 恢复与重放文案由状态化 Hook 模拟组件测试覆盖，不是真实 DOM 点击。
 
-设计决定见[设计文档](superpowers/specs/2026-10-23-history-virtual-context-design.md)，执行拆分见[实施计划](superpowers/plans/2026-10-23-history-virtual-context.md)，提交节点见[NODES-0.10.0.md](NODES-0.10.0.md)。
+设计决定见[设计文档](../planning/superpowers/specs/2026-10-23-history-virtual-context-design.md)，执行拆分见[实施计划](../planning/superpowers/plans/2026-10-23-history-virtual-context.md)，提交节点见[NODES-0.10.0.md](../releases/nodes/NODES-0.10.0.md)。

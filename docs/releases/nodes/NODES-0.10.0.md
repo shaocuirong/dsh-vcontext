@@ -1,6 +1,6 @@
 # v0.10.0 会话历史虚拟上下文节点
 
-0.10.0 在 0.9.0 的 Surface 归档之上补齐可重试、可列举、可检索和按消息读回，不新增数据库表、不改 Python 内核。设计见[会话历史虚拟上下文](HISTORY-VCONTEXT-0.10.0.md)，0.9.0 归档契约仍见[会话历史原位归档](HISTORY-ARCHIVE-0.9.0.md)。
+0.10.0 在 0.9.0 的 Surface 归档之上补齐可重试、可列举、可检索和按消息读回，不新增数据库表、不改 Python 内核。设计见[会话历史虚拟上下文](../../architecture/HISTORY-VCONTEXT-0.10.0.md)，0.9.0 归档契约仍见[会话历史原位归档](../../architecture/HISTORY-ARCHIVE-0.9.0.md)。
 
 | 节点 | Git提交 | 核心改动 |
 |---|---|---|
@@ -28,4 +28,4 @@
 - 本机 179 项 Node/真实 SDK、176 项 Python 测试通过，0 失败、0 跳过；`npm run check:release` 输出 v0.10.0，`npm run doctor` 退出码 0。
 - 覆盖：request_id 重放不追加第二条 marker、重放回执的原始前后消息数/字节与再次 flush、同 ID 异 keep_turns 拒绝、过期 expected_surface_seq 在追加前失败、list 只含元数据、read(seq) 单条原始消息、旧 0.9.0 marker 兼容、outline 字节上限与 1–8 条上限、history_search 摘录/无命中/扫描上限、外来/Fork marker 的隔离、四行系统上下文精确文本、路由字段校验与 409、看板卡片 CHANGED 恢复与重放文案。
 - schema9 / vc2 / vcr1 / vcs1 / vct1 不变，无迁移、无 Python 改动；引用格式与 surfaceOp replace 语义保持 0.9.0。
-- 未进行桌面端重启后的真人浏览器点击验收；最近 8 个归档的检索上限有单元测试覆盖，2048 事件 / 4 MiB 文本上限为代码检查、未做大规模压力测试。逐项说明见[验证记录](VALIDATION.md)。
+- 未进行桌面端重启后的真人浏览器点击验收；最近 8 个归档的检索上限有单元测试覆盖，2048 事件 / 4 MiB 文本上限为代码检查、未做大规模压力测试。逐项说明见[验证记录](../VALIDATION.md)。
