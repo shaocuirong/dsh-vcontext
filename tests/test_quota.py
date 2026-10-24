@@ -1,4 +1,7 @@
 import sqlite3
+from contextlib import closing
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 import tempfile
 import unittest
 from pathlib import Path
@@ -118,6 +121,79 @@ class QuotaLedgerTests(unittest.TestCase):
         install_quota_schema(self.db)
         self.db.commit()
         self.assertEqual(self.db.execute('SELECT version FROM vq_schema').fetchall()[0][0], 1)
+
+    def test_project_limit_applies_to_existing_new_and_reopened_scopes(self):
+        self.one.configure(project_max_tokens=100)
+        self.one.admit([{'unit_key': 'a', 'tokens': 60}])
+        with self.assertRaises(QuotaExceeded):
+            self.two.admit([{'unit_key': 'b', 'tokens': 60}])
+        with self.assertRaises(QuotaExceeded):
+            self.two.reserve(60)
+        three = QuotaLedger(self.db, 'scope-three', 'project-a', defaults={'project_max_tokens': 999})
+        self.assertEqual(three.status()['project']['max_tokens'], 100)
+        self.two.configure(session_max_tokens=500)
+        self.assertEqual(self.two.status()['project']['max_tokens'], 100)
+        other = QuotaLedger(self.db, 'scope-other', 'project-b')
+        self.assertNotEqual(other.status()['project']['max_tokens'], 100)
+        with closing(sqlite3.connect(self.path, isolation_level=None)) as db:
+            reopened = QuotaLedger(db, 'scope-one', 'project-a')
+            self.assertEqual(reopened.status()['project']['max_tokens'], 100)
+
+    def test_existing_scope_limits_seed_shared_project_once(self):
+        self.db.execute('DROP TABLE vq_projects')
+        self.db.execute('UPDATE vq_config SET project_max_tokens=100,updated=1 WHERE scope=?', ('scope-one',))
+        self.db.execute('UPDATE vq_config SET project_max_tokens=200,updated=2 WHERE scope=?', ('scope-two',))
+        install_quota_schema(self.db)
+        self.assertEqual(self.one.status()['project']['max_tokens'], 200)
+        self.assertEqual(self.two.status()['project']['max_tokens'], 200)
+        self.one.configure(project_max_tokens=150)
+        self.db.execute('UPDATE vq_config SET project_max_tokens=999,updated=3')
+        install_quota_schema(self.db)
+        self.assertEqual(self.two.status()['project']['max_tokens'], 150)
+
+    def test_shared_project_reservations_do_not_oversell_across_connections(self):
+        self.one.configure(project_max_tokens=100)
+        barrier = Barrier(2)
+
+        def reserve(scope):
+            with closing(sqlite3.connect(self.path, isolation_level=None)) as db:
+                ledger = QuotaLedger(db, scope, 'project-a')
+                barrier.wait(timeout=10)
+                try:
+                    ledger.reserve(60)
+                    return 'reserved'
+                except QuotaExceeded as error:
+                    return error.kind
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(reserve, ['scope-one', 'scope-two']))
+        self.assertCountEqual(results, ['reserved', 'project'])
+        self.assertEqual(self.one.status()['project']['reserved_tokens'], 60)
+
+    def test_large_sync_releases_and_admits_in_batches(self):
+        units = [{'unit_key': f'page:{i}', 'tokens': 1} for i in range(600)]
+        self.one.sync(units)
+        self.assertEqual(self.one.status()['session']['online_units'], 600)
+        self.one.sync(units)
+        self.assertEqual(self.one.status()['project']['online_units'], 600)
+        self.one.sync([])
+        self.assertEqual(self.one.status()['project']['used_tokens'], 0)
+        self.assertEqual(self.db.execute('SELECT SUM(ref_count) FROM vq_units').fetchone()[0], 0)
+
+    def test_large_sync_rolls_back_earlier_batches_and_releases_on_late_failure(self):
+        self.one.admit([{'unit_key': 'old', 'tokens': 7}])
+        self.one.configure(session_max_tokens=256)
+        with self.assertRaises(QuotaExceeded):
+            self.one.sync([{'unit_key': f'new:{i}', 'tokens': 1} for i in range(257)], enforce=True)
+        self.assertEqual(self.one.status()['session']['used_tokens'], 7)
+        self.assertEqual(self.one.status()['session']['online_units'], 1)
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM vq_units').fetchone()[0], 1)
+
+    def test_rpc_admission_and_release_keep_batch_limits(self):
+        with self.assertRaises(ValueError):
+            self.one.admit([{'unit_key': str(i), 'tokens': 1} for i in range(257)])
+        with self.assertRaises(ValueError):
+            self.one.release([str(i) for i in range(257)])
 
 
 if __name__ == '__main__':

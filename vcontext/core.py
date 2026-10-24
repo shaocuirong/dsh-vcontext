@@ -127,12 +127,13 @@ def mutation(method):
 
 
 class ContextStore:
-    def __init__(self, path, scope, budget=8192, embedder=None, count_tokens=None):
+    def __init__(self, path, scope, budget=8192, embedder=None, count_tokens=None, quota_config=None):
         if not isinstance(scope, str) or not scope or len(scope) > 512:
             raise ContextError('scope must be a nonempty string of at most 512 characters')
         if not isinstance(budget, int) or isinstance(budget, bool) or budget < 128:
             raise ContextError('budget must be an integer >= 128')
         self.scope, self.budget = scope, budget
+        self._quota_defaults = quota_config
         self.embedder = embedder or LexicalEmbedder()
         self.count = count_tokens or byte_cost
         # Page dumps are additive for byte and character counters, which lets
@@ -230,8 +231,8 @@ class ContextStore:
         install_snapshot_schema(self.db)
         install_task_schema(self.db)
         install_quota_schema(self.db)
-        self.quota = QuotaLedger(self.db, self.scope, project='default')
-        self.quota.sync(self._resident_units(), enforce=False, operation='initialize')
+        self.quota = QuotaLedger(self.db, self.scope, project='default', defaults=self._quota_defaults)
+        self.quota.sync(self._resident_units(), enforce=False, operation='initialize', managed_prefix='page:')
         self.db.execute("INSERT OR REPLACE INTO metadata VALUES('schema','9')")
 
     def close(self):
@@ -874,6 +875,7 @@ class ContextStore:
                     self._bump_epoch()
                 self.db.execute("UPDATE pages SET tier='archive' WHERE id=? AND scope=?", (victim['id'], self.scope))
                 self._record_residency(victim['id'], 'working', 'archive', 'policy_replace', reason, victim)
+                self.quota.release_page(victim['id'], victim['version'], strict=False)
                 result['evicted'].append(victim['id'])
                 result['after'] = self.count(self._text(self._all(resident=True)))
             if result['evicted']:
@@ -1041,7 +1043,7 @@ class ContextStore:
             if was is None or was[0] != tier or was[1] != head['version']:
                 self._record_residency(page_id, was[0] if was else None, tier, 'restore', 'restored', head)
         self._fit(protect=[r['id'] for r in self._all() if r['tier']!='archive'], operation='restore')
-        self.quota.sync(self._resident_units(), enforce=True, operation='restore')
+        self.quota.sync(self._resident_units(), enforce=True, operation='restore', managed_prefix='page:')
         return self.status()
 
     @mutation

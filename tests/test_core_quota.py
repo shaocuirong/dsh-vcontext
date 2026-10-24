@@ -74,6 +74,47 @@ class CoreQuotaIntegrationTests(unittest.TestCase):
             self.assertEqual(status['quota']['estimator']['id'], 'utf8-bytes-div3-v1')
             self.assertGreaterEqual(status['quota']['session']['used_tokens'], 0)
 
+    def test_large_resident_set_reopens_and_restores(self):
+        with ContextStore(self.path, 'scope', budget=1000000) as store:
+            for i in range(257):
+                store.write('small', title=str(i), tier='working')
+            checkpoint = store.checkpoint()['checkpoint_id']
+        with ContextStore(self.path, 'scope', budget=1000000) as store:
+            self.assertEqual(store.quota.status()['session']['online_units'], 257)
+            store.restore(checkpoint)
+            self.assertEqual(store.quota.status()['session']['online_units'], 257)
+            store.quota.sync([], managed_prefix='page:')
+            self.assertEqual(store.quota.status()['session']['online_units'], 0)
+
+    def test_page_reconciliation_preserves_external_units_on_reopen_and_restore(self):
+        with ContextStore(self.path, 'scope') as store:
+            checkpoint = store.checkpoint()['checkpoint_id']
+            store.dispatch('quota_admit', {'units': [{'unit_key': 'external:test', 'tokens': 60}]})
+            reservation = store.quota.reserve(30)
+            store.quota.commit(reservation['reservation_id'], [{'unit_key': 'resource:test', 'tokens': 30}])
+            page = store.write('working page', tier='working')['page']
+        with ContextStore(self.path, 'scope') as store:
+            self.assertEqual(store.quota.status()['session']['online_units'], 3)
+            store.restore(checkpoint)
+            self.assertEqual(store.quota.status()['session']['used_tokens'], 90)
+            self.assertEqual(store.quota.status()['session']['online_units'], 2)
+            self.assertEqual(store.read(page['id'])['tier'], 'archive')
+
+    def test_policy_eviction_releases_membership_without_releasing_peer_reference(self):
+        with ContextStore(self.path, 'scope', budget=2000) as store:
+            page = store.write('A' * 400, tier='working')['page']
+            store.write('B' * 400, tier='working')
+            with ContextStore(self.path, 'peer') as peer:
+                unit = store.quota.page_unit(page['id'], page['version'], store._row_text(store._head(page['id'])))
+                peer.quota.admit([unit])
+                store.set_policy(target_pct=5, keep_recent=0)
+                result = store.policy_tick(force=True)
+                self.assertEqual(len(result['evicted']), 2)
+                status = store.quota.status()
+                self.assertEqual(status['session']['online_units'], 0)
+                self.assertEqual(status['project']['online_units'], 1)
+                self.assertEqual(peer.quota.status()['session']['online_units'], 1)
+
 
 if __name__ == '__main__':
     unittest.main()

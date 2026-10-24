@@ -68,6 +68,12 @@ export function validateConfig(config) {
     python: config.python ?? 'python', virtualContext };
 }
 
+export function quotaDefaults(config) {
+  const v = config.virtualContext;
+  return { session_max_tokens: v.sessionMaxOnlineTokens, project_max_tokens: v.projectMaxOnlineTokens,
+    high_watermark: v.highWatermark, low_watermark: v.lowWatermark };
+}
+
 export class Bridge {
   #pending = new Set();
   #disposed = false;
@@ -88,7 +94,7 @@ export class Bridge {
     if (Buffer.byteLength(raw) > 2000000) throw new Error('request too large');
     const scope = JSON.stringify([this.config.namespace, sessionId]);
     const argv = ['-m', 'vcontext.cli', '--db', this.config.dbPath, '--scope', scope,
-      '--budget', String(this.config.budget), operation];
+      '--budget', String(this.config.budget), '--quota-config', JSON.stringify(quotaDefaults(this.config)), operation];
     if (this.config.model) argv.push('--model', this.config.model);
     // No shell and no model-controlled paths, environment, executable, or scope.
     const child = spawn(this.config.python, argv, {

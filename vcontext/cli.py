@@ -13,6 +13,7 @@ def main():
     parser.add_argument('--db', required=True)
     parser.add_argument('--scope', required=True)
     parser.add_argument('--budget', type=int, default=8192)
+    parser.add_argument('--quota-config', default='{}', help='Initial quota defaults as JSON; persisted settings win')
     parser.add_argument('--model', help='Optional local sentence-transformers model path or model name')
     parser.add_argument('operation', nargs='?', default='status')
     parser.add_argument('--json', default=None, help='JSON object; omitted means read stdin (empty = {})')
@@ -23,7 +24,8 @@ def main():
             raise ValueError('request too large')
         arguments = json.loads(raw) if raw.strip() else {}
         embedder = SentenceEmbedder(args.model) if args.model else None
-        with ContextStore(args.db, args.scope, args.budget, embedder) as store:
+        with ContextStore(args.db, args.scope, args.budget, embedder,
+                          quota_config=json.loads(args.quota_config)) as store:
             result = store.dispatch(args.operation, arguments)
         sys.stdout.buffer.write((pack(dict(ok=True,result=result))+'\n').encode('utf-8'))
         return 0

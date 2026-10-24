@@ -151,6 +151,10 @@ def install_quota_schema(db):
              kind TEXT NOT NULL, unit_key TEXT, tokens INTEGER NOT NULL,
              created REAL NOT NULL, detail TEXT NOT NULL DEFAULT '{}')''',
         'CREATE INDEX IF NOT EXISTS vq_events_scope ON vq_events(scope,id)',
+        '''CREATE TABLE IF NOT EXISTS vq_projects (
+             project TEXT PRIMARY KEY,
+             max_tokens INTEGER NOT NULL CHECK(max_tokens>=1),
+             updated REAL NOT NULL)''',
     ]
     for statement in statements:
         db.execute(statement)
@@ -158,17 +162,24 @@ def install_quota_schema(db):
     if any(version != SCHEMA_VERSION for version in versions):
         raise QuotaError('unsupported quota schema version')
     db.execute('INSERT OR IGNORE INTO vq_schema(version) VALUES(?)', (SCHEMA_VERSION,))
+    # Seed older per-scope configurations once, newest configuration first.
+    db.execute('''INSERT OR IGNORE INTO vq_projects(project,max_tokens,updated)
+        SELECT project,project_max_tokens,updated FROM vq_config ORDER BY updated DESC,scope ASC''')
 
 
 class QuotaLedger:
     """Scope-local view of a project-shared logical unit ledger."""
 
-    def __init__(self, db, scope, project='default'):
+    def __init__(self, db, scope, project='default', defaults=None):
         if not isinstance(scope, str) or not scope or len(scope) > 512:
             raise QuotaError('scope must be a nonempty string of at most 512 characters')
         self.db = db
         self.scope = scope
         self.project = _text(project, 'project', 256)
+        self.defaults = defaults if defaults is not None else {}
+        if not isinstance(self.defaults, dict) or set(self.defaults) - {
+                'session_max_tokens', 'project_max_tokens', 'high_watermark', 'low_watermark'}:
+            raise QuotaError('invalid quota defaults')
         self.db.row_factory = sqlite3.Row
         self.ensure_config()
 
@@ -183,19 +194,33 @@ class QuotaLedger:
 
     @_atomic
     def _ensure_config(self):
+        session_max = _integer(self.defaults.get('session_max_tokens', DEFAULT_SESSION_TOKENS),
+                               'session_max_tokens', 1)
+        project_max = _integer(self.defaults.get('project_max_tokens', DEFAULT_PROJECT_TOKENS),
+                               'project_max_tokens', 1)
+        high = _ratio(self.defaults.get('high_watermark', DEFAULT_HIGH_WATERMARK), 'high_watermark')
+        low = _ratio(self.defaults.get('low_watermark', DEFAULT_LOW_WATERMARK), 'low_watermark')
+        if low >= high:
+            raise QuotaError('watermarks must satisfy 0 < low_watermark < high_watermark < 1')
+        self.db.execute('''INSERT OR IGNORE INTO vq_projects(project,max_tokens,updated)
+            VALUES(?,?,?)''', (self.project, project_max, time.time()))
+        project_max = self.db.execute('SELECT max_tokens FROM vq_projects WHERE project=?',
+                                      (self.project,)).fetchone()['max_tokens']
         self.db.execute('''INSERT OR IGNORE INTO vq_config(scope,project,session_max_tokens,
             project_max_tokens,high_watermark,low_watermark,estimator_id,estimator_version,updated)
             VALUES(?,?,?,?,?,?,?,?,?)''',
-            (self.scope, self.project, DEFAULT_SESSION_TOKENS, DEFAULT_PROJECT_TOKENS,
-             DEFAULT_HIGH_WATERMARK, DEFAULT_LOW_WATERMARK, ESTIMATOR_ID, ESTIMATOR_VERSION, time.time()))
-        row = self.db.execute('SELECT * FROM vq_config WHERE scope=?', (self.scope,)).fetchone()
-        return dict(row)
+            (self.scope, self.project, session_max, project_max,
+             high, low, ESTIMATOR_ID, ESTIMATOR_VERSION, time.time()))
+        return self._config()
 
     def _config(self):
         row = self.db.execute('SELECT * FROM vq_config WHERE scope=?', (self.scope,)).fetchone()
         if row is None:
             return self._ensure_config()
-        return dict(row)
+        config = dict(row)
+        config['project_max_tokens'] = self.db.execute(
+            'SELECT max_tokens FROM vq_projects WHERE project=?', (self.project,)).fetchone()['max_tokens']
+        return config
 
     def _usage(self, exclude_reservation=None):
         session = self.db.execute('''SELECT COALESCE(SUM(u.estimated_tokens),0) AS tokens,
@@ -273,6 +298,11 @@ class QuotaLedger:
         low = config['low_watermark'] if low_watermark is None else _ratio(low_watermark, 'low_watermark')
         if not 0 < low < high < 1:
             raise QuotaError('watermarks must satisfy 0 < low_watermark < high_watermark < 1')
+        if project_max_tokens is not None:
+            self.db.execute('UPDATE vq_projects SET max_tokens=?,updated=? WHERE project=?',
+                            (project_max, time.time(), self.project))
+            self.db.execute('UPDATE vq_config SET project_max_tokens=? WHERE project=?',
+                            (project_max, self.project))
         self.db.execute('''UPDATE vq_config SET session_max_tokens=?,project_max_tokens=?,
             high_watermark=?,low_watermark=?,updated=? WHERE scope=?''',
             (session_max, project_max, high, low, time.time(), self.scope))
@@ -434,18 +464,28 @@ class QuotaLedger:
         return dict(**self._status(), reservation_id=reservation_id, released=True)
 
     @_atomic
-    def sync(self, units, enforce=False, operation='sync'):
-        normalized = self._normalize_units(units)
+    def sync(self, units, enforce=False, operation='sync', managed_prefix=None):
+        # Internal reconciliation is unbounded by RPC batch size, but every
+        # mutation still shares this outer transaction (including rollback).
+        if not isinstance(units, list):
+            raise QuotaError('units must be a list')
+        normalized = []
+        for start in range(0, len(units), MAX_UNITS_PER_CALL):
+            normalized.extend(self._normalize_units(units[start:start + MAX_UNITS_PER_CALL]))
+        if managed_prefix is not None and any(
+                not entry['unit_key'].startswith(managed_prefix) for entry in normalized):
+            raise QuotaError('unit is outside the managed prefix')
         desired = {entry['unit_key']: entry for entry in normalized}
         current = {row['unit_key']: row for row in self.db.execute('''SELECT u.unit_key,u.unit_id
             FROM vq_memberships m JOIN vq_units u ON u.unit_id=m.unit_id
             WHERE m.scope=? AND m.state='online' ''', (self.scope,))}
-        release_keys = [key for key in current if key not in desired]
-        if release_keys:
-            self.release(release_keys, operation=operation, strict=False)
+        release_keys = [key for key in current if key not in desired and
+                        (managed_prefix is None or key.startswith(managed_prefix))]
+        for start in range(0, len(release_keys), MAX_UNITS_PER_CALL):
+            self.release(release_keys[start:start + MAX_UNITS_PER_CALL], operation=operation, strict=False)
         add_units = [entry for key, entry in desired.items() if key not in current]
-        if add_units:
-            self.admit(add_units, operation=operation, enforce=enforce)
+        for start in range(0, len(add_units), MAX_UNITS_PER_CALL):
+            self.admit(add_units[start:start + MAX_UNITS_PER_CALL], operation=operation, enforce=enforce)
         return self._status()
 
     def dispatch(self, operation, arguments):

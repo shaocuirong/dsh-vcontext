@@ -1,5 +1,14 @@
 # 验证记录
 
+## v0.12.1：PR #14 配额审查修复（2026-10-24）
+
+- 编辑前核对 origin、codex/v0.12-quota、本地 HEAD 与 PR #14 head，均为 0cadefa86072e53ea9d107340d377bf438da386b；工作区干净，GitHub 认证账户 shaocuirong 匹配。
+- 本机完整 Node/真实 SDK **212/212** 通过（0 失败、0 跳过），Python **199/199** 通过。Node 中临时符号链接、本机 HTTP 两项受沙箱限制，使用所需权限运行完整套件后全部通过。
+- 新增回归：257 个驻留页面重开/restore；600 项内部分批同步及释放；后续批次失败时回滚此前释放和准入；外部 RPC 保留 256 项限制；显式准入/提交单元重开与恢复保留；policy_tick 释放且保留其他 scope 引用；项目容量跨新旧 scope、重开连接、项目隔离及真实双连接并发预留不超卖；旧项目配置一次初始化。两种真实 Node→Python 传输验证默认值、超限拒绝、持久化优先和跨会话共享容量。
+- 版本元数据/入口检查、doctor、client 语法与 git diff --check 通过；37 个本地 Markdown 文件链接通过。npm 包预览 85 文件，不含数据库、备份、会话日志、build、node_modules、Python 缓存和本地环境文件。
+- 正式插件 junction 指向当前仓库，读取版本 0.12.1；审阅快照从同一发布提交生成。新增附加 vq_projects 表，主 schema9/vq_schema1 保持，不覆盖数据库或机器配置；勿混跑旧内核。
+- 未执行桌面重启、真人浏览器表单点击；未证明供应商 Token/缓存收益及答案质量。真实 DSH 项目绑定、资源/摘要自动准入和高水位自动整理仍不在本版范围。跨平台 CI 与合并发布状态以 GitHub Actions、PR #14 和 Release 为准。
+
 ## v0.12.0：可配置虚拟配额与有界检索（2026-10-24）
 
 - 本机完整 Node/真实 SDK **208/208** 通过（0 失败、0 跳过）；Python **190/190** 通过（新增 quota 账本 8 项、core 页面接入 6 项）。新增覆盖：估算器标签与确定性、幂等准入、跨 scope 项目去重、会话/项目超卖拒绝、预留提交/释放、上限下调保留在线单元、sync、页面写入回滚、page_in/recall 拒绝、_fit 释放、dashboard/status 暴露 quota、quota HTTP 路由字段校验、history_search 跨 9 个 marker 的有界扫描。

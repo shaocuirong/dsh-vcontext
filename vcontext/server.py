@@ -26,13 +26,14 @@ MAX_REQUEST_BYTES = 2_000_000
 
 
 class Service:
-    def __init__(self, db, budget=8192, model=None, max_scopes=32):
+    def __init__(self, db, budget=8192, model=None, max_scopes=32, quota_config=None):
         if not isinstance(budget, int) or isinstance(budget, bool) or budget < 128:
             raise ContextError('budget must be an integer >= 128')
         if not isinstance(max_scopes, int) or isinstance(max_scopes, bool) or max_scopes < 1:
             raise ContextError('max_scopes must be a positive integer')
         self.db, self.budget, self.model = db, budget, model
         self.max_scopes = max_scopes
+        self.quota_config = quota_config
         self._embedder = None
         self._stores = {}
         self._order = []
@@ -56,7 +57,7 @@ class Service:
         while len(self._order) >= self.max_scopes:
             oldest = self._order.pop(0)
             self._stores.pop(oldest).close()
-        store = ContextStore(self.db, scope, self.budget, self.embedder)
+        store = ContextStore(self.db, scope, self.budget, self.embedder, quota_config=self.quota_config)
         self._stores[scope] = store
         self._order.append(scope)
         return store
@@ -146,10 +147,11 @@ def main():
     parser = argparse.ArgumentParser(description='Resident agent virtual context service')
     parser.add_argument('--db', required=True)
     parser.add_argument('--budget', type=int, default=8192)
+    parser.add_argument('--quota-config', default='{}', help='Initial quota defaults as JSON; persisted settings win')
     parser.add_argument('--model', help='Optional local sentence-transformers model path or model name')
     parser.add_argument('--max-scopes', type=int, default=32, dest='max_scopes')
     args = parser.parse_args()
-    service = Service(args.db, args.budget, args.model, args.max_scopes)
+    service = Service(args.db, args.budget, args.model, args.max_scopes, json.loads(args.quota_config))
     try:
         return serve(service, sys.stdin.buffer, sys.stdout.buffer)
     finally:

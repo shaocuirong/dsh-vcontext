@@ -1,6 +1,6 @@
 # v0.12.0：可配置虚拟配额（L2 在线账本）
 
-状态：v0.12.0 实现完成（本分支，未发布）。基线：v0.11.2（main 45e5de4，PR #13 已合并）。
+状态：v0.12.1 包含初版功能及 PR #14 审查修复。基线：v0.11.2（main 45e5de4，PR #13 已合并）。
 目标：把“在线虚拟集合”从不可见的 page 驻留状态，变成可配置、可预留、可审计、并发不超卖的 SQLite 账本；同时明确它不等于当前模型请求的 L1 上下文。
 
 ## 1. L1 与 L2
@@ -28,12 +28,13 @@ L1 页面窗口预算仍是 `ContextStore.budget`（UTF-8 字节，默认 8192�
 新增独立子 schema `vq_schema(version=1)`，主 metadata schema 仍为 9；不修改 vc/vcr/vcs/vct：
 
 - `vq_config`：scope、project、session_max_tokens、project_max_tokens、高低水位、estimator。
+- `vq_projects`：project 唯一，保存所有 scope 共用的项目上限；`vq_config.project_max_tokens` 仅保留兼容镜像。
 - `vq_units`：project + unit_key 唯一，estimated_tokens、ref_count；项目共享单元只存一份。
 - `vq_memberships`：scope + unit_id，state online/cold；同一 scope 同一单元只计一次。
 - `vq_reservations`：pending/committed/released、tokens、expires。
 - `vq_events`：admit/release 审计；不存正文。
 
-打开旧库时在现有启动事务中安装；旧 resident pages 由 `sync(..., enforce=False)` 导入，不删除页面、不改变 L1 渲染。
+打开旧库时在现有启动事务中安装；旧 resident pages 由 `sync(..., enforce=False, managed_prefix='page:')` 导入，不删除页面、不改变 L1 渲染。内部同步在一个事务内分批处理，支持超过 256 页；外部准入/释放仍限单次 256 项。页面同步只管理 `page:` 保留命名空间，不释放显式准入或提交的其他逻辑单元。已有 0.12.0 配置按 updated 降序、scope 升序选择每个项目的首条记录初始化共享上限，之后不反复覆盖。
 
 ## 4. 准入与预留
 
@@ -59,6 +60,7 @@ admission = Q_committed + Q_reserved + delta <= Q_max
 | page_in | 变更 tier 前准入；拒绝时页面保持 archive |
 | recall | 每个候选在既有 savepoint 内准入；QuotaExceeded 记为 skipped reason=quota |
 | _fit 驱逐 | 页面转 archive 后释放对应 unit |
+| policy_tick 驱逐 | 同一事务内归档页面并释放当前 scope 的引用；其他 scope 的在线引用保留 |
 | page_out | 转 archive 后释放 |
 | fold | 被折叠的大纲页转 archive 时释放；里程碑按 write 规则准入 |
 | restore | 恢复 tiers 后用最终 resident set 做 enforce=true 的 sync；失败回滚恢复 |
@@ -81,6 +83,7 @@ admission = Q_committed + Q_reserved + delta <= Q_max
       minResidentSteps: 2
 
 Python 操作：`quota_status`、`quota_configure`、`quota_admit`、`quota_release`、`quota_reserve`、`quota_commit`、`quota_release_reservation`。
+进程和常驻两种传输均将上述容量/水位传入 Python，作为新会话和新项目的初始默认值；持久化的 `quota_configure` 设置优先，重启或逐请求重开不覆盖。已有会话需要通过 `quota_configure` 或看板修改；同项目的新会话继承已保存的项目上限，项目容量修改立即约束所有会话的准入和预留。会话上限、水位仍独立。
 本机路由：`GET /vctx/quota?session=...`、`POST /vctx/quota`（只允许 session 与四个配置字段）。
 看板：在线配额卡显示会话/项目用量、预留、在线/冷单元、水位、估算器，并提供配置表单；配置保存后下一次准入生效。
 
