@@ -430,7 +430,7 @@ export function createHistoryArchive(ctx, diagnostics) {
         // Small single-message reads keep the original object shape. If the
         // message itself is too large, return paginated JSON text instead of
         // pretending the truncated slice is the complete message.
-        if (offset === 0 && content.length <= limit
+        if (offset === 0 && [...content].length <= limit
           && Buffer.byteLength(content, 'utf8') <= MAX_RESPONSE_BYTES) {
           return { ref, seq, type: event.type, message };
         }

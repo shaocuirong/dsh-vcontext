@@ -412,6 +412,39 @@ test('history_read with seq returns one original message', async t => {
   await assert.rejects(() => archive.read(agent.id, result.ref, 0, 65536, 99999), { code: 'NOT_FOUND' });
 });
 
+for (const limit of [512, 65536]) {
+  test(`history_read preserves the object shape at the ${limit} code-point limit`, async t => {
+    const baseline = historyFixture({ largeResult: '' });
+    t.after(() => baseline.dispose());
+    const archived = await baseline.archive.archive(baseline.agent.id, 2);
+    const marker = baseline.session.snapshotEvents().find(event => event.surfaceOp?.op === 'replace');
+    const events = baseline.session.snapshotEvents();
+    const seq = marker.sourceEventSeqs.find(node => events[node]?.type === 'tool/result');
+    const empty = await baseline.archive.read(baseline.agent.id, archived.ref, 0, 65536, seq);
+    const overhead = [...JSON.stringify(empty)].length;
+    const fixture = historyFixture({ largeResult: '🌏' + 'a'.repeat(limit - overhead - 1) });
+    t.after(() => fixture.dispose());
+    const { session, agent, archive } = fixture;
+    const result = await archive.archive(agent.id, 2);
+    const expected = { ref: result.ref, seq, type: 'tool/result',
+      message: session.deriveEventMessage(session.snapshotEvents()[seq]) };
+    const serialized = JSON.stringify(expected);
+    assert.equal([...serialized].length, limit);
+    assert.equal(serialized.length, limit + 1);
+    assert.ok(Buffer.byteLength(serialized, 'utf8') <= 128 * 1024);
+    assert.deepEqual(await archive.read(agent.id, result.ref, 0, limit, seq), expected);
+
+    const page = await archive.read(agent.id, result.ref, 0, limit - 1, seq);
+    assert.equal(page.content, [...serialized].slice(0, limit - 1).join(''));
+    assert.equal(page.total, limit);
+    assert.equal(page.next_offset, limit - 1);
+    assert.equal(page.truncated, true);
+    const tail = await archive.read(agent.id, result.ref, page.next_offset, limit, seq, page.content_hash);
+    assert.equal(tail.next_offset, null);
+    assert.equal(page.content + tail.content, serialized);
+  });
+}
+
 test('history_read paginates oversized messages within the response budget', async t => {
   const large = '中文🌏'.repeat(30000);
   const fixture = historyFixture({ largeResult: large });
