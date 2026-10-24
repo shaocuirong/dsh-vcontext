@@ -128,7 +128,7 @@ test('segmentHistoryPages builds bounded pages without mutating the session', as
 test('a replacement node makes its affected turn opaque', async t => {
   const fixture = createFixture();
   t.after(() => fixture.dispose());
-  const { session } = fixture;
+  const { session, agent, archive } = fixture;
   session.append('turn/start', { turn: 1 });
   const userSeq = session.append('user/message', text('u1', 'user', 'request', { kind: 'user' }), { surfaceOp: 'append' }).seq;
   session.append('step/start', { turn: 1, step: 1 });
@@ -145,4 +145,57 @@ test('a replacement node makes its affected turn opaque', async t => {
   assert.ok(plan.pages.length > 0);
   assert.ok(plan.pages.every(page => page.opaque === true && page.tool_balanced === false));
   assert.ok(plan.pages.every(page => page.kind === 'opaque'));
+  const opaquePlan = await archive.pages(agent.id, { include_open: true, protect_recent_pages: 0 });
+  const opaquePage = opaquePlan.pages.find(page => page.opaque);
+  assert.ok(opaquePage);
+  await assert.rejects(() => archive.pageOut(agent.id, opaquePage.page_id, { protect_recent_pages: 0 }), { code: 'INVALID_INPUT' });
 });
+
+test('manual page-out writes one marker, is idempotent, and lists the page', async t => {
+  const fixture = createFixture();
+  t.after(() => fixture.dispose());
+  const { session, agent, archive } = fixture;
+  buildSession(session);
+  const beforeSeq = session.seq;
+  const plan = await archive.pages(agent.id, { target_bytes: 32 * 1024, protect_recent_pages: 2 });
+  assert.ok(plan.quota_trial);
+  assert.ok(Number.isSafeInteger(plan.quota_trial.total_bytes));
+  assert.ok(plan.quota_trial.protected_pages >= 2);
+  const page = plan.pages.find(item => item.turn === 1 && item.step === 1);
+  assert.ok(page);
+  const protectedPage = plan.pages.at(-1);
+  await assert.rejects(() => archive.pageOut(agent.id, protectedPage.page_id, { request_id: 'protected-1' }), { code: 'PROTECTED' });
+  await assert.rejects(() => archive.pageOut(agent.id, page.page_id, {
+    expected_surface_generation: 'sha256:' + '0'.repeat(64), request_id: 'stale-1',
+  }), { code: 'CHANGED' });
+  assert.equal(session.seq, beforeSeq);
+
+  const result = await archive.pageOut(agent.id, page.page_id, {
+    expected_surface_generation: plan.surface_generation, request_id: 'page-out-1',
+  });
+  assert.equal(result.status, 'paged_out');
+  assert.equal(result.replayed, false);
+  assert.match(result.ref, /^vctx:\/\/history\/[a-f0-9]{16}\/\d+$/);
+  assert.ok(session.seq > beforeSeq);
+  const marker = session.snapshotEvents().find(event => event.surfaceOp?.op === 'replace');
+  assert.ok(marker);
+  assert.deepEqual(marker.sourceEventSeqs, page.source_seqs);
+  const list = await archive.pageList(agent.id);
+  assert.equal(list.total, 1);
+  assert.equal(list.pages[0].page_id, page.page_id);
+  assert.equal(list.pages[0].ref, result.ref);
+  assert.equal(list.pages[0].turn, 1);
+  assert.equal(list.pages[0].step, 1);
+  const read = await archive.read(agent.id, result.ref);
+  assert.ok(read.content.includes('answer 1'));
+
+  const replay = await archive.pageOut(agent.id, page.page_id, { request_id: 'page-out-1' });
+  assert.equal(replay.replayed, true);
+  assert.equal(replay.ref, result.ref);
+  assert.equal(session.snapshotEvents().filter(event => event.surfaceOp?.op === 'replace').length, 1);
+
+  const after = await archive.pages(agent.id, { target_bytes: 32 * 1024, protect_recent_pages: 2 });
+  assert.equal(after.pages.some(item => item.page_id === page.page_id), false);
+  assert.ok(after.quota_trial);
+});
+

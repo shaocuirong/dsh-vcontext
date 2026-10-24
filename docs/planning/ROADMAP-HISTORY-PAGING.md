@@ -1,14 +1,14 @@
 # History Paging Roadmap (0.10.3 - 0.14.0)
 
 状态：已批准的规划记录。版本号、模块名、配置项均为开发建议，不代表当前仓库已经支持。
-基线：v0.10.2 起草；当前 v0.10.3（main 6538fef，PR #10 已合并）。发布记录：Node 191/191、Python 176/176（v0.10.3）；未验证桌面重启、真人点击、供应商费用或答案质量。
-当前分支：codex/history-paging-011（设计 PR）；PR #9 / #10 已合并。
+基线：v0.10.2 起草；当前 v0.10.3（main 6538fef，PR #10 已合并）。发布记录：Node 191/191、Python 176/176（v0.10.3）；review 追加的读取修复使完整 Node 套件达到 196/196。未验证桌面重启、真人点击、供应商费用或答案质量。
+当前分支：codex/history-segmenter-011（v0.11.0 完成分支）；PR #11/#12 已关闭，按用户要求最终只开一个 PR。
 
 ## 状态（2026-10-24）
 
 - PR 1 有界历史读取：已合并 #10，v0.10.3。
-- PR 2 本设计：docs/architecture/HISTORY-PAGING-0.11.0.md（评审中）。
-- PR 3 下一步：adapter/history-segmenter.mjs + history_pages 只读预览。
+- v0.11.0：设计、Segmenter、只读预览、Planner、手动 Page-Out、marker 派生页面注册表、页面级 quota_trial 已在 codex/history-segmenter-011 实现；SQLite `vh_*` 推迟到 v0.11.1。
+- 待办：完整测试、版本 0.11.0 与发布说明；完成后只开一个 PR，不创建 tag/Release（除非用户另行要求）。
 
 ## 目标
 

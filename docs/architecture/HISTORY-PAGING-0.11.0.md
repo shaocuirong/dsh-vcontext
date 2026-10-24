@@ -1,6 +1,6 @@
 # v0.11.0：细粒度会话历史分页（设计）
 
-状态：设计稿；`history-segmenter` 与 `history_pages` 只读预览在 codex/history-segmenter-011 实现（未发布）。基线：v0.10.3（main 6538fef，PR #10 已合并）。
+状态：v0.11.0 实现完成（未发布）；包括只读 Segmenter、手动 Page-Out、marker 派生页面注册表与页面级配额试算。分支 codex/history-segmenter-011；最终只开一个 PR。基线：v0.10.3（main 6538fef，PR #10 已合并）。
 目标：在已结束的 turn 内按 step / tool-call group 建立合法 page，先提供只读分页预览；下一阶段再做手动 page-out。自动策略、page-in、MCP、Git DAG 不在本设计范围内。
 
 路线图见 [History Paging Roadmap](../planning/ROADMAP-HISTORY-PAGING.md)。v0.10.3 的读取边界见 [HISTORY-VCONTEXT-0.10.0](HISTORY-VCONTEXT-0.10.0.md)。
@@ -104,14 +104,16 @@ v0.11.0 第一步只提供一个只读操作：
         {"page_id":"hp_...","kind":"step","turn":18,"step":2,
          "source_seqs":[251,253],"bytes":65536,"sealed":true,
          "tool_balanced":true,"oversize":false,"opaque":false}
-      ]
+      ],
+      "quota_trial": {"pages":4,"total_bytes":262144,"protected_bytes":131072,
+        "eligible_bytes":131072,"protected_pages":2,"eligible_pages":2}
     }
 
-限制：pages 数量有上限（建议 256）；不返回正文；surface_generation 必须回传，供后续执行阶段校验。失败返回 INVALID_INPUT / UNAVAILABLE / NOT_FOUND；不产生副作用。
+限制：pages 数量有上限（256）；不返回正文；surface_generation 必须回传，供执行阶段校验。失败返回 INVALID_INPUT / UNAVAILABLE / NOT_FOUND；不产生副作用。v0.11.0 只读预览已实现；页面换出走单独的 history_page_out。
 
 本 PR 不增加 HTTP 路由和看板按钮；预览先通过 vctx 工具与测试验证。路由/UI 在执行阶段一起加入。
 
-## 5. Planner 与保护策略（后续 PR）
+## 5. Planner 与保护策略
 
 资格先行：
 
@@ -121,13 +123,13 @@ v0.11.0 第一步只提供一个只读操作：
 - 软保护：最近 N 个 page 或最近 X 字节，取更严格者；保护窗口自身超预算时允许从最旧端换出，并记录原因。
 - 候选：已 sealed、配对合法、版本有效、无活动依赖、未被 pin。
 - 选择：先正确性，再按释放量、恢复代价、前缀失效代价做确定性评分；第一版不做 RL。
-- v0.11.0 只做手动 Page-Out，不做自动策略。
+- v0.11.0 已实现页面级配额试算和手动 Page-Out：默认软保护最近 2 个 page；不满足 sealed / tool_balanced / 非 opaque 的页面拒绝换出。自动候选评分、任务依赖保护和硬保护仍留给后续版本。
 
-## 6. 执行路径（后续 PR）
+## 6. 执行路径
 
-路径 A：已结束历史的 Page-Out
+路径 A：已结束历史的 Page-Out（v0.11.0 已实现）
 
-- 在宿主维护锁内重验 surface_generation、page 来源和 protected 集合；
+- 一次换出 1 页，追加 1 个 user/message marker；在宿主维护锁内重验 surface_generation、page 来源和 protected 集合；
 - 追加合法的 user/message Surface replace，sourceEventSeqs 覆盖目标页的连续节点；
 - marker 文本记录 page_id、来源 seq、页面状态与计划指纹；
 - 宿主持久化后更新回执；失败按 CHANGED/BUSY/PERSISTENCE_FAILED 分类。
@@ -140,9 +142,11 @@ v0.11.0 第一步只提供一个只读操作：
 
 两条路径的可操作时机不同，不能合并为同一 executor 调用。
 
-## 7. 数据库（后续 PR）
+## 7. 页面注册表与数据库
 
-新增独立子 schema / 表，不改现有 vc/vcs/vct：
+v0.11.0 先使用宿主日志中的 page-out marker 作为页面注册表：history_page_list 扫描本会话拥有的 marker，读取 page_id、ref、count、bytes、turn/step 和来源 seq，不写 SQLite、不做迁移。宿主日志仍是唯一权威；同一 page/request_id 重试返回原回执，不重复追加。
+
+SQLite vh_* 延后到 v0.11.1，作为索引/配额/操作的派生缓存；计划表：
 
 - vh_pages：page_id、session_id、turn_id、step_id、kind、逻辑版本、生命周期、L1/L2 状态、bytes、pinned、时间。
 - vh_page_sources：page_id、position、source_event_seq、surface 边界、surface_generation。
@@ -150,7 +154,7 @@ v0.11.0 第一步只提供一个只读操作：
 - vh_operations：幂等键、计划指纹、提交状态、错误、回执。
 - vh_accesses：逻辑需求、读取来源、返回量、恢复耗时。
 
-历史正文继续引用宿主日志。全文索引属于派生数据，单独计物理存储。旧 vctx://history 引用继续可读；新 page 不重写旧 marker。
+历史正文继续引用宿主日志。全文索引属于派生数据，单独计物理存储。旧 vctx://history 引用继续可读；新 page 不重写旧 marker。v0.11.0 页面级 quota_trial 只做字节试算，不强制执行 L2 容量。
 
 ## 8. 宿主边界与 host-only 能力
 
@@ -176,8 +180,8 @@ v0.11.0 第一步只提供一个只读操作：
 
 ## 10. 待定决策
 
-1. v0.11.0 是否包含最小 page-in（复合证据页），还是只做 page-out 并把 page-in 推到 v0.12；若不包含，命名应为 fine-grained paging / evacuation。
-2. page-out marker 是一页一个，还是连续多页一个批量 marker + 页表；需测 marker 数量、前缀失效和再换出成本。
+1. v0.11.0 只做 page-out，不做 page-in；page-in 需要宿主投影 API 或复合证据页，推到 v0.12。
+2. v0.11.0 采用一页一个 marker；连续多页批量 marker + 页表的成本仍需实测后再定。
 3. 目标 page 大小 32 KiB / 4096 Token 的初值需用真实长 turn 数据调优。
 4. Token 估算器与版本；当前只有字节数，不能把字节当 Token。
 5. usage_events 缺 provider/model；Provider Hit Rate 分组需要加列或从 header 关联。
@@ -189,8 +193,9 @@ v0.11.0 第一步只提供一个只读操作：
 | PR | 内容 | 状态 |
 |---|---|---|
 | 1 | 有界历史读取（v0.10.3） | 已合并 #10 |
-| 2 | 本设计文档与容量/状态口径 | 本分支 |
-| 3 | history-segmenter + history_pages 只读预览 | 实现中（codex/history-segmenter-011） |
-| 4 | vh_* 页面注册表与增量迁移 | 后续 |
-| 5 | 手动 Page-Out executor 与操作对账 | 后续 |
-| 6 | 配额账本试算（v0.12 前置） | 后续 |
+| 2 | 本设计文档与容量/状态口径 | 已并入最终分支 |
+| 3 | history-segmenter + history_pages 只读预览 | 已实现 |
+| 4 | 页面注册表 | v0.11.0 用 marker 派生；SQLite vh_* 推迟到 v0.11.1 |
+| 5 | 手动 Page-Out executor 与操作对账 | 已实现（一页一 marker，request_id 重放） |
+| 6 | 配额账本试算（v0.12 前置） | 已实现页面级 quota_trial；不强制 |
+| 7 | v0.11.0 最终 PR | 按用户要求，全部完成后只开一个 |
