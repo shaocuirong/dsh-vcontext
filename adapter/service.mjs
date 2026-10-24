@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { validateConfig } from './bridge.mjs';
+import { validateConfig, quotaDefaults } from './bridge.mjs';
 import { isMutating } from './operations.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
@@ -37,7 +37,8 @@ export class Service {
 
   #start() {
     const argv = ['-m', 'vcontext.server', '--db', this.config.dbPath,
-      '--budget', String(this.config.budget), '--max-scopes', String(this.config.maxScopes)];
+      '--budget', String(this.config.budget), '--max-scopes', String(this.config.maxScopes),
+      '--quota-config', JSON.stringify(quotaDefaults(this.config))];
     if (this.config.model) argv.push('--model', this.config.model);
     // No shell and no model-controlled paths, environment, executable, or scope.
     const child = this.spawnProcess(this.config.python, argv, {

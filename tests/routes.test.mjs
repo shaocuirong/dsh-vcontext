@@ -77,6 +77,32 @@ async function invoke(handler, method, url, body) {
   return { status: res.captured.status, body: JSON.parse(res.captured.body) };
 }
 
+test('quota route reads status and validates bounded configuration', async () => {
+  const stub = transport({
+    quota_status: { session: { used_tokens: 10 }, project: { used_tokens: 10 } },
+    quota_configure: input => {
+      if (input.session_max_tokens !== undefined && !Number.isSafeInteger(input.session_max_tokens))
+        throw new Error('invalid quota setting');
+      return { session: { max_tokens: input.session_max_tokens ?? 100 }, project: {} };
+    },
+  });
+  const handler = createHandler(CONFIG, stub);
+  const status = await invoke(handler, 'GET', '/vctx/quota?session=s');
+  assert.equal(status.status, 200);
+  assert.equal(status.body.result.session.used_tokens, 10);
+  assert.deepEqual(stub.calls[0], { session: 's', operation: 'quota_status', input: {} });
+  const configured = await invoke(handler, 'POST', '/vctx/quota',
+    JSON.stringify({ session: 's', session_max_tokens: 100, high_watermark: 0.9 }));
+  assert.equal(configured.status, 200);
+  assert.deepEqual(stub.calls[1], { session: 's', operation: 'quota_configure',
+    input: { session_max_tokens: 100, high_watermark: 0.9 } });
+  for (const body of ['{}', '{"session":"s"}', '{"session":"s","unknown":1}',
+    '{"session":"s","session_max_tokens":"x"}'])
+    assert.equal((await invoke(handler, 'POST', '/vctx/quota', body)).status, 400);
+  assert.equal((await invoke(handler, 'GET', '/vctx/quota')).status, 400);
+  assert.equal((await invoke(handler, 'GET', '/vctx/quota?session=s&extra=1')).status, 400);
+});
+
 test('history page host routes enforce local origin, method and bounded request fields', async () => {
   let calls = 0;
   const archive = { async pages() { calls++; return {}; }, async pageOut() { calls++; return {}; } };

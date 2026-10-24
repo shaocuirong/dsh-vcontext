@@ -2,6 +2,31 @@
 
 版本规则：重大功能更新升级次版本号（例如 0.1.0 → 0.2.0），修复升级补丁号（例如 0.2.0 → 0.2.1）。不兼容变更需明确标注；进入 1.0 后按语义化版本升级主版本号。每次发布同步版本元数据、更新日志、Git 标签和 GitHub Release。
 
+## [0.12.1] - 2026-10-24
+
+### PR #14 配额审查修复
+
+- 内部页面同步在同一事务中分批执行，修复合法的 257 页驻留集合重启失败；外部 256 项批次上限不变。
+- 两种 Node/Python 传输接通 virtualContext 配额和水位；作为首次初始化默认值，持久化配置优先。
+- 初始化/restore 仅对账 page: 保留命名空间，保留通过 quota_admit/quota_commit 创建的其他单元。
+- 新增附加 vq_projects 表，所有 scope 共用项目上限，约束准入与预留；旧配置按最新 updated、scope 升序选首条导入。
+- policy_tick 驱逐同步释放在线引用，保留其他会话仍在线的共享单元。
+- 升级：更新至 v0.12.1，完全退出并重启 Harness；保留数据库、本地配置和已有版本，勿混跑旧内核。既有会话的容量请通过 quota_configure 或看板更新。
+- 新增超过 256 页重开/恢复、跨批回滚、非页面单元、两种真实传输、跨连接共享上限和并发预留回归；验证记录见 docs/releases/VALIDATION.md。
+
+## [0.12.0] - 2026-10-24
+
+### 可配置虚拟配额与有界检索
+
+- 新增 `vcontext/quota.py` 与 `vq_schema(version=1)`：`vq_config`、`vq_units`、`vq_memberships`、`vq_reservations`、`vq_events`；主 metadata schema 仍为 9，不改 vc/vcr/vcs/vct。
+- 新增 `quota_status` / `quota_configure` / `quota_admit` / `quota_release` / `quota_reserve` / `quota_commit` / `quota_release_reservation`。估算器固定为 `utf8-bytes-div3-v1`，只做容量试算，不是供应商 token。
+- 页面接入：`write`（core/working）、`page_in`、`recall` 在变在线时原子准入；`_fit`、`page_out`、`fold` 释放；`restore` 按最终驻留集同步；拒绝时页面/quota 一起回滚，recall 记 `reason=quota`。
+- 新增 `GET/POST /vctx/quota` 与看板“在线配额（L2）”卡：显示会话/项目用量、预留、在线/冷单元、水位和估算器，并提供限额/水位表单。
+- `history_search` 从最近 8 个归档改为最多 256 个 page-out marker、8192 个源事件、16 MiB 文本的有界扫描；仍是离线扫描，不是持久全文索引。
+- 验证：本机 208 项 Node/真实 SDK、190 项 Python 测试通过；`npm run check:release` 输出 v0.12.0；客户端语法检查通过。未验证桌面重启、真人浏览器表单提交、严格 V4 回放、真实 AgentLoop 请求、真实项目绑定或供应商 Token/缓存收益。
+- 边界：project 固定 `default`；资源和摘要未自动接入页面配额；超限不自动整理到低水位；不创建 tag/Release（按当前 PR 流程另行处理）。
+- 设计见[可配置虚拟配额](docs/architecture/QUOTA-0.12.0.md)，节点见[NODES-0.12.0](docs/releases/nodes/NODES-0.12.0.md)。
+
 ## [0.11.2] - 2026-10-24
 
 ### 历史分页边界修复

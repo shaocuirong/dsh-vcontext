@@ -370,6 +370,31 @@ export function createHandler(config, transport, liveContext, diagnostics, repla
       }
     }
 
+    if (url.pathname === `${ROUTE_PREFIX}quota`) {
+      if (!localCarrier(request)) return send(response, 403, { ok: false, error: '仅接受本机同源请求。' });
+      if (!['GET', 'POST'].includes(request.method)) return send(response, 405, { ok: false, error: 'GET or POST only' });
+      try {
+        if (request.method === 'GET') {
+          const session = sessionOf(url);
+          if (!session) throw new Error('session required');
+          if ([...url.searchParams.keys()].some(key => key !== 'session')) throw new Error('invalid query');
+          return send(response, 200, { ok: true, namespace: settings.namespace, session,
+            result: await transport.call(session, 'quota_status', {}) });
+        }
+        const body = JSON.parse(await readBody(request, 16384));
+        const allowed = ['session', 'session_max_tokens', 'project_max_tokens', 'high_watermark', 'low_watermark'];
+        if (!body || typeof body !== 'object' || Array.isArray(body)
+          || typeof body.session !== 'string' || !body.session || body.session.length > 256
+          || Object.keys(body).some(key => !allowed.includes(key))) throw new Error('invalid request');
+        const configuration = Object.fromEntries(Object.entries(body).filter(([key]) => key !== 'session'));
+        if (Object.keys(configuration).length === 0) throw new Error('at least one quota setting is required');
+        return send(response, 200, { ok: true, namespace: settings.namespace, session: body.session,
+          result: await transport.call(body.session, 'quota_configure', configuration) });
+      } catch (error) {
+        return send(response, 400, { ok: false, error: String(error?.message ?? error) });
+      }
+    }
+
     if (url.pathname === `${ROUTE_PREFIX}dashboard`) {
       if (request.method !== 'GET') return send(response, 405, { ok: false, error: 'GET only' });
       const session = sessionOf(url);

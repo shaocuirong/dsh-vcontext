@@ -20,6 +20,12 @@ test('portable defaults use DSH_HOME, find bundled Python and preserve explicit 
     assert.ok(isAbsolute(config.dbPath));
     assert.equal(config.python, bundled);
     assert.equal(config.namespace, 'dsh-vcontext');
+    assert.equal(config.virtualContext.mode, 'enforce');
+    assert.equal(config.virtualContext.sessionMaxOnlineTokens, 1000000);
+    const partial = resolveConfig({ virtualContext: { highWatermark: 0.9 } });
+    assert.equal(partial.virtualContext.highWatermark, 0.9);
+    assert.equal(partial.virtualContext.lowWatermark, 0.70);
+    assert.equal(partial.virtualContext.historyRead.maxResponseBytes, 131072);
     process.env.VCTX_PYTHON = 'custom-python';
     assert.equal(resolveConfig().python, 'custom-python');
     assert.equal(resolveConfig({ python: 'explicit-python', namespace: 'project' }).python, 'explicit-python');

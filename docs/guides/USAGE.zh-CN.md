@@ -54,7 +54,15 @@ v0.11.0 细粒度分页与手动换出：
 
 完整设计见 [细粒度历史分页](../architecture/HISTORY-PAGING-0.11.0.md)。
 
-0.10.0 增加归档清单、检索和按消息读取：`vctx history_list {"limit":20}` 列出本会话的归档引用与大小（最多100条，不含正文）；`vctx history_search {"query":"关键词","limit":5}` 只扫描最近8个归档、最多2048个源事件 / 4MiB文本，返回不超过160字符的摘录；`vctx history_read {"ref":"...","seq":<原始事件序号>}` 只读回该归档中的一条原始消息。归档本身可带 `request_id` 与 `expected_surface_seq`：同一 request_id 与相同保留轮数重试返回原回执，不会再次追加；预览后会话已变化会拒绝提交。看板卡片也显示归档清单和搜索结果；点击归档时自动生成 `request_id` 并携带预览的 `expected_surface_seq`，预览未变时重试复用同一身份，成功后或预览刷新后换新。提交结果不确定时先刷新再重试，不要换新 ID。若服务端返回 CHANGED（预览已过期），卡片会自动重新读取预览并清空本次身份，下一次点击为新 Surface 生成新的 `request_id`；重放成功时标注“重放原回执，未追加新记录”，显示原归档时的前后消息数与字节。归档清单、检索和重放只认本会话引用，Fork 子会话不继承父会话的归档。检索是大小写不敏感的离线词法匹配，不是语义搜索；最近 8 个归档的上限有单元测试覆盖，2048事件 / 4MiB扫描上限为代码检查、未做大规模压力测试。详见 [0.10.0 设计](../architecture/HISTORY-VCONTEXT-0.10.0.md)。
+v0.12.0 在线配额（L2）：
+
+- 看板的“在线配额（L2）”卡显示会话/项目用量、预留、在线/冷单元、水位和估算器；展开后可修改会话上限、项目上限与高低水位。
+- `vctx quota_status {}` 读取；`vctx quota_configure {"session_max_tokens":1000000,"project_max_tokens":4000000}` 更新。`quota_admit` / `quota_reserve` / `quota_commit` / `quota_release` 是容量原语。
+- `write`、`page_in`、`recall` 在页面进入在线集合时原子准入；`_fit`、`page_out`、`fold` 释放；`restore` 按最终驻留集同步。超限时页面写入/换入失败或 recall 跳过，不会部分提交。
+- 估算器是 `utf8-bytes-div3-v1`（UTF-8 字节 / 3），不是供应商 token；L2 配额变化不证明下一次 L1 请求变小。当前版本不会在超限时自动整理到低水位。
+- 当前 project 固定为 `default`，资源/摘要尚未自动纳入页面配额；历史页仍走 marker 派生注册表，不是 L2 页面。详见 [v0.12 配额设计](../architecture/QUOTA-0.12.0.md)。
+
+0.10.0 增加归档清单、检索和按消息读取：`vctx history_list {"limit":20}` 列出本会话的归档引用与大小（最多100条，不含正文）；`vctx history_search {"query":"关键词","limit":5}` 最多扫描256个 page-out marker、8192个源事件 / 16MiB文本，返回不超过160字符的摘录；`vctx history_read {"ref":"...","seq":<原始事件序号>}` 只读回该归档中的一条原始消息。归档本身可带 `request_id` 与 `expected_surface_seq`：同一 request_id 与相同保留轮数重试返回原回执，不会再次追加；预览后会话已变化会拒绝提交。看板卡片也显示归档清单和搜索结果；点击归档时自动生成 `request_id` 并携带预览的 `expected_surface_seq`，预览未变时重试复用同一身份，成功后或预览刷新后换新。提交结果不确定时先刷新再重试，不要换新 ID。若服务端返回 CHANGED（预览已过期），卡片会自动重新读取预览并清空本次身份，下一次点击为新 Surface 生成新的 `request_id`；重放成功时标注“重放原回执，未追加新记录”，显示原归档时的前后消息数与字节。归档清单、检索和重放只认本会话引用，Fork 子会话不继承父会话的归档。检索是大小写不敏感的离线词法匹配，不是语义搜索；256 个 marker、8192 事件 / 16MiB 的扫描上限是有界扫描，不是持久全文索引；未做大规模压力测试。详见 [0.10.0 设计](../architecture/HISTORY-VCONTEXT-0.10.0.md)。
 
 ## 压缩会话上下文
 

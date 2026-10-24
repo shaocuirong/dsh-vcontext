@@ -12,10 +12,12 @@ export const MUTATING_OPERATIONS = new Set([
   'result_store', 'result_mark', 'result_plan', 'result_plan_finish',
   'snapshot_create', 'snapshot_checkout', 'snapshot_detach', 'snapshot_branch',
   'task_create', 'task_update', 'task_select', 'task_fork', 'task_attach', 'task_review',
+  'quota_configure', 'quota_admit', 'quota_release', 'quota_reserve', 'quota_commit',
+  'quota_release_reservation',
 ]);
 
 export const READ_OPERATIONS = new Set([
-  'read', 'history', 'search', 'snapshot', 'prefix', 'metrics', 'status',
+  'read', 'history', 'search', 'snapshot', 'prefix', 'metrics', 'status', 'quota_status',
   'checkpoints', 'schedule', 'replacement_policy', 'session_state', 'dashboard', 'usage',
   'state_status', 'operation_list', 'operation_read', 'resource_read', 'resource_history', 'summary_read',
   'result_read', 'result_list', 'result_get', 'result_plan_list',
