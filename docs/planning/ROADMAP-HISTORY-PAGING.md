@@ -1,8 +1,14 @@
 # History Paging Roadmap (0.10.3 - 0.14.0)
 
 状态：已批准的规划记录。版本号、模块名、配置项均为开发建议，不代表当前仓库已经支持。
-基线：v0.10.2（commit 03a97a9）。发布记录：Node 190/190、Python 176/176（CI）；未验证桌面重启、真人点击、供应商费用或答案质量。
-当前分支：codex/history-paging-roadmap。旧 PR #9 已合并；不要从已合并的旧分支继续开发。
+基线：v0.10.2 起草；当前 v0.10.3（main 6538fef，PR #10 已合并）。发布记录：Node 191/191、Python 176/176（v0.10.3）；未验证桌面重启、真人点击、供应商费用或答案质量。
+当前分支：codex/history-paging-011（设计 PR）；PR #9 / #10 已合并。
+
+## 状态（2026-10-24）
+
+- PR 1 有界历史读取：已合并 #10，v0.10.3。
+- PR 2 本设计：docs/architecture/HISTORY-PAGING-0.11.0.md（评审中）。
+- PR 3 下一步：adapter/history-segmenter.mjs + history_pages 只读预览。
 
 ## 目标
 
