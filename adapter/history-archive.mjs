@@ -471,7 +471,9 @@ export function createHistoryArchive(ctx, diagnostics) {
               const sameRequest = pageMarkers.find(marker => marker.meta?.request_id === requestId);
               if (sameRequest) fail('CHANGED');
             }
-            const plan = segmentHistoryPages(session, { include_open: false });
+            const segmentation = { target_bytes: options.target_bytes,
+              max_pages: options.max_pages, include_open: options.include_open };
+            const plan = segmentHistoryPages(session, segmentation);
             if (expectedGeneration !== undefined && plan.surface_generation !== expectedGeneration) fail('CHANGED');
             const decision = planHistoryPageOut(plan, {
               page_id: pageId,
@@ -482,7 +484,7 @@ export function createHistoryArchive(ctx, diagnostics) {
             if (!decision.eligible) fail('INVALID_INPUT');
             await flush(agent);
             check(signal);
-            const plan2 = segmentHistoryPages(session, { include_open: false });
+            const plan2 = segmentHistoryPages(session, segmentation);
             if (plan2.surface_generation !== plan.surface_generation) fail('CHANGED');
             const page = plan2.pages.find(item => item.page_id === pageId);
             if (!page || page.sealed !== true || page.tool_balanced !== true || page.opaque !== false)

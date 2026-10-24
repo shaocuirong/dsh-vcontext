@@ -77,6 +77,30 @@ export function createHandler(config, transport, liveContext, diagnostics, repla
     if (foreignOrigin || request.headers?.['sec-fetch-site'] === 'cross-site')
       return send(response, 403, { ok: false, error: 'same-origin request required' });
 
+    // Page mutations enter maintenance only from the idle host, never a tool
+    // executing inside the agent loop. Preview options must accompany execution.
+    if (url.pathname === `${ROUTE_PREFIX}history/pages` || url.pathname === `${ROUTE_PREFIX}history/page-out`) {
+      if (!localCarrier(request)) return send(response, 403, { ok: false, error: '仅接受本机同源请求。' });
+      if (!historyArchive) return send(response, 503, { ok: false, error: '会话历史归档服务尚未就绪。' });
+      if (request.method !== 'POST') return send(response, 405, { ok: false, error: 'POST only' });
+      try {
+        const body = JSON.parse(await readBody(request));
+        const preview = url.pathname.endsWith('/pages');
+        const allowed = ['session', 'target_bytes', 'max_pages', 'include_open', 'protect_recent_pages',
+          ...(preview ? [] : ['page_id', 'request_id', 'expected_surface_generation', 'allow_recent'])];
+        if (!body || typeof body !== 'object' || Array.isArray(body)
+          || typeof body.session !== 'string' || !body.session || body.session.length > 256
+          || Object.keys(body).some(key => !allowed.includes(key))) throw new Error('invalid request');
+        const { session, page_id, ...options } = body;
+        const result = preview ? await historyArchive.pages(session, options)
+          : await historyArchive.pageOut(session, page_id, options);
+        return send(response, 200, { ok: true, result });
+      } catch (error) {
+        return send(response, ['BUSY', 'CHANGED', 'ROOT_CHANGED'].includes(error?.code) ? 409 : 400,
+          { ok: false, error_code: error?.code ?? 'failed', error: String(error?.message ?? error) });
+      }
+    }
+
     // Match the search path before the exact history route. Search is a
     // read-only convenience over the same immutable markers, never a body read.
     if (url.pathname === `${ROUTE_PREFIX}history/search`) {

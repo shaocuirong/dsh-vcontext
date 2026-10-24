@@ -5,6 +5,15 @@ import { Context } from '@deepseek-ai/cordis';
 import { SessionStore } from '@deepseek-ai/dsh-session';
 import { createHistoryArchive } from '../adapter/history-archive.mjs';
 import { segmentHistoryPages } from '../adapter/history-segmenter.mjs';
+import { createHandler } from '../adapter/routes.mjs';
+import { join } from 'node:path';
+import { createVolatile } from '@deepseek-ai/cosmokit';
+import { AgentRegistry } from '@deepseek-ai/dsh-agent';
+import { AgentLoop } from '@deepseek-ai/dsh-agent-loop';
+import { LlmAdapter, LlmRuntime } from '@deepseek-ai/dsh-llm';
+import { SystemPrompt } from '@deepseek-ai/dsh-system-prompt';
+import { ToolRuntime } from '@deepseek-ai/dsh-tools';
+import { SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection';
 
 const text = (id, role, value, source) => ({ id, role, source,
   content: [{ type: 'text', text: value }] });
@@ -70,6 +79,111 @@ function buildSession(session) {
       { kind: 'model', provider: 'offline', model: 'fixture' }) }, { surfaceOp: 'append' });
   return { userSeq, bigCallSeq, bigResultSeq, parallelSeq, parallelResults };
 }
+
+test('page-out retains custom preview boundaries through both execution scans', async t => {
+  const fixture = createFixture();
+  t.after(() => fixture.dispose());
+  const { session, agent, archive } = fixture;
+  session.append('turn/start', { turn: 1 });
+  session.append('step/start', { turn: 1, step: 1 });
+  for (let i = 0; i < 3; i++) session.append('assistant/message', { turn: 1, step: 1, stream: [],
+    message: text('a' + i, 'assistant', String(i).repeat(1500),
+      { kind: 'model', provider: 'offline', model: 'fixture' }) }, { surfaceOp: 'append' });
+  session.append('step/end', { turn: 1, step: 1 });
+  session.append('turn/end', { turn: 1, reason: { kind: 'completed' } });
+  const options = { target_bytes: 2000, max_pages: 10, include_open: true, protect_recent_pages: 2 };
+  const plan = await archive.pages(agent.id, options);
+  assert.equal(plan.pages.length, 3);
+  assert.equal((await archive.pages(agent.id)).pages.length, 1);
+  const page = plan.pages[0];
+  await assert.rejects(() => archive.pageOut(agent.id, page.page_id, { ...options, target_bytes: 0 }),
+    { code: 'INVALID_INPUT' });
+  const result = await archive.pageOut(agent.id, page.page_id, { ...options,
+    expected_surface_generation: plan.surface_generation, request_id: 'custom-pages' });
+  assert.equal(result.status, 'paged_out');
+  const marker = session.snapshotEvents().find(event => event.surfaceOp?.op === 'replace');
+  assert.deepEqual(marker.sourceEventSeqs, page.source_seqs);
+  assert.equal(session.surface.nodes.includes(plan.pages[1].source_seqs[0]), true);
+  assert.equal((await archive.pageOut(agent.id, page.page_id, options)).replayed, true);
+});
+
+test('idle host route pages out real AgentLoop history and rejects an active agent', async t => {
+  const root = new Context();
+  new SystemPrompt(root, {});
+  new SessionStore(root);
+  const agents = new AgentRegistry(root);
+  new SessionProjectionRegistry(root);
+  const llm = new LlmRuntime(root);
+  new ToolRuntime(root);
+  new AgentLoop(root, { agents: [], maxParallelToolCalls: createVolatile(10) });
+  const requests = [];
+  let pause = null, started = null;
+  class OfflineAdapter extends LlmAdapter {
+    async *stream() {
+      if (pause) { started(); await pause; }
+      yield { type: 'block-start', index: 0, blockType: 'text' };
+      yield { type: 'text-delta', index: 0, text: 'offline response' };
+      yield { type: 'block-end', index: 0, block: { type: 'text', text: 'offline response' } };
+      yield { type: 'finish', reason: { kind: 'stop' } };
+    }
+  }
+  llm.registerAdapter(['offline-pages'], new OfflineAdapter());
+  root.on('llm/stream', (options, next) => { requests.push(structuredClone(options.messages)); return next(); });
+  root.on('session/flush', () => {});
+  const archive = createHistoryArchive(root);
+  const handle = await agents.create({ sessionId: 'host-pages', meta: { cwd: tmpdir(), delegationDepth: 0 },
+    agentOptions: { provider: 'offline-pages', model: 'fixture' } });
+  t.after(async () => { await archive.dispose(); await handle.dispose(); await root.fiber.dispose(); });
+  const agent = handle.agent;
+  const handler = createHandler({ dbPath: join(tmpdir(), 'unused-pages.db'), namespace: 'test' }, {},
+    null, null, null, null, null, null, null, null, archive);
+  async function post(path, body) {
+    const listeners = new Map();
+    const request = { method: 'POST', url: '/vctx/history/' + path,
+      headers: { host: 'localhost', origin: 'http://localhost' },
+      on(event, fn) { listeners.set(event, fn); }, destroy() {} };
+    let status, result;
+    const response = { writeHead(value) { status = value; }, end(value) { result = JSON.parse(value); } };
+    queueMicrotask(() => { listeners.get('data')?.(Buffer.from(JSON.stringify({ session: agent.id, ...body })));
+      listeners.get('end')?.(); });
+    await handler(request, response);
+    return { status, ...result };
+  }
+  for (let i = 1; i <= 3; i++) {
+    agent.followup(text('input-' + i, 'user', ('old page ' + i).repeat(80), { kind: 'user' }));
+    await agent.whenIdle();
+  }
+  const options = { target_bytes: 2000 };
+  let preview = await post('pages', options);
+  assert.equal(preview.status, 200);
+  const pageId = preview.result.pages[0].page_id;
+  let resume;
+  pause = new Promise(resolve => { resume = resolve; });
+  const entered = new Promise(resolve => { started = resolve; });
+  agent.followup(text('active', 'user', 'running request', { kind: 'user' }));
+  await entered;
+  let busy;
+  const before = agent.session.seq;
+  try { busy = await post('page-out', { ...options, page_id: pageId }); }
+  finally { pause = null; resume(); }
+  assert.equal(busy.status, 409);
+  assert.equal(busy.error_code, 'BUSY');
+  assert.equal(agent.session.seq, before);
+  await agent.whenIdle();
+  preview = await post('pages', options);
+  const body = { ...options, page_id: pageId, expected_surface_generation: preview.result.surface_generation,
+    request_id: 'idle-host-page' };
+  const out = await post('page-out', body);
+  assert.equal(out.status, 200);
+  assert.equal(out.result.status, 'paged_out');
+  assert.equal((await post('page-out', body)).result.replayed, true);
+  agent.followup(text('next', 'user', 'next request', { kind: 'user' }));
+  await agent.whenIdle();
+  const sent = JSON.stringify(requests.at(-1));
+  assert.ok(sent.includes(out.result.ref));
+  assert.equal(sent.includes('old page 1'.repeat(80)), false);
+  assert.ok(sent.includes('old page 2'.repeat(80)));
+});
 
 test('segmentHistoryPages builds bounded pages without mutating the session', async t => {
   const fixture = createFixture();

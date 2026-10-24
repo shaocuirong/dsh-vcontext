@@ -23,6 +23,7 @@ for (const path of ['index.mjs', 'lib/client.js', 'adapter/context-integration.m
   'adapter/plugin.mjs', 'adapter/routes.mjs', 'docs/architecture/HISTORY-VCONTEXT-0.10.0.md', 'docs/releases/nodes/NODES-0.10.0.md',
   'docs/releases/nodes/NODES-0.10.3.md', 'adapter/history-segmenter.mjs',
   'adapter/history-planner.mjs', 'tests/history-segmenter.test.mjs',
-  'docs/architecture/HISTORY-PAGING-0.11.0.md', 'docs/releases/nodes/NODES-0.11.0.md'])
+  'docs/architecture/HISTORY-PAGING-0.11.0.md', 'docs/releases/nodes/NODES-0.11.0.md',
+  'docs/releases/nodes/NODES-0.11.1.md'])
   await read(path);
 console.log(`Release metadata and entry points verified: v${version}`);

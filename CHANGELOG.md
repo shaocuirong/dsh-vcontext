@@ -2,6 +2,15 @@
 
 版本规则：重大功能更新升级次版本号（例如 0.1.0 → 0.2.0），修复升级补丁号（例如 0.2.0 → 0.2.1）。不兼容变更需明确标注；进入 1.0 后按语义化版本升级主版本号。每次发布同步版本元数据、更新日志、Git 标签和 GitHub Release。
 
+## [0.11.1] - 2026-10-24
+
+### PR #13 审阅修复
+
+- 换出前后两次扫描保留预览的 target_bytes、max_pages、include_open，修复自定义大小页面无法按 ID 执行的问题。
+- 新增本机同源 `POST /vctx/history/pages` 和 `POST /vctx/history/page-out`；换出在空闲宿主维护边界执行，运行期间返回 409 / BUSY。模型工具不再宣传换出操作，旧调用明确返回 HOST_ONLY 并提示宿主入口，避免维护锁重入。
+- 升级：更新插件后完全退出并重启 Harness；HTTP 换出传回与预览相同的分页参数和 generation。原模型 history_page_out 调用需改用宿主 HTTP 入口；只读工具及 history_read 保持。
+- 无数据库迁移，不修改本地机器配置；验证与未验证边界见[验证记录](docs/releases/VALIDATION.md)。
+
 ## [0.11.0] - 2026-10-24
 
 ### 细粒度历史分页与手动换出

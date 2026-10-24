@@ -69,6 +69,11 @@ test('worker outages leave host steps available while explicit tools report fail
   const decision = { kind: 'accept', messages: [] };
   assert.equal(await handlers.get('agent/pre-step')({ agent, signal }, async () => decision), decision);
   await assert.rejects(tools.get('vctx').execute({ operation: 'read', input: '{}' }, { agent, signal }), /ENOENT/);
+  let maintenance = 0;
+  agent.runMaintenance = () => { maintenance++; throw new Error('active agent'); };
+  await assert.rejects(tools.get('vctx').execute({ operation: 'history_page_out', input: '{"page_id":"hp_test"}' },
+    { agent, signal }), { code: 'HOST_ONLY' });
+  assert.equal(maintenance, 0, 'model tools must not re-enter maintenance');
   assert.ok(mounted.diagnostics.snapshot().totals.failed >= 3);
 });
 

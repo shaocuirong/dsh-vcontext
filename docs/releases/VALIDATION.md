@@ -1,5 +1,13 @@
 # 验证记录
 
+## v0.11.1：PR #13 审阅修复（2026-10-24）
+
+- 编辑前核对 origin、分支 codex/history-segmenter-011、本地 HEAD 与 PR #13 head 均为 40e03dca33a0f88bb4279b538d1cfa1146642742，工作区干净。
+- 本机完整 Node/真实 SDK 202/202 通过，0 失败、0 跳过；Python 176/176 通过。Node 完整套件在允许本机 HTTP/临时链接的权限下运行。
+- 新增回归覆盖非默认 target_bytes 的预览/执行边界一致、两次扫描、重放、真实 AgentLoop 运行期间 BUSY 且不修改、空闲宿主路由换出、下一次真实请求含引用而不含目标页正文，其他旧页正文保留；模型工具旧调用 HOST_ONLY 且未触发维护锁；路由同源、方法、字段与正文上限。
+- check:release 验证 v0.11.1；doctor 退出 0，数据库 modified=false。
+- 无数据库迁移、无 Python 内核改动、无机器配置覆盖。未验证桌面重启或真人浏览器点击，不宣称在线供应商 Token、缓存收益或答案质量改善。
+
 ## v0.11.0：细粒度历史分页与手动换出（2026-10-24）
 
 - 本机完整 199 项 Node/真实 SDK 测试通过（0 失败、0 跳过）；176 项 Python 通过。新增覆盖：turn 内 step 分页、3 个并行 tool-call 不拆组、100 KB 单组 oversize、open turn 过滤、page ID 稳定、replacement 标记 opaque、只读预览不修改会话、单页换出 marker/来源 seq、request_id 重放、最近页 PROTECTED、过期 generation CHANGED、页面注册表与换出后 history_read。

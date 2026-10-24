@@ -195,7 +195,10 @@ SQLite vh_* 延后到 v0.11.1，作为索引/配额/操作的派生缓存；计�
 | 1 | 有界历史读取（v0.10.3） | 已合并 #10 |
 | 2 | 本设计文档与容量/状态口径 | 已并入最终分支 |
 | 3 | history-segmenter + history_pages 只读预览 | 已实现 |
-| 4 | 页面注册表 | v0.11.0 用 marker 派生；SQLite vh_* 推迟到 v0.11.1 |
+| 4 | 页面注册表 | v0.11.0 用 marker 派生；SQLite vh_* 留待后续功能版本 |
 | 5 | 手动 Page-Out executor 与操作对账 | 已实现（一页一 marker，request_id 重放） |
 | 6 | 配额账本试算（v0.12 前置） | 已实现页面级 quota_trial；不强制 |
 | 7 | v0.11.0 最终 PR | 按用户要求，全部完成后只开一个 |
+
+
+v0.11.1 审阅修复：Page-Out 通过空闲宿主的 `POST /vctx/history/page-out` 执行，模型工具不重入维护锁；预览可用 `POST /vctx/history/pages`，执行须保留 target_bytes、max_pages、include_open。详见 [API](../guides/API.md)。
