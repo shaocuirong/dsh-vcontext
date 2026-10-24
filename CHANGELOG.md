@@ -9,8 +9,9 @@
 - `history_read` 的整段与单条读取都受字符与 UTF-8 响应字节上限约束：单条消息超过 65536 字符时返回分页 JSON 文本，带 `content_hash`、`total`、`next_offset` 与 `truncated`；整段读取同样同时检查字符和响应字节（≤128 KiB）。小消息保持原对象形状；`expected_content_hash` 用于续读校验，不匹配返回 CHANGED。
 - 读取上限覆盖 JSON 包装、引用和元数据；offset/limit 按 Unicode 码点计。读取诊断只记录 content_chars / response_bytes / offset，不记录正文。
 - 修复单条消息的小消息判断仍按 UTF-16 长度计数的问题：含 emoji 等补充平面字符且码点数未超 limit、响应未超 128 KiB 时，保持原对象形状；补充自定义 limit 与 65536 码点边界回归测试。
+- 修复分页仅限制正文码点数的遗漏：最终 JSON（包括包装、元数据及转义）同时受 65536 码点与 128 KiB 上限约束，续读偏移随实际切片更新；覆盖 ASCII、JSON 转义与 Unicode 的整段及单条分页拼接。
 - 文档目录重排为 guides / architecture / research / releases / planning / images，新增 docs/README.md 索引；所有本地 Markdown 链接与 check-release 路径同步更新。
-- 无数据库 schema 变更、无 Python 内核改动；本机 191 项 Node/真实 SDK、176 项 Python 测试通过，check:release 输出 v0.10.3，doctor 退出 0。未进行桌面重启/真人浏览器点击验收，未证明供应商 Token 或答案质量收益。
+- 无数据库 schema 变更、无 Python 内核改动；本机 196 项 Node/真实 SDK、176 项 Python 测试通过，check:release 输出 v0.10.3，doctor 退出 0。未进行桌面重启/真人浏览器点击验收，未证明供应商 Token 或答案质量收益。
 - 设计见[会话历史虚拟上下文](docs/architecture/HISTORY-VCONTEXT-0.10.0.md)，节点见[NODES-0.10.3](docs/releases/nodes/NODES-0.10.3.md)。
 
 ## [0.10.2] - 2026-10-23

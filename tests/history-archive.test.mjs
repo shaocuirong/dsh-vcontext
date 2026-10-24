@@ -435,13 +435,60 @@ for (const limit of [512, 65536]) {
     assert.deepEqual(await archive.read(agent.id, result.ref, 0, limit, seq), expected);
 
     const page = await archive.read(agent.id, result.ref, 0, limit - 1, seq);
-    assert.equal(page.content, [...serialized].slice(0, limit - 1).join(''));
+    const pageLength = [...page.content].length;
+    assert.ok(pageLength > 0 && pageLength <= limit - 1);
+    assert.ok([...JSON.stringify(page)].length <= 65536);
+    assert.equal(page.content, [...serialized].slice(0, pageLength).join(''));
     assert.equal(page.total, limit);
-    assert.equal(page.next_offset, limit - 1);
+    assert.equal(page.next_offset, pageLength);
     assert.equal(page.truncated, true);
     const tail = await archive.read(agent.id, result.ref, page.next_offset, limit, seq, page.content_hash);
     assert.equal(tail.next_offset, null);
     assert.equal(page.content + tail.content, serialized);
+  });
+}
+
+for (const [name, value] of [
+  ['ASCII', 'a'.repeat(100000)],
+  ['JSON escaping', '"\\\n'.repeat(30000)],
+  ['Unicode', '中文🌏'.repeat(30000)],
+]) {
+  test(`history_read bounds complete ${name} responses and preserves pagination`, async t => {
+    const fixture = historyFixture({ largeResult: value });
+    t.after(() => fixture.dispose());
+    const { session, agent, archive } = fixture;
+    const result = await archive.archive(agent.id, 2);
+    const events = session.snapshotEvents();
+    const marker = events.find(event => event.surfaceOp?.op === 'replace');
+    const toolSeq = marker.sourceEventSeqs.find(seq => events[seq]?.type === 'tool/result');
+    for (const seq of [null, toolSeq]) {
+      const entry = node => ({ seq: node, type: events[node].type,
+        message: session.deriveEventMessage(events[node]) });
+      const expected = JSON.stringify(seq === null
+        ? { ref: result.ref, source: marker.sourceEventSeqs.map(entry) }
+        : { ref: result.ref, ...entry(seq) });
+      let offset = 0;
+      let contentHash = null;
+      let restored = '';
+      do {
+        const page = await archive.read(agent.id, result.ref, offset, 65536, seq, contentHash);
+        const serialized = JSON.stringify(page);
+        assert.ok([...serialized].length <= 65536, 'whole response exceeds code-point budget');
+        assert.ok(Buffer.byteLength(serialized, 'utf8') <= 128 * 1024, 'whole response exceeds byte budget');
+        const count = [...page.content].length;
+        assert.ok(count > 0 && count <= 65536);
+        assert.equal(page.offset, offset);
+        assert.equal(page.total, [...expected].length);
+        assert.equal(page.truncated, page.next_offset !== null || offset > 0);
+        if (contentHash !== null) assert.equal(page.content_hash, contentHash);
+        contentHash = page.content_hash;
+        restored += page.content;
+        if (page.next_offset === null) break;
+        assert.equal(page.next_offset, offset + count);
+        offset = page.next_offset;
+      } while (true);
+      assert.equal(restored, expected);
+    }
   });
 }
 

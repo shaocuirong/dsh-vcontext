@@ -230,9 +230,13 @@ function paginateHistoryRead(content, offset, limit, wrap) {
   };
   let slice = part.join('');
   let response = make(slice, part.length);
-  while (Buffer.byteLength(JSON.stringify(response), 'utf8') > MAX_RESPONSE_BYTES && part.length > 1) {
-    const current = Buffer.byteLength(JSON.stringify(response), 'utf8');
-    const ratio = Math.max(0.5, (MAX_RESPONSE_BYTES - 512) / current);
+  while (part.length > 1) {
+    const serialized = JSON.stringify(response);
+    const chars = [...serialized].length;
+    const bytes = Buffer.byteLength(serialized, 'utf8');
+    if (chars <= MAX_READ && bytes <= MAX_RESPONSE_BYTES) break;
+    const ratio = Math.max(0.5, Math.min((MAX_READ - 512) / chars,
+      (MAX_RESPONSE_BYTES - 512) / bytes));
     const nextLength = Math.max(1, Math.floor(part.length * ratio));
     if (nextLength >= part.length) break;
     part.length = nextLength;
