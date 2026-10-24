@@ -409,3 +409,59 @@ test('truncated previews use complete history for recent-page protection and quo
   assert.equal(result.status, 'paged_out');
 });
 
+test('validated page-out receipts allow sequential paging of a user page and the same step', async t => {
+  const fixture = createFixture();
+  t.after(() => fixture.dispose());
+  const { session, agent, archive } = fixture;
+  session.append('turn/start', { turn: 1 });
+  session.append('user/message', text('u', 'user', 'request', { kind: 'user' }), { surfaceOp: 'append' });
+  session.append('step/start', { turn: 1, step: 1 });
+  for (let i = 0; i < 3; i++) {
+    const callId = 'call-' + i;
+    session.append('assistant/message', { turn: 1, step: 1, stream: [],
+      message: toolAssistant('a-' + i, [callId]) }, { surfaceOp: 'append' });
+    session.append('tool/result', { turn: 1, step: 1,
+      message: resultMessage('r-' + i, callId, String(i).repeat(1500)) }, { surfaceOp: 'append' });
+  }
+  session.append('step/end', { turn: 1, step: 1 });
+  session.append('turn/end', { turn: 1, reason: { kind: 'completed' } });
+  const options = { target_bytes: 2000, protect_recent_pages: 0 };
+  const initial = await archive.pages(agent.id, options);
+  assert.equal(initial.pages.length, 4);
+  for (let i = 0; i < initial.pages.length; i++) {
+    const plan = await archive.pages(agent.id, options);
+    assert.deepEqual(plan.pages.map(page => page.page_id), initial.pages.slice(i).map(page => page.page_id));
+    assert.ok(plan.pages.every(page => !page.opaque && page.tool_balanced));
+    const result = await archive.pageOut(agent.id, initial.pages[i].page_id,
+      { ...options, expected_surface_generation: plan.surface_generation });
+    assert.equal(result.status, 'paged_out');
+    assert.ok((await archive.read(agent.id, result.ref)).content);
+  }
+  assert.equal((await archive.pages(agent.id, options)).pages.length, 0);
+  assert.equal((await archive.pageList(agent.id)).total, 4);
+});
+
+test('a malformed page-out receipt still protects its affected source step', async t => {
+  const fixture = createFixture();
+  t.after(() => fixture.dispose());
+  const { session, agent, archive } = fixture;
+  session.append('turn/start', { turn: 1 });
+  session.append('step/start', { turn: 1, step: 1 });
+  const sources = [];
+  for (let i = 0; i < 2; i++) sources.push(session.append('assistant/message', { turn: 1, step: 1, stream: [],
+    message: text('a-' + i, 'assistant', 'answer', { kind: 'model', provider: 'offline', model: 'fixture' }) },
+  { surfaceOp: 'append' }).seq);
+  session.append('step/end', { turn: 1, step: 1 });
+  session.append('turn/end', { turn: 1, reason: { kind: 'completed' } });
+  const seq = session.seq;
+  session.append('user/message', text('vctx-page-' + seq, 'user',
+    '[VContext paged out history]\nref: vctx://history/fake/' + seq + '\nmeta: {"v":1,"kind":"page-out"}',
+    { kind: 'vcontext-history' }), { surfaceOp: { op: 'replace', startSeq: sources[0], endSeq: sources[0] },
+    sourceEventSeqs: [sources[0]] });
+  const plan = await archive.pages(agent.id);
+  assert.equal(plan.pages.length, 1);
+  assert.equal(plan.pages[0].opaque, true);
+  await assert.rejects(() => archive.pageOut(agent.id, plan.pages[0].page_id, { protect_recent_pages: 0 }),
+    { code: 'INVALID_INPUT' });
+});
+

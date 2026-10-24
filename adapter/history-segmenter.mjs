@@ -29,6 +29,44 @@ function toolCallIds(message) {
   return ids;
 }
 
+// Only our session-owned, intact page receipts exempt their source scope.
+// Other replacements (including malformed receipts) stay conservative.
+function validatedPageOut(event, session, events, ownerBySeq) {
+  if (event.type !== 'user/message' || event.data?.source?.kind !== 'vcontext-history'
+    || event.data?.id !== 'vctx-page-' + event.seq || event.data?.role !== 'user') return false;
+  if (!Array.isArray(event.data.content)) return false;
+  const value = event.data.content.find(block => block?.type === 'text')?.text;
+  if (typeof value !== 'string' || !value.startsWith('[VContext paged out history]\n')) return false;
+  const ref = 'vctx://history/' + sha(session.id).slice(0, 16) + '/' + event.seq;
+  if (!value.split('\n').includes('ref: ' + ref)) return false;
+  let meta;
+  try { meta = JSON.parse(value.split('\n').find(line => line.startsWith('meta: '))?.slice(6)); }
+  catch { return false; }
+  const sources = event.sourceEventSeqs;
+  if (!meta || meta.v !== 1 || meta.kind !== 'page-out' || !Array.isArray(sources) || !sources.length
+    || meta.count !== sources.length || JSON.stringify(meta.source_seqs) !== JSON.stringify(sources)
+    || !['message', 'step', 'tool_group', 'oversize'].includes(meta.page_kind)
+    || meta.page_id !== pageIdFor(session.id, meta.page_kind, sources)) return false;
+  const pending = new Set();
+  let bytes = 0;
+  for (const seq of sources) {
+    const source = events[seq], owner = ownerBySeq.get(seq);
+    if (!source || seq >= event.seq || source.surfaceOp !== 'append' || !VISIBLE.has(source.type)
+      || !owner || owner.turn !== meta.turn || owner.step !== meta.step) return false;
+    const message = messageOf(session, source);
+    if (!message) return false;
+    bytes += Buffer.byteLength(JSON.stringify(message), 'utf8');
+    if (source.type === 'tool/result') {
+      if (!pending.delete(message.toolCallId)) return false;
+    } else {
+      if (pending.size || !['user', 'assistant'].includes(message.role)) return false;
+      if (source.type === 'user/message' && source.data?.source?.kind !== 'user') return false;
+      for (const callId of toolCallIds(message)) pending.add(callId);
+    }
+  }
+  return pending.size === 0 && bytes === meta.bytes;
+}
+
 /**
  * Build a read-only page plan from the current Surface. It never mutates the
  * session, the host log, or the database.
@@ -115,6 +153,7 @@ export function segmentHistoryPages(session, options = {}) {
   for (const seq of nodes) {
     const event = events[seq];
     if (!event || !VISIBLE.has(event.type) || event.surfaceOp === 'append') continue;
+    if (validatedPageOut(event, session, events, ownerBySeq)) continue;
     // Mixed-owner replacements retain all known source scopes, including
     // through replacement chains. Unresolved nodes are isolated, not global.
     for (const [key, owner] of sourceOwnersBySeq.get(seq) ?? []) {
