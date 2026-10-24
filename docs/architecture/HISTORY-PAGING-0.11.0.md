@@ -1,6 +1,6 @@
 # v0.11.0：细粒度会话历史分页（设计）
 
-状态：v0.11.0 实现完成（未发布）；包括只读 Segmenter、手动 Page-Out、marker 派生页面注册表与页面级配额试算。分支 codex/history-segmenter-011；最终只开一个 PR。基线：v0.10.3（main 6538fef，PR #10 已合并）。
+状态：v0.11 系列实现完成，v0.11.2 修复边界；包括只读 Segmenter、手动 Page-Out、marker 派生页面注册表与页面级配额试算。分支 codex/history-segmenter-011；最终只开一个 PR。基线：v0.10.3（main 6538fef，PR #10 已合并）。
 目标：在已结束的 turn 内按 step / tool-call group 建立合法 page，先提供只读分页预览；下一阶段再做手动 page-out。自动策略、page-in、MCP、Git DAG 不在本设计范围内。
 
 路线图见 [History Paging Roadmap](../planning/ROADMAP-HISTORY-PAGING.md)。v0.10.3 的读取边界见 [HISTORY-VCONTEXT-0.10.0](HISTORY-VCONTEXT-0.10.0.md)。
@@ -202,3 +202,6 @@ SQLite vh_* 延后到 v0.11.1，作为索引/配额/操作的派生缓存；计�
 
 
 v0.11.1 审阅修复：Page-Out 通过空闲宿主的 `POST /vctx/history/page-out` 执行，模型工具不重入维护锁；预览可用 `POST /vctx/history/pages`，执行须保留 target_bytes、max_pages、include_open。详见 [API](../guides/API.md)。
+
+
+v0.11.2：混合归属替换沿 sourceEventSeqs 传播受影响 scope 集合，不再用 unknown 污染全会话；分页不跨隔离节点合并。分页计划返回截断前 total_pages，最近页保护基于该总数，max_pages 仅限制响应页数。

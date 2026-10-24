@@ -395,3 +395,6 @@ v0.11.1 宿主分页入口（本机同源，JSON 正文上限 16 KiB）：
 - `POST /vctx/history/pages`：正文 `{"session":"<id>","target_bytes":2000,"max_pages":256,"include_open":false,"protect_recent_pages":2}`，返回 `{ok:true,result:<分页计划>}`。
 - `POST /vctx/history/page-out`：携带相同分页参数并添加 `page_id`、`expected_surface_generation`、可选 `request_id` 与 `allow_recent`；返回 `{ok:true,result:<换出回执>}`。两次执行扫描均使用预览参数；省略分页参数时使用默认值。
 - 换出仅在 Agent 空闲时通过公开 `runMaintenance` 执行；运行期间返回 HTTP 409 / BUSY，Surface 变化返回 409 / CHANGED。模型工具不提供 `history_page_out`，旧调用返回 HOST_ONLY 并提示宿主入口；请勿在工具内重入维护锁。`history_pages`、`history_page_list`、`history_read` 仍为模型可用的只读操作。
+
+
+v0.11.2：分页计划增加 `total_pages`（按 include_open 过滤后、max_pages 截断前的总页数）。返回 pages 是最旧的至多 max_pages 页，quota_trial 的字节与页数只统计返回页；最近页保护使用完整历史中的位置，因此缩短预览不改变页面换出资格。替换节点仅使其来源链上已知的 turn/step 变为 opaque，未知替换被隔离，页面不会跨越它合并。

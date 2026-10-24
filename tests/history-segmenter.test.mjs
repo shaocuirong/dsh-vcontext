@@ -14,6 +14,7 @@ import { LlmAdapter, LlmRuntime } from '@deepseek-ai/dsh-llm';
 import { SystemPrompt } from '@deepseek-ai/dsh-system-prompt';
 import { ToolRuntime } from '@deepseek-ai/dsh-tools';
 import { SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection';
+import { planHistoryPageOut } from '../adapter/history-planner.mjs';
 
 const text = (id, role, value, source) => ({ id, role, source,
   content: [{ type: 'text', text: value }] });
@@ -311,5 +312,100 @@ test('manual page-out writes one marker, is idempotent, and lists the page', asy
   const after = await archive.pages(agent.id, { target_bytes: 32 * 1024, protect_recent_pages: 2 });
   assert.equal(after.pages.some(item => item.page_id === page.page_id), false);
   assert.ok(after.quota_trial);
+});
+
+function appendSimpleTurn(session, turn) {
+  session.append('turn/start', { turn });
+  session.append('user/message', text('u-' + turn, 'user', 'request ' + turn, { kind: 'user' }),
+    { surfaceOp: 'append' });
+  session.append('step/start', { turn, step: 1 });
+  session.append('assistant/message', { turn, step: 1, stream: [],
+    message: text('a-' + turn, 'assistant', 'answer ' + turn,
+      { kind: 'model', provider: 'offline', model: 'fixture' }) }, { surfaceOp: 'append' });
+  session.append('step/end', { turn, step: 1 });
+  session.append('turn/end', { turn, reason: { kind: 'completed' } });
+}
+
+test('whole-turn archive leaves unrelated and future history pageable', async t => {
+  const fixture = createFixture();
+  t.after(() => fixture.dispose());
+  const { session, agent, archive } = fixture;
+  for (let turn = 1; turn <= 4; turn++) appendSimpleTurn(session, turn);
+  const archived = await archive.archive(agent.id, 1);
+  assert.equal(archived.status, 'archived');
+  for (let turn = 5; turn <= 6; turn++) appendSimpleTurn(session, turn);
+  const plan = await archive.pages(agent.id);
+  assert.deepEqual([...new Set(plan.pages.map(page => page.turn))], [4, 5, 6]);
+  assert.ok(plan.pages.every(page => !page.opaque && page.tool_balanced && page.sealed));
+  const result = await archive.pageOut(agent.id, plan.pages[0].page_id,
+    { expected_surface_generation: plan.surface_generation });
+  assert.equal(result.status, 'paged_out');
+  assert.ok((await archive.read(agent.id, archived.ref)).content.includes('request 1'));
+});
+
+test('mixed-source replacement chains protect affected scopes without contaminating other turns', async t => {
+  const fixture = createFixture();
+  t.after(() => fixture.dispose());
+  const { session, agent, archive } = fixture;
+  session.append('turn/start', { turn: 1 });
+  const stepNodes = [];
+  for (let step = 1; step <= 2; step++) {
+    session.append('step/start', { turn: 1, step });
+    const seqs = [];
+    for (let i = 0; i < 3; i++) seqs.push(session.append('assistant/message', { turn: 1, step, stream: [],
+      message: text(`a-${step}-${i}`, 'assistant', 'answer',
+        { kind: 'model', provider: 'offline', model: 'fixture' }) }, { surfaceOp: 'append' }).seq);
+    stepNodes.push(seqs);
+    session.append('step/end', { turn: 1, step });
+  }
+  session.append('turn/end', { turn: 1, reason: { kind: 'completed' } });
+  const sources = [stepNodes[0].at(-1), stepNodes[1][0]];
+  const replace = seqs => session.append('user/message', text('replacement-' + session.seq, 'user', 'marker',
+    { kind: 'vcontext-history' }), { surfaceOp: { op: 'replace', startSeq: seqs[0], endSeq: seqs.at(-1) },
+    sourceEventSeqs: seqs }).seq;
+  const marker = replace(sources);
+  replace([marker]);
+  appendSimpleTurn(session, 2);
+  appendSimpleTurn(session, 3);
+  const plan = await archive.pages(agent.id);
+  assert.ok(plan.pages.filter(page => page.turn === 2 || page.turn === 3)
+    .every(page => !page.opaque && page.tool_balanced));
+  // Remaining groups in a source step must stay opaque even through a
+  // mixed-owner replacement chain; isolated markers never join other pages.
+  const affected = plan.pages.filter(page => page.turn === 1);
+  assert.equal(affected.length, 2);
+  assert.ok(affected.every(page => page.opaque && !page.tool_balanced));
+  await assert.rejects(() => archive.pageOut(agent.id, affected[0].page_id, { protect_recent_pages: 0 }),
+    { code: 'INVALID_INPUT' });
+  const nodes = [...session.surface.nodes];
+  for (const page of plan.pages) {
+    const start = nodes.indexOf(page.source_seqs[0]);
+    assert.deepEqual(nodes.slice(start, start + page.source_seqs.length), page.source_seqs);
+  }
+});
+
+test('truncated previews use complete history for recent-page protection and quota trials', async t => {
+  const fixture = createFixture();
+  t.after(() => fixture.dispose());
+  const { session, agent, archive } = fixture;
+  for (let turn = 1; turn <= 3; turn++) appendSimpleTurn(session, turn);
+  const full = await archive.pages(agent.id);
+  const short = await archive.pages(agent.id, { max_pages: 2 });
+  assert.equal(full.pages.length, 6);
+  assert.equal(short.total_pages, 6);
+  assert.equal(short.pages.length, 2);
+  assert.equal(short.truncated, true);
+  assert.equal(short.quota_trial.protected_pages, 0);
+  assert.equal(short.quota_trial.eligible_pages, 2);
+  for (const page of short.pages) {
+    assert.equal(planHistoryPageOut(short, { page_id: page.page_id }).eligible, true);
+    assert.equal(planHistoryPageOut(full, { page_id: page.page_id }).eligible, true);
+  }
+  assert.equal(planHistoryPageOut(full, { page_id: full.pages.at(-1).page_id }).reason, 'PROTECTED');
+  assert.equal(planHistoryPageOut(short, { page_id: short.pages[0].page_id, protect_recent_pages: 6 }).reason,
+    'PROTECTED');
+  const result = await archive.pageOut(agent.id, short.pages[0].page_id,
+    { max_pages: 2, expected_surface_generation: short.surface_generation });
+  assert.equal(result.status, 'paged_out');
 });
 

@@ -16,7 +16,7 @@ export function quotaTrial(plan, options = {}) {
   if (!Number.isSafeInteger(protectRecentPages) || protectRecentPages < 0
     || protectRecentPages > MAX_PROTECT_RECENT_PAGES)
     fail('INVALID_INPUT', 'protect_recent_pages 必须在 0 到 32 之间。');
-  const recentStart = Math.max(0, plan.pages.length - protectRecentPages);
+  const recentStart = Math.max(0, (plan.total_pages ?? plan.pages.length) - protectRecentPages);
   let totalBytes = 0, protectedBytes = 0, eligibleBytes = 0;
   let protectedPages = 0, eligiblePages = 0;
   plan.pages.forEach((page, index) => {
@@ -63,7 +63,7 @@ export function planHistoryPageOut(plan, options = {}) {
   const index = plan.pages.findIndex(page => page.page_id === pageId);
   if (index < 0) fail('NOT_FOUND', '找不到该历史页面。');
   const page = plan.pages[index];
-  const recent = protectRecentPages > 0 && index >= plan.pages.length - protectRecentPages;
+  const recent = protectRecentPages > 0 && index >= (plan.total_pages ?? plan.pages.length) - protectRecentPages;
   const eligible = page.sealed === true && page.tool_balanced === true && page.opaque !== true;
   const reason = !eligible
     ? (page.opaque ? 'OPAQUE' : page.sealed ? 'UNBALANCED' : 'OPEN')

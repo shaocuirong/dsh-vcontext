@@ -62,6 +62,7 @@ export function segmentHistoryPages(session, options = {}) {
   // from their sources; a replacement with mixed or unknown ownership is
   // deliberately unresolved and makes the affected step/turn opaque.
   const ownerBySeq = new Map();
+  const sourceOwnersBySeq = new Map();
   const endedTurns = new Set();
   const endedSteps = new Set();
   let currentTurn = null;
@@ -77,11 +78,14 @@ export function segmentHistoryPages(session, options = {}) {
     if (event.surfaceOp?.op === 'replace') {
       const sources = Array.isArray(event.sourceEventSeqs) ? event.sourceEventSeqs : [];
       const owners = new Set();
+      const sourceOwners = new Map();
       for (const source of sources) {
+        for (const [key, ancestor] of sourceOwnersBySeq.get(source) ?? []) sourceOwners.set(key, ancestor);
         const owner = ownerBySeq.get(source);
         if (!owner) owners.add('unknown');
         else owners.add(stepKey(owner.turn, owner.step));
       }
+      sourceOwnersBySeq.set(event.seq, sourceOwners);
       ownerBySeq.set(event.seq, owners.size === 1 && !owners.has('unknown')
         ? (() => {
           for (const source of sources) {
@@ -92,7 +96,9 @@ export function segmentHistoryPages(session, options = {}) {
         })()
         : null);
     } else if (VISIBLE.has(event.type)) {
-      ownerBySeq.set(event.seq, currentTurn === null ? null : { turn: currentTurn, step: currentStep });
+      const owner = currentTurn === null ? null : { turn: currentTurn, step: currentStep };
+      ownerBySeq.set(event.seq, owner);
+      sourceOwnersBySeq.set(event.seq, new Map(owner ? [[stepKey(owner.turn, owner.step), owner]] : []));
     }
     if (event.type === 'step/end') {
       endedSteps.add(stepKey(event.data.turn, event.data.step));
@@ -109,13 +115,12 @@ export function segmentHistoryPages(session, options = {}) {
   for (const seq of nodes) {
     const event = events[seq];
     if (!event || !VISIBLE.has(event.type) || event.surfaceOp === 'append') continue;
-    const owner = ownerBySeq.get(seq);
-    if (!owner) {
-      opaqueSteps.add('unknown');
-      continue;
+    // Mixed-owner replacements retain all known source scopes, including
+    // through replacement chains. Unresolved nodes are isolated, not global.
+    for (const [key, owner] of sourceOwnersBySeq.get(seq) ?? []) {
+      opaqueSteps.add(key);
+      if (owner.step === null || owner.step === undefined) opaqueTurns.add(owner.turn);
     }
-    opaqueSteps.add(stepKey(owner.turn, owner.step));
-    if (owner.step === null || owner.step === undefined) opaqueTurns.add(owner.turn);
   }
 
   function makeGroup(seqs, kind, balanced, opaque) {
@@ -162,8 +167,7 @@ export function segmentHistoryPages(session, options = {}) {
     if (event.type === 'user/message') {
       if (event.data?.source?.kind !== 'user') {
         const owner = ownerBySeq.get(seq);
-        if (!owner) opaqueSteps.add('unknown');
-        else {
+        if (owner) {
           opaqueSteps.add(stepKey(owner.turn, owner.step));
           if (owner.step === null || owner.step === undefined) opaqueTurns.add(owner.turn);
         }
@@ -219,7 +223,7 @@ export function segmentHistoryPages(session, options = {}) {
     const first = pageGroups[0];
     const key = stepKey(first.turn, first.step);
     const opaque = pageGroups.some(group => group.opaque)
-      || opaqueSteps.has(key) || opaqueSteps.has('unknown') || opaqueTurns.has(first.turn);
+      || opaqueSteps.has(key) || opaqueTurns.has(first.turn);
     const balanced = pageGroups.every(group => group.balanced) && !opaque;
     const sourceSeqs = pageGroups.flatMap(group => group.source_seqs);
     const bytes = pageGroups.reduce((sum, group) => sum + group.bytes, 0);
@@ -246,14 +250,17 @@ export function segmentHistoryPages(session, options = {}) {
     buffer = null;
   }
 
+  const positionBySeq = new Map(nodes.map((seq, position) => [seq, position]));
   for (const group of groups) {
     if (!buffer) {
       buffer = { turn: group.turn, step: group.step, groups: [group] };
       continue;
     }
     const sameScope = buffer.turn === group.turn && buffer.step === group.step;
+    const previous = buffer.groups.at(-1).source_seqs.at(-1);
+    const contiguous = positionBySeq.get(group.source_seqs[0]) === positionBySeq.get(previous) + 1;
     const bufferBytes = buffer.groups.reduce((sum, item) => sum + item.bytes, 0);
-    if (!sameScope || group.opaque || group.bytes > targetBytes
+    if (!sameScope || !contiguous || group.opaque || group.bytes > targetBytes
       || buffer.groups.some(item => item.opaque) || bufferBytes + group.bytes > targetBytes) {
       flushBuffer();
       buffer = { turn: group.turn, step: group.step, groups: [group] };
@@ -266,7 +273,7 @@ export function segmentHistoryPages(session, options = {}) {
 
   const visible = pages.filter(page => page.sealed || includeOpen);
   const truncated = visible.length > maxPages;
-  const result = { format: FORMAT, surface_generation: generation,
+  const result = { format: FORMAT, surface_generation: generation, total_pages: visible.length,
     pages: truncated ? visible.slice(0, maxPages) : visible };
   if (truncated) result.truncated = true;
   return result;

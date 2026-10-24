@@ -1,6 +1,6 @@
 # dsh-vcontext
 
-当前版本：**[v0.11.1](https://github.com/shaocuirong/dsh-vcontext/releases/tag/v0.11.1)**（PR 待合并预发布） · [细粒度历史分页](docs/architecture/HISTORY-PAGING-0.11.0.md) · [0.11.0 节点](docs/releases/nodes/NODES-0.11.0.md) · [会话历史虚拟上下文](docs/architecture/HISTORY-VCONTEXT-0.10.0.md) · [0.10.3 优化节点](docs/releases/nodes/NODES-0.10.3.md) · [任务执行状态](docs/architecture/TASKS-0.8.0.md) · [16 篇参考论文](docs/research/RESEARCH.md) · [更新日志](CHANGELOG.md) · [验证记录](docs/releases/VALIDATION.md)
+当前版本：**[v0.11.2](https://github.com/shaocuirong/dsh-vcontext/releases/tag/v0.11.2)** · [细粒度历史分页](docs/architecture/HISTORY-PAGING-0.11.0.md) · [0.11.0 节点](docs/releases/nodes/NODES-0.11.0.md) · [会话历史虚拟上下文](docs/architecture/HISTORY-VCONTEXT-0.10.0.md) · [0.10.3 优化节点](docs/releases/nodes/NODES-0.10.3.md) · [任务执行状态](docs/architecture/TASKS-0.8.0.md) · [16 篇参考论文](docs/research/RESEARCH.md) · [更新日志](CHANGELOG.md) · [验证记录](docs/releases/VALIDATION.md)
 
 **DeepSeek Harness 客户端虚拟上下文管理器**：结构化操作、可追溯资源版本、有来源的摘要、按需换页与会话内看板。
 
