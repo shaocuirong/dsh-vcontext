@@ -11,6 +11,8 @@ class ReplacementTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.path = Path(self.tmp.name) / 'memory.db'
         self.store = ContextStore(self.path, json.dumps(['project', 'alice']), budget=6000)
+        # Exercise the legacy policy independently of the v0.13 default controller.
+        self.store.dispatch('auto_configure', {'l2_enabled': False})
 
     def tearDown(self):
         self.store.close()

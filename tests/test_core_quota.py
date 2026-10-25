@@ -102,6 +102,7 @@ class CoreQuotaIntegrationTests(unittest.TestCase):
 
     def test_policy_eviction_releases_membership_without_releasing_peer_reference(self):
         with ContextStore(self.path, 'scope', budget=2000) as store:
+            store.dispatch('auto_configure', {'l2_enabled': False})
             page = store.write('A' * 400, tier='working')['page']
             store.write('B' * 400, tier='working')
             with ContextStore(self.path, 'peer') as peer:

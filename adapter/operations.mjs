@@ -14,10 +14,12 @@ export const MUTATING_OPERATIONS = new Set([
   'task_create', 'task_update', 'task_select', 'task_fork', 'task_attach', 'task_review',
   'quota_configure', 'quota_admit', 'quota_release', 'quota_reserve', 'quota_commit',
   'quota_release_reservation',
+  'auto_configure', 'auto_step', 'auto_tick', 'auto_observe', 'auto_access', 'auto_receipt', 'auto_latch', 'read', 'search',
 ]);
 
 export const READ_OPERATIONS = new Set([
-  'read', 'history', 'search', 'snapshot', 'prefix', 'metrics', 'status', 'quota_status',
+  'history', 'snapshot', 'prefix', 'metrics', 'status', 'quota_status',
+  'auto_status', 'auto_preview', 'auto_guard',
   'checkpoints', 'schedule', 'replacement_policy', 'session_state', 'dashboard', 'usage',
   'state_status', 'operation_list', 'operation_read', 'resource_read', 'resource_history', 'summary_read',
   'result_read', 'result_list', 'result_get', 'result_plan_list',
