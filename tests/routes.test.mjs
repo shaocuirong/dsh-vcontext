@@ -9,6 +9,18 @@ import { once } from 'node:events';
 
 const CONFIG = { dbPath: join(tmpdir(), 'vctx-route-test.db'), namespace: 'project' };
 
+test('dashboard activity tolerates unavailable supplements without dropping confirmed context', async () => {
+  const stub = transport({ dashboard: { residency: [] } });
+  const live = { async read() { return { current: { bytes: 1234 } }; } };
+  const automation = { async inspect() { throw new Error('unavailable'); } };
+  const handler = createHandler(CONFIG, stub, live, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, automation);
+  const result = await invoke(handler, 'GET', '/vctx/dashboard?session=s');
+  assert.equal(result.body.ok, true);
+  assert.equal(result.body.dashboard.live_context.current.bytes, 1234);
+  assert.deepEqual(result.body.dashboard.activity.unavailable, ['automation', 'results']);
+  assert.equal(result.body.dashboard.activity.confirmed_reduction_bytes, null);
+});
+
 test('automatic settings are independently writable only by the local same-origin host', async () => {
   const calls = [], config = { l1_enabled: true, l2_enabled: true };
   const automation = { async inspect(id) { calls.push(['inspect', id]); return { config: { ...config } }; },

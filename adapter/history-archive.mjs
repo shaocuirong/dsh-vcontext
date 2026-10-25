@@ -689,7 +689,7 @@ export function createHistoryArchive(ctx, diagnostics, onAccess) {
       }
       return bounded();
     },
-    async summary(id) {
+    async summary(id, { includeActivity = false } = {}) {
       if (!validId(id)) fail('INVALID_INPUT');
       const agent = await resolve(id);
       const { markers } = scanArchives(agent, id);
@@ -699,7 +699,26 @@ export function createHistoryArchive(ctx, diagnostics, onAccess) {
         if (Number.isSafeInteger(entry.bytes)) totalBytes += entry.bytes;
         lastRef ??= entry.ref;
       }
-      return { total_archives: markers.length, total_bytes: totalBytes, last_ref: lastRef };
+      if (!includeActivity) return { total_archives: markers.length, total_bytes: totalBytes, last_ref: lastRef };
+      const events = agent.session.snapshotEvents();
+      const tools = new Map(events.filter(event => event.type === 'tool/call').map(event => [event.data?.callId, event.data?.name]));
+      const recentOperations = markers.slice(0, 50).map(marker => {
+        const meta = marker.meta ?? {}, roles = {}, toolNames = new Set();
+        for (const seq of marker.event.sourceEventSeqs) {
+          const event = events[seq];
+          const type = event?.type === 'tool/result' ? 'tool' : event?.type === 'assistant/message' ? 'assistant' : 'user';
+          roles[type] = (roles[type] ?? 0) + 1;
+          const name = tools.get(event?.data?.message?.toolCallId);
+          if (typeof name === 'string' && toolNames.size < 8) toolNames.add(name.slice(0, 80));
+        }
+        return { ...markerMetadata(marker), kind: meta.kind === 'page-out' ? 'history_page' : 'history_archive',
+          page_id: meta.page_id ?? null, created_at: marker.event.time,
+          before_bytes: Number.isSafeInteger(meta.before_bytes) ? meta.before_bytes : null,
+          after_bytes: Number.isSafeInteger(meta.after_bytes) ? meta.after_bytes : null,
+          roles, tool_names: [...toolNames], turn: meta.turn ?? null, step: meta.step ?? null };
+      });
+      return { total_archives: markers.length, total_bytes: totalBytes, last_ref: lastRef,
+        recent_operations: recentOperations, truncated: markers.length > 50 };
     },
     async dispose() {
       disposed = true;

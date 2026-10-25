@@ -4,6 +4,25 @@ import { Context } from '@deepseek-ai/cordis';
 import { SessionStore } from '@deepseek-ai/dsh-session';
 import { createLiveContext, describeContext } from '../adapter/live-context.mjs';
 
+test('observed trends are bounded, metadata-only and do not invent repeated refresh points', async () => {
+  const root = new Context(); root.provide('sessions');
+  let size = 1;
+  const session = { deriveMessages: () => [{ role: 'user', content: 'SECRET_BODY'.repeat(size) }] };
+  root.set('sessions', { get: id => id === 'a' ? session : null });
+  const live = createLiveContext(root);
+  try {
+    await live.read('a'); await live.read('a');
+    assert.equal((await live.read('a')).observations.length, 1);
+    for (size = 2; size < 80; size++) await live.read('a');
+    const result = await live.read('a');
+    assert.equal(result.observations.length, 60);
+    assert.doesNotMatch(JSON.stringify(result.observations), /SECRET_BODY|preview/);
+    assert.equal((await live.read('other')).observations.length, 0);
+    root.waterfall('llm/stream', { sessionId: 'a', messages: session.deriveMessages() }, () => null);
+    assert.equal((await live.read('a')).observations.at(-1).kind, 'request');
+  } finally { live.dispose(); await root.fiber.dispose(); }
+});
+
 test('reads current derived history each time and captures each request separately', async () => {
   const root = new Context();
   root.provide('sessions');

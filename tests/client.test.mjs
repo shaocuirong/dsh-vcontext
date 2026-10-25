@@ -169,6 +169,76 @@ test('automatic organizer UI persists independent switches and renders protected
   assert.match(text(tree), /设置已保存/);
 });
 
+test('context size formatting and protection summaries distinguish unknown from zero', async () => {
+  const { module } = await loadClient();
+  assert.equal(module.formatSize(null), '—');
+  assert.equal(module.formatSize(undefined), '—');
+  assert.equal(module.formatSize(0), '0 B');
+  assert.equal(module.formatSize(1024), '1 KB');
+  const view = module.dashboardView({ live_context: { observations: [
+    { kind: 'derived', bytes: 100 }, { kind: 'request', bytes: 2000 }, { kind: 'derived', bytes: 70 },
+  ] }, automation: { l1: { pages: [{ reasons: ['RECENT', 'RECENT', 'TASK_DEPENDENCY'] }, { reasons: [] }] } } });
+  assert.equal(view.changes, -30);
+  assert.equal(view.protected, 1);
+  assert.equal(view.eligible, 1);
+  assert.equal(view.protection.find(([key]) => key === 'RECENT')[1], 1);
+});
+
+test('queued replacement shows waiting state without claiming before/after savings', async () => {
+  const { module } = await loadClient();
+  const tree = module.ReplacementFlow({ event: { id: 'queued', kind: 'result_project', state: 'queued', unit: 'bytes',
+    before: 50000, after: 1000, source_bytes: 60000, source_count: 1, tool_names: ['read'] } });
+  const content = text(tree);
+  assert.match(content, /等待模型步骤/);
+  assert.match(content, /尚未产生替换收益/);
+  assert.doesNotMatch(content, /减少 47|缩减$/);
+  assert.ok(findNode(tree, node => node.type === 'button' && text(node).includes('确认结果')).props.disabled);
+  assert.equal(findNode(tree, node => node.type === 'button' && text(node) === '回放这次变化'), undefined);
+});
+
+test('unknown legacy measurement stays unknown and confirmed source identity remains visible', async () => {
+  const { module } = await loadClient();
+  const tree = module.ReplacementFlow({ event: { id: 'old', kind: 'history_page', state: 'confirmed', unit: 'bytes',
+    before: null, after: null, roles: { user: 2, tool: 1 }, tool_names: ['read'], ref: 'vctx://history/test/20', source_start_seq: 1, source_end_seq: 8 } });
+  assert.match(text(tree), /没有可核实的上下文前后量/);
+  assert.match(text(tree), /2 条用户消息 · 1 条工具结果 · read/);
+  assert.match(text(tree), /vctx:\/\/history\/test\/20/);
+  assert.doesNotMatch(text(tree), /0 B/);
+});
+
+test('activity filters preserve queued and failed entries and selection uses stable receipt identity', async () => {
+  const renderer = createHookRenderer();
+  const { module } = await loadClient(undefined, renderer.react);
+  let selected = null;
+  const render = () => module.ActivityTimeline({ events: [
+    { id: 'done', kind: 'history_page', state: 'confirmed', layer: 'l1', before: 100, after: 50 },
+    { id: 'pending', kind: 'result_project', state: 'queued', layer: 'l1', source_count: 1 },
+  ], onSelect: id => { selected = id; } });
+  let tree = await renderer.settle(render);
+  findNode(tree, node => node.type === 'button' && text(node) === '待处理与异常').props.onClick();
+  tree = await renderer.settle(render);
+  assert.doesNotMatch(text(tree), /历史页面换出/);
+  const pending = findNode(tree, node => node.type === 'button' && text(node).includes('工具结果替换为引用'));
+  pending.props.onClick();
+  assert.equal(selected, 'pending');
+  assert.match(text(tree), /等待模型步骤/);
+});
+
+test('empty context trend explains missing request observations without fabricating a chart', async () => {
+  const { module } = await loadClient();
+  const tree = module.ContextTrend({ observations: [] });
+  assert.equal(findNode(tree, node => node.type === 'svg'), undefined);
+  assert.match(text(tree), /没有记录时不生成示意曲线/);
+});
+
+test('trend grid and observations have distinct React identities across refreshes', async () => {
+  const { module } = await loadClient();
+  const tree = module.ContextTrend({ observations: [1, 2].map(id => ({ id, kind: 'derived', at: id, bytes: id * 100, message_count: id, tool_count: 0 })) });
+  const chart = findNode(tree, node => node.type === 'svg');
+  const keys = chart.children.flat().filter(node => node?.props?.key !== undefined).map(node => String(node.props.key));
+  assert.equal(new Set(keys).size, keys.length);
+});
+
 test('only the main dashboard contributes composer suppression, including its disabled hint', async () => {
   const { module } = await loadClient();
   const { find } = mount(module);

@@ -1,6 +1,6 @@
 # dsh-vcontext
 
-当前版本：**[v0.13.0](https://github.com/shaocuirong/dsh-vcontext/releases/tag/v0.13.0)** · [自动整理设计](docs/architecture/AUTOMATION-0.13.0.md) · [0.13.0 节点](docs/releases/nodes/NODES-0.13.0.md) · [可配置虚拟配额](docs/architecture/QUOTA-0.12.0.md) · [细粒度历史分页](docs/architecture/HISTORY-PAGING-0.11.0.md) · [任务执行状态](docs/architecture/TASKS-0.8.0.md) · [更新日志](CHANGELOG.md) · [验证记录](docs/releases/VALIDATION.md)
+当前版本：**[v0.14.0](https://github.com/shaocuirong/dsh-vcontext/releases/tag/v0.14.0)** · [可视看板](docs/guides/UI.md) · [0.14.0 节点](docs/releases/nodes/NODES-0.14.0.md) · [自动整理设计](docs/architecture/AUTOMATION-0.13.0.md) · [更新日志](CHANGELOG.md) · [验证记录](docs/releases/VALIDATION.md)
 
 **DeepSeek Harness 客户端虚拟上下文管理器**：结构化操作、可追溯资源版本、有来源的摘要、按需换页与会话内看板。
 
@@ -39,6 +39,15 @@
 - **交互反馈**：创建会话前预选、错误重试、请求超时、手动与周期刷新。
 
 ## 界面预览
+
+### v0.14 实时上下文观察台
+
+首页直接显示派生上下文与模型请求趋势、真实替换前后差值、聊天/工具来源和恢复引用。变更记录可筛选、选中并回放，排队与未确认状态不计入收益；操作、任务和诊断独立分组。
+
+![上下文变化与替换过程](docs/images/dashboard-014.png)
+
+截图来自隔离演示会话，使用真实 SDK Surface 与临时数据库；不是用户会话，也没有真实供应商调用。开发者从源码运行 `npm run preview:dashboard` 可交互验证。
+
 
 以下截图来自独立预览，使用演示数据。它们不代表模型效果或真实供应商缓存收益。
 
