@@ -31,6 +31,7 @@ for (const path of ['index.mjs', 'lib/client.js', 'adapter/context-integration.m
   'tests/automation.test.mjs', 'tests/test_automation.py', 'examples/bench-automation.mjs',
   'docs/architecture/AUTOMATION-0.13.0.md', 'docs/releases/nodes/NODES-0.13.0.md',
   'adapter/dashboard-activity.mjs', 'tests/dashboard-activity.test.mjs', 'examples/dashboard-preview.mjs',
-  'docs/releases/nodes/NODES-0.14.0.md'])
+  'docs/releases/nodes/NODES-0.14.0.md', 'docs/releases/nodes/NODES-0.15.0.md',
+  'docs/architecture/WORKING-BUDGET-0.15.0.md'])
   await read(path);
 console.log(`Release metadata and entry points verified: v${version}`);

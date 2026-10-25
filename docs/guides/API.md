@@ -1,5 +1,13 @@
 # JSON / Python API
 
+## v0.15 聊天输入工作预算
+
+`POST /vctx/automation` 新增 `l1_input_budget`（整数0–9,000,000,000,000，默认131072，可单独提交）。0表示跟随模型窗口；正数表示L1输入工作预算。有效预算为 `min(l1_input_budget, contextWindow-outputReserve)`，0时只取后者。全部输入组成仍由新鲜公开压力测量；预算不是插件页面的L2在线配额。模型不能调用此配置入口。
+
+`GET /vctx/automation` 的 `l1.pressure` 在可用时新增 `model_window`、`model_input_budget`、`configured_budget`、`high_tokens`、`low_tokens`。原 `budget` 现在是有效工作预算，`ratio/high/low`均以此计算。缺失设置初始化为131072，已有开关和预算不被覆盖。高低水位仍复用本会话quota配置。
+
+`history_list`为空表示当前会话没有识别到本会话所有的vctx归档marker，不表示宿主没有Surface替换能力；原生摘要、工具结果投影和继承的父会话marker不属于此清单。成功归档证明派生消息已替换；下一模型请求和供应商计费是独立证据。
+
 ## v0.14 看板观察数据
 
 `GET /vctx/dashboard` 新增 `activity` 与 `automation`。activity返回最多80项元数据事件、队列/异常数量及仅对已确认L1操作计算的前后字节差；字段缺失保持null。相同宿主marker与自动回执去重，正文大小、L2估算tokens不混计。某项补充读取失败时返回unavailable来源，保留其余数据。
@@ -57,7 +65,7 @@ Python 的 `auto_status/auto_preview` 为宿主状态查询；`auto_configure/au
 | `schedule` | `holder`, `executors`, `page_bytes` | `congestion=0`, `pages` | 根据手工提供的指标给出执行位置建议 |
 | `prepare_task` | `query`, `holder`, `executors` | `congestion=0`, `limit=5` | 先换入相关页，再按这些页的缓存位置给出建议 |
 
-`quota_status` / `quota_configure` 管理的是 L2 在线虚拟集合，不是模型当前请求的 L1 字节。估算器固定为 `utf8-bytes-div3-v1`（UTF-8 字节数 / 3，向上取整），只用于容量试算，不宣称等于供应商 token。`write`、`page_in`、`recall` 在页面变在线时原子准入；`_fit`、`page_out`、`fold` 释放；`restore` 用最终驻留集同步。当前版本不在超限时自动整理到低水位，也不把资源/摘要自动纳入页面配额。
+`quota_status` / `quota_configure` 管理的是 L2 在线虚拟集合，不是模型当前请求的 L1 字节。估算器固定为 `utf8-bytes-div3-v1`（UTF-8 字节数 / 3，向上取整），只用于容量试算，不宣称等于供应商 token。`write`、`page_in`、`recall` 在页面变在线时原子准入；`_fit`、`page_out`、`fold` 释放；`restore` 用最终驻留集同步。0.13 起默认启用 L2 高低水位自动整理；受保护或共享引用可能阻止达到目标。资源/摘要仍不自动纳入页面配额。
 
 `write` 的 `importance` 是 0..1，默认 0.5；`tier` 对新页面默认 archive，对现有页面默认保留原层。更新需要匹配 `expected_version`。**其余字段为完整替换，不是部分 patch**，要保留的标签和关联应一并提供。`links` 只能引用本 scope 内已存在的页面，最多 32 条；tags 最多 64 个。单次内容最多 1 MB，长文应先使用 ingest 或由调用者分批。
 
