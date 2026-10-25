@@ -184,6 +184,55 @@ test('context size formatting and protection summaries distinguish unknown from 
   assert.equal(view.protection.find(([key]) => key === 'RECENT')[1], 1);
 });
 
+test('quota presets and linked percent sliders save a valid pair when high is dragged below the old low', async t => {
+  const renderer = createHookRenderer(), { module } = await loadClient(undefined, renderer.react);
+  const savedFetch = globalThis.fetch, writes = [];
+  t.after(() => { globalThis.fetch = savedFetch; });
+  globalThis.fetch = async (_path, options) => { writes.push(JSON.parse(options.body)); return { ok: true, json: async () => ({ ok: true }) }; };
+  const quota = { session: { max_tokens: 1000000, used_tokens: 100, reserved_tokens: 0, online_units: 1, cold_units: 0, high_watermark: .85, low_watermark: .7 },
+    project: { max_tokens: 4000000, used_tokens: 100, reserved_tokens: 0 }, config: { high_watermark: .85, low_watermark: .7 } };
+  const render = () => module.QuotaCard({ sessionId: 's', quota, reload() {} });
+  let tree = await renderer.settle(render);
+  findNode(tree, n => n.props['aria-label'] === '开始整理水位').props.onChange({ target: { value: '62' } });
+  tree = await renderer.settle(render);
+  assert.equal(findNode(tree, n => n.props['aria-label'] === '停止整理水位').props.value, 47);
+  assert.match(text(tree), /达到 62% 开始，降到 47% 停止/);
+  findNode(tree, n => n.type === 'button' && text(n).startsWith('轻量')).props.onClick();
+  tree = await renderer.settle(render);
+  await findNode(tree, n => n.type === 'form').props.onSubmit({ preventDefault() {} });
+  tree = await renderer.settle(render);
+  assert.deepEqual(writes, [{ session: 's', session_max_tokens: 32768, project_max_tokens: 131072, high_watermark: .62, low_watermark: .47 }]);
+  assert.match(text(tree), /配额已保存/);
+  assert.match(text(tree), /聊天历史的规模请用上方 L1/);
+  // The helper constrains extreme slider values without ever producing an invalid pair.
+  for (const value of [-10, 0, 6, 62, 99, 200]) {
+    for (const field of ['high', 'low']) {
+      const adjusted = module.adjustWatermarks({ high_watermark: .85, low_watermark: .7 }, field, value);
+      assert.ok(0 < adjusted.low_watermark && adjusted.low_watermark < adjusted.high_watermark && adjusted.high_watermark < 1);
+    }
+  }
+});
+
+test('L1 budget presets are persisted independently and empty archive status does not claim savings', async t => {
+  const renderer = createHookRenderer(), { module } = await loadClient(undefined, renderer.react);
+  const savedFetch = globalThis.fetch, writes = [], config = { l1_enabled: true, l2_enabled: false, l1_input_budget: 131072 };
+  t.after(() => { globalThis.fetch = savedFetch; });
+  globalThis.fetch = async (_path, options) => {
+    if (options?.method === 'POST') { const body = JSON.parse(options.body); writes.push(body); Object.assign(config, body); }
+    return { ok: true, json: async () => ({ ok: true, result: { config: { ...config } } }) };
+  };
+  const render = () => module.AutomationCard({ sessionId: 's', reload() {} });
+  let tree = await renderer.settle(render);
+  await findNode(tree, n => n.type === 'button' && text(n) === '64 Ki · 更早整理').props.onClick();
+  tree = await renderer.settle(render);
+  assert.deepEqual(writes, [{ session: 's', l1_input_budget: 65536 }]);
+  assert.equal(config.l2_enabled, false);
+  assert.equal(findNode(tree, n => n.type === 'button' && text(n) === '64 Ki · 更早整理').props['aria-pressed'], true);
+  const status = module.ProtectionStatus({ automation: { config }, view: { hasProtectionPreview: false, protection: [] }, history: { total_archives: 0 } });
+  assert.match(text(status), /尚无 vctx 历史换出记录/);
+  assert.match(text(status), /L2 插件页降冷不代表聊天历史已换出/);
+});
+
 test('queued replacement shows waiting state without claiming before/after savings', async () => {
   const { module } = await loadClient();
   const tree = module.ReplacementFlow({ event: { id: 'queued', kind: 'result_project', state: 'queued', unit: 'bytes',
