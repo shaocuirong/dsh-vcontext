@@ -60,6 +60,11 @@ test('native Surface archive removes old chat and tool content while V4 replay k
   const result = await archive.archive(agent.id);
   assert.equal(result.count, preview.count);
   assert.ok(result.after.bytes < result.before.bytes);
+  const activity = await archive.summary(agent.id, { includeActivity: true });
+  assert.equal(activity.recent_operations[0].before_bytes, result.before.bytes);
+  assert.equal(activity.recent_operations[0].after_bytes, result.after.bytes);
+  assert.ok(activity.recent_operations[0].roles.tool > 0);
+  assert.doesNotMatch(JSON.stringify(activity.recent_operations), /private question|private tool result|private answer/);
   const visible = JSON.stringify(session.deriveMessages());
   // The marker's bounded meta.first excerpt may repeat the opening words, but
   // the archived message bodies themselves must be gone from the Surface.

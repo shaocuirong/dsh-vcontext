@@ -21,6 +21,21 @@ export function describeContext(messages, tools = [], route = {}) {
 
 export function createLiveContext(ctx, { diagnostics, contextIntegration = true } = {}) {
   const sent = new Map();
+  const observations = new Map();
+  let observationId = 0;
+  function remember(id, view, kind) {
+    let history = observations.get(id);
+    if (!history) {
+      if (observations.size >= 128) observations.delete(observations.keys().next().value);
+      history = []; observations.set(id, history);
+    }
+    const last = history.findLast(item => item.kind === kind);
+    if (kind === 'derived' && last?.fingerprint === view.fingerprint) return;
+    history.push({ id: ++observationId, kind, at: Date.now(), bytes: view.bytes,
+      message_count: view.message_count, tool_count: view.tool_count, fingerprint: view.fingerprint,
+      roles: { ...view.roles } });
+    if (history.length > 60) history.splice(0, history.length - 60);
+  }
   const pending = new Map();
   const lifetime = new AbortController();
   let coldQueue = Promise.resolve();
@@ -30,6 +45,7 @@ export function createLiveContext(ctx, { diagnostics, contextIntegration = true 
         const snapshot = { ...describeContext(options.messages, options.tools, options), captured_at: Date.now() };
         sent.delete(options.sessionId);
         sent.set(options.sessionId, snapshot);
+        remember(options.sessionId, snapshot, 'request');
         if (sent.size > 128) sent.delete(sent.keys().next().value);
       }
     } catch {
@@ -43,12 +59,14 @@ export function createLiveContext(ctx, { diagnostics, contextIntegration = true 
       if (session?.deriveMessages) {
         const header = session.requestHeader?.();
         current = describeContext(session.deriveMessages(), header?.tools, header?.config);
+        remember(sessionId, current, 'derived');
       }
     } catch {
       readError ??= 'HISTORY_READ_FAILED';
       diagnostics?.record('context.derive.failed', 'warn', { error_type: 'Error' });
     }
     return { current, last_request: sent.get(sessionId) ?? null, checked_at: Date.now(),
+      observations: structuredClone(observations.get(sessionId) ?? []),
       dsh_context: readContextIntegration(ctx, session, { enabled: contextIntegration, diagnostics }),
       source: current ? source : 'unavailable', ...(readError ? { read_error: readError } : {}) };
   }
@@ -100,6 +118,6 @@ export function createLiveContext(ctx, { diagnostics, contextIntegration = true 
       try { return await task; }
       finally { pending.delete(sessionId); }
     },
-    dispose() { lifetime.abort(); dispose(); sent.clear(); },
+    dispose() { lifetime.abort(); dispose(); sent.clear(); observations.clear(); },
   };
 }

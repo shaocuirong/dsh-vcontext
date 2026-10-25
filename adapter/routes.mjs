@@ -10,6 +10,7 @@
  * boolean and one optional flat parameter object.
  */
 import { validateConfig } from './bridge.mjs';
+import { buildDashboardActivity } from './dashboard-activity.mjs';
 
 export const ROUTE_PREFIX = '/vctx/';
 const MAX_BODY_BYTES = 16384;
@@ -440,10 +441,18 @@ export function createHandler(config, transport, liveContext, diagnostics, repla
         if (historyArchive) {
           // The archive summary is metadata only; losing it must not take down
           // the rest of the dashboard payload.
-          try { dashboard.history_archive = await historyArchive.summary(session); }
+          try { dashboard.history_archive = await historyArchive.summary(session, { includeActivity: true }); }
           catch { dashboard.history_archive = null; }
         }
         if (diagnostics) dashboard.diagnostics = diagnostics.snapshot();
+        const supplement = await Promise.allSettled([
+          automation?.inspect(session), transport.call(session, 'result_list', { limit: 50 }),
+        ]);
+        dashboard.automation = supplement[0].status === 'fulfilled' ? supplement[0].value ?? null : null;
+        dashboard.activity = buildDashboardActivity({ history: dashboard.history_archive, automation: dashboard.automation,
+          results: supplement[1].status === 'fulfilled' ? supplement[1].value?.results ?? [] : [],
+          residency: dashboard.residency, compaction: dashboard.context_replacement });
+        dashboard.activity.unavailable = supplement.flatMap((result, i) => result.status === 'rejected' ? [i ? 'results' : 'automation'] : []);
         return send(response, 200, { ok: true, namespace: settings.namespace, session, dashboard });
       } catch (error) {
         // A session with no vcontext pages yet is normal, not a route failure.
