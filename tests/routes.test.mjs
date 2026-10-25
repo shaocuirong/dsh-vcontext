@@ -9,6 +9,31 @@ import { once } from 'node:events';
 
 const CONFIG = { dbPath: join(tmpdir(), 'vctx-route-test.db'), namespace: 'project' };
 
+test('automatic settings are independently writable only by the local same-origin host', async () => {
+  const calls = [], config = { l1_enabled: true, l2_enabled: true };
+  const automation = { async inspect(id) { calls.push(['inspect', id]); return { config: { ...config } }; },
+    async configure(id, changes) { calls.push(['configure', id, changes]); Object.assign(config, changes); return { config }; } };
+  const handler = createHandler(CONFIG, transport(), undefined, undefined, undefined, undefined,
+    undefined, undefined, undefined, undefined, undefined, automation);
+  assert.equal((await invoke(handler, 'GET', '/vctx/automation?session=s')).body.result.config.l1_enabled, true);
+  const changed = await invoke(handler, 'POST', '/vctx/automation', JSON.stringify({ session: 's', l1_enabled: false }));
+  assert.equal(changed.status, 200);
+  assert.equal(config.l1_enabled, false);
+  assert.equal(config.l2_enabled, true);
+  for (const body of [{ session: 's', l1_enabled: 1 }, { session: 's', protect_recent_pages: 0 }, { session: 's' }]) {
+    assert.equal((await invoke(handler, 'POST', '/vctx/automation', JSON.stringify(body))).status, 400);
+  }
+  const before = calls.length;
+  for (const headers of [{ host: 'remote.example', origin: 'http://remote.example' },
+    { host: 'localhost', origin: 'https://evil.example' }, { host: 'localhost' }]) {
+    const req = request('POST', '/vctx/automation', JSON.stringify({ session: 's', l2_enabled: false }));
+    req.headers = headers;
+    const res = response(); await handler(req, res);
+    assert.equal(res.captured.status, 403);
+  }
+  assert.equal(calls.length, before);
+});
+
 test('task HTTP bodies accept full Unicode field limits while retaining a byte cap', async t => {
   const calls = [];
   const controller = { async mutate(session, action, input) {
