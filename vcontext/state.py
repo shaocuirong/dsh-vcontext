@@ -181,6 +181,7 @@ def install_schema(db):
 class StructuredState:
     def __init__(self, db, scope):
         self.db = db
+        self.storage_scope = scope
         self._last_problem = None
         _text(scope, 'scope', 512)
         try:

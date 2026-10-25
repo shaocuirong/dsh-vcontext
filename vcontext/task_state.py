@@ -493,12 +493,21 @@ class TaskState(SnapshotState):
         expected_version,
         operation_ids=None,
         resource_refs=None,
+        page_ids=None,
+        history_source_seqs=None,
     ):
         operation_ids = [] if operation_ids is None else operation_ids
         resource_refs = [] if resource_refs is None else resource_refs
+        page_ids = [] if page_ids is None else page_ids
+        history_source_seqs = [] if history_source_seqs is None else history_source_seqs
         self._ids(operation_ids, "operation_ids", 64)
         self._ids(resource_refs, "resource_refs", 64)
-        if not operation_ids and not resource_refs:
+        self._ids(page_ids, "page_ids", 64)
+        if not isinstance(history_source_seqs, list) or len(history_source_seqs) > 256 or len(set(history_source_seqs)) != len(history_source_seqs):
+            raise ValueError('history_source_seqs must be a bounded unique list')
+        for seq in history_source_seqs:
+            _integer(seq, 'history source sequence')
+        if not operation_ids and not resource_refs and not page_ids and not history_source_seqs:
             raise ValueError("task attach requires evidence")
         fp, replay = self._start_task(
             "attach",
@@ -509,6 +518,8 @@ class TaskState(SnapshotState):
                 "expected_version": expected_version,
                 "operation_ids": operation_ids,
                 "resource_refs": resource_refs,
+                **({"page_ids": page_ids} if page_ids else {}),
+                **({"history_source_seqs": history_source_seqs} if history_source_seqs else {}),
             },
         )
         if replay:
@@ -518,7 +529,15 @@ class TaskState(SnapshotState):
             self._operation(op)
         for resource in resource_refs:
             self._resource(_resource_id(resource))
-        for kind, items in (("operation", operation_ids), ("resource", resource_refs)):
+        for page_id in page_ids:
+            if not self.db.execute('SELECT 1 FROM pages WHERE scope=? AND id=?', (self.storage_scope, page_id)).fetchone():
+                raise ValueError('page not found in this session')
+        for seq in history_source_seqs:
+            event = self._one('SELECT event_type,payload FROM vc_events WHERE namespace=? AND session_id=? AND seq=?', (*self._scope, seq))
+            if not event or event['event_type'] not in ('user/message', 'assistant/message', 'tool/result') or json.loads(event['payload']).get('projection'):
+                raise ValueError('history source not found in this session')
+        for kind, items in (("operation", operation_ids), ("resource", resource_refs),
+                            ('page', page_ids), ('history', [str(s) for s in history_source_seqs])):
             for item in items:
                 self.db.execute(
                     "INSERT OR IGNORE INTO vct_links VALUES(?,?,?,?)",
@@ -577,7 +596,7 @@ class TaskState(SnapshotState):
                 value = self._operation(link["source_id"])
                 value["association"] = link["provenance"]
                 operations.append(value)
-            else:
+            elif link['kind'] == 'resource':
                 resource_links.append(link)
                 resource_rows.append(self._resource(_resource_id(link["source_id"])))
         # Validate a pinned manifest once for the entire evidence page.
@@ -594,6 +613,8 @@ class TaskState(SnapshotState):
             "review_basis": self._review_basis(ref),
             "operations": operations,
             "resources": resources,
+            'page_ids': [link['source_id'] for link in selected if link['kind'] == 'page'],
+            'history_source_seqs': [int(link['source_id']) for link in selected if link['kind'] == 'history'],
             "reviews": [
                 {**self._review(r), "effective": self._effective_review(r, row)}
                 for r in reviews

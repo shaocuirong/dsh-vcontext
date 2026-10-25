@@ -35,7 +35,7 @@ function inputFor(action, input) {
     create: ['title', 'goal', 'parent_ref'],
     update: ['ref', 'expected_version', 'status', 'summary', 'next_action'],
     select: ['ref'], fork: ['ref', 'title'],
-    attach: ['ref', 'expected_version', 'operation_ids', 'resource_refs'],
+    attach: ['ref', 'expected_version', 'operation_ids', 'resource_refs', 'page_ids', 'history_source_seqs'],
     review: ['ref', 'expected_version', 'outcome', 'reason', 'operation_ids', 'expected_manifest_hash', 'expected_activity_hash'],
   }[action];
   if (Object.keys(input).some(key => !['request_id', 'expected_revision', ...fields].includes(key))
@@ -57,7 +57,13 @@ function inputFor(action, input) {
       if (has(input, key) && (!Array.isArray(input[key]) || input[key].length > maximum
         || input[key].some(value => !valid(value)) || new Set(input[key]).size !== input[key].length)) fail('INVALID_INPUT');
     }
-    if (action === 'attach' && !(input.operation_ids?.length || input.resource_refs?.length)) fail('INVALID_INPUT');
+    if (action === 'attach') {
+      for (const [key, valid, maximum] of [['page_ids', operationId, 64], ['history_source_seqs', integer, 256]]) {
+        if (has(input, key) && (!Array.isArray(input[key]) || input[key].length > maximum
+          || input[key].some(value => !valid(value)) || new Set(input[key]).size !== input[key].length)) fail('INVALID_INPUT');
+      }
+      if (!(input.operation_ids?.length || input.resource_refs?.length || input.page_ids?.length || input.history_source_seqs?.length)) fail('INVALID_INPUT');
+    }
     if (action === 'review' && (!['pass', 'fail'].includes(input.outcome) || !text(input.reason, 4096, false, true)
       || !input.operation_ids?.length || !digest(input.expected_manifest_hash) || !digest(input.expected_activity_hash))) fail('INVALID_INPUT');
   }
