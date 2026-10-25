@@ -27,6 +27,8 @@ for (const path of ['index.mjs', 'lib/client.js', 'adapter/context-integration.m
   'docs/releases/nodes/NODES-0.11.1.md', 'docs/releases/nodes/NODES-0.11.2.md',
   'vcontext/quota.py', 'tests/test_quota.py', 'tests/test_core_quota.py',
   'docs/architecture/QUOTA-0.12.0.md', 'docs/releases/nodes/NODES-0.12.0.md',
-  'docs/releases/nodes/NODES-0.12.1.md'])
+  'docs/releases/nodes/NODES-0.12.1.md', 'adapter/automation.mjs', 'vcontext/automation.py',
+  'tests/automation.test.mjs', 'tests/test_automation.py', 'examples/bench-automation.mjs',
+  'docs/architecture/AUTOMATION-0.13.0.md', 'docs/releases/nodes/NODES-0.13.0.md'])
   await read(path);
 console.log(`Release metadata and entry points verified: v${version}`);

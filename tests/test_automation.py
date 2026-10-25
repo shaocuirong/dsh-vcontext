@@ -159,3 +159,26 @@ class AutomationTests(unittest.TestCase):
         result = self.store.dispatch('auto_observe', {'keys': ['history:hp_x'], 'readonly': True})
         self.assertEqual(result['units'], [])
         self.assertEqual(self.store.db.total_changes, before)
+
+    def test_hysteresis_survives_restart_between_high_and_low(self):
+        self.pages(32)
+        self.age()
+        self.store.quota.configure(session_max_tokens=50000)
+        first = self.store.dispatch('auto_tick', {})
+        self.assertEqual(len(first['evicted']), 8)
+        self.assertFalse(first['after']['session']['high'])
+        self.assertFalse(first['target_reached'])
+        self.store.close()
+        self.store = ContextStore(self.path, self.scope, budget=1000000)
+        second = self.store.dispatch('auto_tick', {})
+        self.assertTrue(second['evicted'])
+        self.assertTrue(second['target_reached'])
+        self.assertFalse(self.store.dispatch('auto_status', {})['l2_active'])
+
+    def test_explicit_core_pin_survives_automatic_pressure(self):
+        pages = self.pages()
+        self.store.page_in(pages[0], tier='core')
+        self.age()
+        self.store.quota.configure(session_max_tokens=20000)
+        self.store.dispatch('auto_tick', {})
+        self.assertEqual(self.store.read(pages[0])['tier'], 'core')
