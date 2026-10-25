@@ -18,6 +18,7 @@ from .task_state import TaskState, OPERATIONS as TASK_OPERATIONS, install_task_s
 from .migrations import backup_legacy
 from .quota import (OPERATIONS as QUOTA_OPERATIONS, QuotaExceeded, QuotaLedger,
                    install_quota_schema)
+from .automation import Automation, OPERATIONS as AUTO_OPERATIONS, install_automation_schema
 
 
 class ContextError(ValueError):
@@ -86,7 +87,8 @@ MUTATING_OPERATIONS = frozenset({
     'result_plan', 'result_plan_finish', 'snapshot_create', 'snapshot_checkout', 'snapshot_detach', 'snapshot_branch',
     'task_create','task_update','task_select','task_fork','task_attach','task_review',
     'quota_configure','quota_admit','quota_release','quota_reserve','quota_commit',
-    'quota_release_reservation'})
+    'quota_release_reservation', 'auto_configure', 'auto_step', 'auto_tick', 'auto_observe',
+    'auto_access', 'auto_receipt', 'auto_latch', 'read', 'search'})
 
 STRUCTURED_OPERATIONS = frozenset({'state_bind', 'state_sync', 'state_status',
     'operation_list', 'operation_read', 'resource_store', 'resource_read',
@@ -231,8 +233,12 @@ class ContextStore:
         install_snapshot_schema(self.db)
         install_task_schema(self.db)
         install_quota_schema(self.db)
+        install_automation_schema(self.db)
         self.quota = QuotaLedger(self.db, self.scope, project='default', defaults=self._quota_defaults)
         self.quota.sync(self._resident_units(), enforce=False, operation='initialize', managed_prefix='page:')
+        self.automation = Automation(self)
+        for row in self._all(resident=True):
+            self.automation.unit('page:' + row['id'])
         self.db.execute("INSERT OR REPLACE INTO metadata VALUES('schema','9')")
 
     def close(self):
@@ -343,6 +349,11 @@ class ContextStore:
                 row = self._head(page_id)
             except ContextError:
                 row = None
+        if hasattr(self, 'automation') and from_tier != to_tier:
+            if to_tier == 'archive' and from_tier in ('core', 'working'):
+                self.automation.mark_move('page:' + page_id)
+            elif from_tier == 'archive' and to_tier in ('core', 'working'):
+                self.automation.mark_move('page:' + page_id, restored=True)
         size = self._page_bytes(row) if row is not None else 0
         self.db.execute('''INSERT INTO residency_events(scope,created,epoch,operation,page_id,
             from_tier,to_tier,reason,bytes) VALUES(?,?,?,?,?,?,?,?,?)''',
@@ -397,6 +408,7 @@ class ContextStore:
 
     def _fit(self, protect=(), relevance=None, operation='fit'):
         relevance = relevance or {}
+        protect = set(protect) | set(self.automation.dependencies()['pages'])
         rows = self._all(resident=True)
         evicted = []
         now = time.time()
@@ -518,8 +530,12 @@ class ContextStore:
         if previous_tier in ('core', 'working') and previous_version is not None:
             self.quota.release_page(page_id, previous_version, strict=False)
         if tier in ('core', 'working'):
-            self.quota.admit([self.quota.page_unit(page_id, version, self._row_text(current))],
-                             operation='write')
+            unit = self.quota.page_unit(page_id, version, self._row_text(current))
+            self.automation.auto_tick(incoming=[unit], protect=[page_id])
+            self.quota.admit([unit], operation='write')
+            self.automation.unit('page:' + page_id)
+            self.db.execute('UPDATE va_units SET resident_step=? WHERE scope=? AND key=?',
+                            (self.automation.state()['step'], self.scope, 'page:' + page_id))
         self._record_residency(page_id, previous_tier, tier, 'write',
                                'created' if previous_tier is None else 'updated', current)
         evicted = self._fit(protect=[page_id], operation='write')
@@ -553,6 +569,8 @@ class ContextStore:
     @atomic
     def read(self, page_id, version=None):
         head = self._head(page_id)
+        self.automation.auto_access('page:' + page_id, source='cold' if head['tier'] == 'archive' else 'online',
+                                    kind='original', bytes=self._page_bytes(head))
         if version is None:
             return self._view(head)
         row = self.db.execute('SELECT data FROM revisions WHERE id=? AND version=?', (page_id, version)).fetchone()
@@ -597,7 +615,12 @@ class ContextStore:
             for page_id, score in boosts.items():
                 by_id[page_id]['score'] = max(by_id[page_id]['score'], score)
             ranked.sort(key=lambda r: (-r['score'], r['id']))
-        return [r for r in ranked if r['score'] > 0][:limit]
+        selected = [r for r in ranked if r['score'] > 0][:limit]
+        for hit in selected:
+            self.automation.auto_access('page:' + hit['id'], kind='summary',
+                source='cold' if self._head(hit['id'])['tier'] == 'archive' else 'online',
+                bytes=len(hit['summary'].encode('utf-8')))
+        return selected
 
     @mutation
     def page_in(self, page_id, tier='working'):
@@ -606,8 +629,9 @@ class ContextStore:
         current = self._head(page_id)
         if current['tier'] == 'core':
             tier = 'core'
-        self.quota.admit([self.quota.page_unit(page_id, current['version'], self._row_text(current))],
-                         operation='page_in')
+        unit = self.quota.page_unit(page_id, current['version'], self._row_text(current))
+        self.automation.auto_tick(incoming=[unit], protect=[page_id])
+        self.quota.admit([unit], operation='page_in')
         self.db.execute('UPDATE pages SET tier=?,touched=?,hits=hits+1 WHERE id=? AND scope=?',
                         (tier, time.time(), page_id, self.scope))
         self._record_residency(page_id, current['tier'], tier, 'page_in', 'admitted', self._head(page_id))
@@ -617,6 +641,8 @@ class ContextStore:
     @mutation
     def page_out(self, page_id):
         row = self._head(page_id)
+        if page_id in self.automation.dependencies()['pages']:
+            raise ContextError('page is required by an unfinished task')
         if row['outline']:
             raise ContextError('an outline entry is pinned; fold it or rewrite the page without outline')
         if row['tier'] == 'core':
@@ -648,8 +674,10 @@ class ContextStore:
             try:
                 before = self._head(page_id)
                 target = 'core' if before['tier'] == 'core' else 'working'
-                self.quota.admit([self.quota.page_unit(page_id, before['version'], self._row_text(before))],
-                                 operation='recall')
+                unit = self.quota.page_unit(page_id, before['version'], self._row_text(before))
+                self.automation.auto_tick(incoming=[unit], protect=protected+[page_id])
+                self.quota.admit([unit], operation='recall')
+                self.automation.auto_access('page:' + page_id, source='cold' if before['tier'] == 'archive' else 'online')
                 self.db.execute("UPDATE pages SET tier=CASE WHEN tier='core' THEN tier ELSE 'working' END, touched=?,hits=hits+1 WHERE id=? AND scope=?",
                                 (time.time(), page_id, self.scope))
                 self._record_residency(page_id, before['tier'], target, 'recall', 'admitted', self._head(page_id))
@@ -858,10 +886,12 @@ class ContextStore:
                       outcome='unchanged', noop_reason='not_triggered')
         if triggered:
             reason = 'manual' if force else 'threshold' if threshold and policy['mode'] != 'turns' else 'turns'
+            protections = ({p['page_id'] for p in self.automation.page_reasons(rows) if p['reasons']}
+                           if self.automation.state()['config']['l2_enabled'] else set(self.automation.dependencies()['pages']))
             candidates = [r for r in rows if r['tier'] == 'working']
             recent = {r['id'] for r in sorted(candidates, key=lambda r: (-r['touched'], -r['seq']))[:policy['keep_recent']]}
             working_count = len(candidates)
-            candidates = [r for r in candidates if r['id'] not in recent]
+            candidates = [r for r in candidates if r['id'] not in recent and r['id'] not in protections]
             result.update(working_pages=working_count, protected_pages=len(recent), eligible_pages=len(candidates))
             if policy['strategy'] == 'lru':
                 candidates.sort(key=lambda r: (r['touched'], r['seq']))
@@ -1125,9 +1155,16 @@ class ContextStore:
         return dict(**recalled,placement=placement,pages=pages,
                     policy='relevance-first admission followed by cache-aware placement')
 
+    @atomic
     def dispatch(self, operation, arguments):
+        if operation in AUTO_OPERATIONS:
+            return getattr(self.automation, operation)(**arguments)
         if operation in QUOTA_OPERATIONS:
-            return self.quota.dispatch(operation, arguments)
+            result = self.quota.dispatch(operation, arguments)
+            if operation == 'quota_configure':
+                self.automation.auto_tick()
+                return self.quota.status()
+            return result
         if operation in RESULT_OPERATIONS:
             return ResultStore(self.db, self.scope).dispatch(operation, arguments)
         if operation in STRUCTURED_OPERATIONS or operation in SNAPSHOT_OPERATIONS or operation in TASK_OPERATIONS:

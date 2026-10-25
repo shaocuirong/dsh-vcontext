@@ -1,5 +1,13 @@
 # JSON / Python API
 
+## v0.13 自动整理
+
+宿主本机同源 `GET /vctx/automation?session=<id>` 返回两层配置、只读候选预览、保护原因、访问统计及回执；`POST /vctx/automation` 接受 `{"session":"<id>","l1_enabled":false}` 或 `l2_enabled`，也可同时传两个布尔值。默认两层开启，配置持久化；拒绝多余字段、远端与跨源请求。模型工具不能调用 `auto_*` 管理接口。
+
+`task_attach` 新增可选 `page_ids`（本 scope 插件页 ID，最多64）与 `history_source_seqs`（已同步的本会话原始可见事件 seq，最多256）；与 operation_ids/resource_refs 一样使用 request_id、expected_revision、ref、expected_version。未完成任务的明确关联是自动整理硬保护；不通过标题推断依赖。task_read 分页结果分别返回 page_ids/history_source_seqs。
+
+Python 的 `auto_status/auto_preview` 为宿主状态查询；`auto_configure/auto_tick/auto_step/auto_observe/auto_access/auto_receipt/auto_latch/auto_guard` 为内部调度契约，CLI/维护程序须经 `ContextStore.dispatch` 保证事务。read/search 增加有界访问记账，取消按变更处理。原文读取与摘要搜索不混计，冷读取不自动准入。详细语义见[自动整理](../architecture/AUTOMATION-0.13.0.md)。
+
 所有操作通过 `ContextStore.dispatch(operation, arguments)` 调用；CLI 从 stdin 读取 arguments 对象；Harness `vctx` 的 `input` 是此对象的 JSON 字符串。
 
 `history_read`、`history_list`、`history_search`、`history_pages` 与 `history_page_list` 是 Harness 宿主侧的 `vctx` 操作，不属于 Python `ContextStore.dispatch`：`history_read` 以 `{"ref":"vctx://history/<会话哈希>/<事件序号>","offset":0,"limit":65536,"seq":<可选>,"expected_content_hash":<可选>}` 读取；省略 `seq` 读整段，给出 `seq` 读单条。小消息保持 `{ref,seq,type,message}`；大消息或带 offset 时返回分页 JSON 文本 `content`、`total`、`next_offset`、`content_hash`、`truncated`。整段与单条都受字符上限（≤65536）和 UTF-8 响应字节上限（≤128 KiB）约束；`expected_content_hash` 不匹配返回 CHANGED；`history_list` 以 `{"limit":20}` 列举最多100条归档元数据；`history_search` 以 `{"query":"...","limit":5}` 在最近归档中做有界检索；`history_pages` 以 `{"target_bytes":32768,"include_open":false}` 只读预览当前 Surface 的分页计划，不修改 Surface、日志或数据库；宿主侧 `history_page_out`（非模型工具）以 `{"page_id":"hp_...","expected_surface_generation":"sha256:...","request_id":"...","protect_recent_pages":2,"allow_recent":false}` 手动换出 1 页（空闲时调用 `POST /vctx/history/page-out`）；`history_page_list` 以 `{"limit":20}` 列出 marker 派生的页面注册表。引用只能在当前会话读取；读取本身会进入新的工具历史，不做多条消息的原位恢复。归档入口是本机同源的 `GET /vctx/history?session=<id>` 预览与 `POST /vctx/history`，正文 `{"session":"<id>","keep_turns":2,"request_id":"...","expected_surface_seq":42}`（后两项可选）；保护轮数允许1–20，每次最多256个可见节点、8MiB正文；宿主原日志保持权威。0.10.0 的清单、检索、CAS 与详细边界见[会话历史虚拟上下文](../architecture/HISTORY-VCONTEXT-0.10.0.md)，0.9.0 归档契约仍见[归档契约](../architecture/HISTORY-ARCHIVE-0.9.0.md)。

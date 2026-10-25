@@ -71,6 +71,7 @@ test('real Cordis + dsh SDK: registration, execution, scoped assembly, cleanup',
     const control = new Bridge(config);
     try {
       await control.call('alice', 'set_policy', { mode: 'turns', every_n: 2, target_pct: 5, keep_recent: 0 });
+      await control.call('alice', 'auto_configure', { l2_enabled: false });
       const replacementPage = await execute(alice, 'write', { content: 'replaceable '.repeat(100), tier: 'working' });
       for (const event of [
         { type: 'user/message', seq: 10, data: { source: { kind: 'user' } } },

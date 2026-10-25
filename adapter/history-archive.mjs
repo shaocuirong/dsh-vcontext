@@ -250,7 +250,7 @@ function paginateHistoryRead(content, offset, limit, wrap) {
 }
 
 /** Native log is authoritative; archiving changes only the model-visible Surface. */
-export function createHistoryArchive(ctx, diagnostics) {
+export function createHistoryArchive(ctx, diagnostics, onAccess) {
   const pending = new Map();
   const lifetime = new AbortController();
   let disposed = false;
@@ -437,7 +437,7 @@ export function createHistoryArchive(ctx, diagnostics) {
         });
       return { pages: pages.slice(0, limit), total: pages.length };
     },
-    async pageOut(id, pageId, options = {}) {
+    async pageOut(id, pageId, options = {}, beforeCommit, replayOnly = false) {
       if (!validId(id) || !options || typeof options !== 'object' || Array.isArray(options)) fail('INVALID_INPUT');
       const requestId = options.request_id;
       const expectedGeneration = options.expected_surface_generation;
@@ -456,6 +456,7 @@ export function createHistoryArchive(ctx, diagnostics) {
             const pageMarkers = markers.filter(marker => marker.meta?.kind === 'page-out');
             const samePage = pageMarkers.find(marker => marker.meta?.page_id === pageId);
             if (samePage) {
+              if (replayOnly && samePage.meta?.request_id !== requestId) fail('CHANGED');
               await flush(agent);
               check(signal);
               const meta = samePage.meta ?? {};
@@ -467,6 +468,7 @@ export function createHistoryArchive(ctx, diagnostics) {
                 surface_seq_before: samePage.event.seq, surface_seq_after: session.seq,
                 request_id: meta.request_id ?? requestId ?? null };
             }
+            if (replayOnly) fail('NOT_FOUND');
             if (requestId !== undefined) {
               const sameRequest = pageMarkers.find(marker => marker.meta?.request_id === requestId);
               if (sameRequest) fail('CHANGED');
@@ -484,6 +486,7 @@ export function createHistoryArchive(ctx, diagnostics) {
             if (!decision.eligible) fail('INVALID_INPUT');
             await flush(agent);
             check(signal);
+            if (beforeCommit) { await beforeCommit({ agent, signal }); check(signal); }
             const plan2 = segmentHistoryPages(session, segmentation);
             if (plan2.surface_generation !== plan.surface_generation) fail('CHANGED');
             const page = plan2.pages.find(item => item.page_id === pageId);
@@ -580,6 +583,12 @@ export function createHistoryArchive(ctx, diagnostics) {
       const marker = events[Number(match[2])];
       const parsed = parseArchiveMarker(marker);
       if (!owned(parsed, id) || parsed.ref !== ref) fail('NOT_FOUND');
+      const started = Date.now();
+      const finish = async response => {
+        try { await onAccess?.(id, { key: 'history:' + (parsed.meta?.page_id ?? ref), kind: 'original', source: 'cold',
+          bytes: Buffer.byteLength(JSON.stringify(response), 'utf8'), duration_ms: Date.now() - started }); } catch {}
+        return response;
+      };
       const checkHash = content => {
         const contentHash = sha(content);
         if (expectedContentHash !== null && expectedContentHash !== undefined && contentHash !== expectedContentHash)
@@ -598,12 +607,12 @@ export function createHistoryArchive(ctx, diagnostics) {
         // pretending the truncated slice is the complete message.
         if (offset === 0 && [...content].length <= limit
           && Buffer.byteLength(content, 'utf8') <= MAX_RESPONSE_BYTES) {
-          return { ref, seq, type: event.type, message };
+          return finish({ ref, seq, type: event.type, message });
         }
-        return paginateHistoryRead(content, offset, limit, (text, meta) => ({
+        return finish(paginateHistoryRead(content, offset, limit, (text, meta) => ({
           ref, seq, type: event.type, offset, total: meta.total, content: text,
           content_hash: meta.contentHash, next_offset: meta.nextOffset, truncated: meta.truncated,
-        }));
+        })));
       }
       const source = marker.sourceEventSeqs.map(node => {
         const event = events[node];
@@ -619,7 +628,7 @@ export function createHistoryArchive(ctx, diagnostics) {
       diagnostics?.record('context.history.read', 'debug', {
         session_hash: hash(id), content_chars: content.length,
         response_bytes: Buffer.byteLength(JSON.stringify(response), 'utf8'), offset });
-      return response;
+      return finish(response);
     },
     async list(id, limit = 20) {
       if (!validId(id) || !Number.isSafeInteger(limit) || limit < 1 || limit > 100) fail('INVALID_INPUT');

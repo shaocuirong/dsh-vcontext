@@ -1,6 +1,6 @@
 {
   "name": "dsh-virtual-context",
-  "version": "0.12.1",
+  "version": "0.13.0",
   "type": "module",
   "private": true,
   "description": "Persistent virtual context, configurable paging and in-session dashboards for DeepSeek Harness",
@@ -57,6 +57,7 @@
     "check:release": "node scripts/check-release.mjs",
     "doctor": "node scripts/doctor.mjs",
     "bench": "node examples/bench-service.mjs",
+    "bench:automation": "node examples/bench-automation.mjs",
     "demo": "python -m examples.demo"
   },
   "peerDependencies": {

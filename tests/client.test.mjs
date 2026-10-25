@@ -142,6 +142,33 @@ test('the client half registers the switch, the two panels and the settings page
   assert.equal(typeof find('conversation.view').options.label(), 'string');
 });
 
+test('automatic organizer UI persists independent switches and renders protected candidates and failures', async t => {
+  const renderer = createHookRenderer();
+  const { module } = await loadClient(undefined, renderer.react);
+  const savedFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = savedFetch; });
+  const config = { l1_enabled: true, l2_enabled: true }, writes = [];
+  globalThis.fetch = async (_path, options) => {
+    if (options?.method === 'POST') { const body = JSON.parse(options.body); writes.push(body); Object.assign(config, body); }
+    return { ok: true, json: async () => ({ ok: true, result: { config: { ...config },
+      l1: { pressure: { available: false }, pages: [{ page_id: 'hp_x', bytes: 32000, source_seqs: [1, 2], reasons: ['TASK_DEPENDENCY'] }] },
+      l2: { pages: [], accesses: [{ kind: 'original', source: 'cold', count: 1 }], operations: [] },
+      runtime: { outcome: 'failed', error_code: 'PERSISTENCE_FAILED' },
+    } }) };
+  };
+  const render = () => module.AutomationCard({ sessionId: 's', reload() {} });
+  let tree = await renderer.settle(render);
+  assert.equal(findNode(tree, n => n.props['aria-label'] === 'L1：旧聊天与工具结果').props.checked, true);
+  assert.match(text(tree), /未完成任务依赖/);
+  assert.match(text(tree), /PERSISTENCE_FAILED/);
+  await findNode(tree, n => n.props['aria-label'] === 'L1：旧聊天与工具结果').props.onChange({ target: { checked: false } });
+  tree = await renderer.settle(render);
+  assert.deepEqual(writes, [{ session: 's', l1_enabled: false }]);
+  assert.equal(findNode(tree, n => n.props['aria-label'] === 'L1：旧聊天与工具结果').props.checked, false);
+  assert.equal(findNode(tree, n => n.props['aria-label'] === 'L2：插件在线页面').props.checked, true);
+  assert.match(text(tree), /设置已保存/);
+});
+
 test('only the main dashboard contributes composer suppression, including its disabled hint', async () => {
   const { module } = await loadClient();
   const { find } = mount(module);

@@ -9,12 +9,14 @@ import { createResultProjection } from './adapter/result-projection.mjs';
 import { createResultJobs } from './adapter/result-jobs.mjs';
 import { createSessionSnapshots } from './adapter/session-snapshots.mjs';
 import { createTaskController } from './adapter/task-controller.mjs';
+import { createAutomation } from './adapter/automation.mjs';
 
 export const name = 'virtual-context';
 export const inject = ['tools', 'agents', 'systemPrompt'];
 export function apply(ctx, config = {}) {
   const settings = resolveConfig(config);
-  const { transport, diagnostics, sessionBridge, historyArchive } = mount(ctx, settings, defineTool);
+  const { transport, diagnostics, sessionBridge, historyArchive, refresh } = mount(ctx, settings, defineTool);
+  const automation = createAutomation(ctx, transport, sessionBridge, historyArchive, refresh, settings);
   const liveContext = createLiveContext(ctx, { diagnostics, contextIntegration: settings.contextIntegration });
   const replacement = createReplacement(ctx, diagnostics);
   const resultProjection = createResultProjection(ctx, transport, sessionBridge, diagnostics);
@@ -26,10 +28,11 @@ export function apply(ctx, config = {}) {
   ctx.effect(() => () => resultJobs.dispose(), 'virtual-context: result projection jobs');
   ctx.effect(() => () => replacement.dispose(), 'virtual-context: replacement jobs');
   ctx.effect(() => () => liveContext.dispose(), 'virtual-context: live request observer');
+  ctx.effect(() => () => automation.dispose(), 'virtual-context: automatic residency');
   // The client half reads the dashboard through this route, and
   // /virtual-context flips the per-session switch the route reports.
   ctx.inject(['webServer'], carrier => {
-    carrier.effect(() => mountRoutes(carrier, settings, transport, liveContext, diagnostics, replacement, sessionBridge, resultProjection, resultJobs, sessionSnapshots, taskController, historyArchive), 'virtual-context: dashboard routes');
+    carrier.effect(() => mountRoutes(carrier, settings, transport, liveContext, diagnostics, replacement, sessionBridge, resultProjection, resultJobs, sessionSnapshots, taskController, historyArchive, automation), 'virtual-context: dashboard routes');
   });
   ctx.inject(['commands'], carrier => {
     carrier.effect(() => mountCommand(carrier, settings, transport), 'virtual-context: command');

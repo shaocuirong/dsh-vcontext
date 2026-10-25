@@ -78,7 +78,7 @@ test('aborting usage accounting kills the worker; aborting a read only discards 
   assert.equal(isMutating('future_operation'), true);
   const { service, children, reply } = fixture(t);
   const readController = new AbortController();
-  const read = service.call('a', 'read', {}, readController.signal);
+  const read = service.call('a', 'history', {}, readController.signal);
   const readFailure = assert.rejects(read, /read cancelled/);
   readController.abort(new Error('read cancelled'));
   await readFailure;

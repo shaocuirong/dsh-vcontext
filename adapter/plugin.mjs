@@ -83,8 +83,9 @@ Check the installation's API.md for full argument fields. Avoid storing secrets.
 
 export function mount(ctx, config, defineTool) {
   const diagnostics = createDiagnostics({ ...config, logger: ctx.logger });
-  const historyArchive = createHistoryArchive(ctx, diagnostics);
   const transport = createTransport(config, diagnostics);
+  const historyArchive = createHistoryArchive(ctx, diagnostics,
+    (id, access) => transport.call(id, 'auto_access', access));
   const sessionBridge = createSessionBridge(ctx, transport, diagnostics);
   const attached = new Map();
   let disposed = false;
@@ -193,7 +194,7 @@ export function mount(ctx, config, defineTool) {
       if (!exec.agent) throw new Error('vctx requires a calling agent');
       const input = JSON.parse(args.input);
       if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('input must encode an object');
-      if (['state_bind', 'state_sync', 'result_store', 'result_get', 'result_mark', 'result_plan', 'result_plan_list', 'result_plan_finish', 'task_review'].includes(args.operation)) throw new Error('host-only structured state operation');
+      if (args.operation.startsWith('auto_') || ['state_bind', 'state_sync', 'result_store', 'result_get', 'result_mark', 'result_plan', 'result_plan_list', 'result_plan_finish', 'task_review'].includes(args.operation)) throw new Error('host-only structured state operation');
       if (args.operation === 'history_read')
         return historyArchive.read(exec.agent.id, input.ref, input.offset, input.limit, input.seq, input.expected_content_hash);
       if (args.operation === 'history_list') return historyArchive.list(exec.agent.id, input.limit);
@@ -232,6 +233,7 @@ export function mount(ctx, config, defineTool) {
       const bridgeState = await sessionBridge.sync(agent, signal);
       try {
         await transport.call(agent.id, 'policy_tick', {}, signal);
+        await transport.call(agent.id, 'auto_tick', {}, signal);
         await refresh(agent, signal, { executionAvailable: bridgeState.state === 'synced' });
       } catch (error) {
         if (signal.aborted) throw error;
