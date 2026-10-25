@@ -32,7 +32,10 @@ test('automatic settings are independently writable only by the local same-origi
   assert.equal(changed.status, 200);
   assert.equal(config.l1_enabled, false);
   assert.equal(config.l2_enabled, true);
-  for (const body of [{ session: 's', l1_enabled: 1 }, { session: 's', protect_recent_pages: 0 }, { session: 's' }]) {
+  assert.equal((await invoke(handler, 'POST', '/vctx/automation', JSON.stringify({ session: 's', l1_input_budget: 65536 }))).status, 200);
+  assert.equal(config.l1_input_budget, 65536);
+  for (const body of [{ session: 's', l1_enabled: 1 }, { session: 's', protect_recent_pages: 0 }, { session: 's' },
+    ...[-1, true, 0.5, '65536', 9000000000001].map(l1_input_budget => ({ session: 's', l1_input_budget }))]) {
     assert.equal((await invoke(handler, 'POST', '/vctx/automation', JSON.stringify(body))).status, 400);
   }
   const before = calls.length;

@@ -106,6 +106,8 @@ test('native requests recover isolated task paths after legal Surface projection
       return mutate(agent, 'task_update', { ref, expected_version: task.version, ...input });
     };
     const hostBefore = [a, b].map(agent => structuredClone(agent.session.snapshotEvents()));
+    const pageBody = 'WORKING_PAGE_MUST_ENTER_NATIVE_REQUEST {{literal}}';
+    await execute(a, 'write', { content: pageBody, tier: 'working' });
     await execute(a, 'resource_store', { path: 'kernel.py', content: resourceBody, request_id: 'resource-a' });
     const rootTask = (await mutate(a, 'task_create', { title: 'A_ROOT_GOAL', goal: 'repair restoration' })).task;
     const failed = (await mutate(a, 'task_create', { title: 'FAILED_BRANCH_MUST_STAY_IN_HISTORY', parent_ref: rootTask.ref })).task;
@@ -129,6 +131,9 @@ test('native requests recover isolated task paths after legal Surface projection
       await agent.whenIdle(); assert.deepEqual(errors, []);
     };
     await Promise.all([send(a, 'old-user-a', 'HISTORICAL_USER_REPLACED'), send(b, 'user-b', 'Continue your current task.')]);
+    assert.ok(JSON.stringify(requests.get('fixture-a')[0]).includes(pageBody), 'native request expands vctx_pages exactly once');
+    assert.equal(JSON.stringify(requests.get('fixture-b')[0]).includes(pageBody), false, 'page injection stays session scoped');
+    assert.doesNotMatch(JSON.stringify(requests.get('fixture-a')[0]), /\{\{vctx_(?:pages|session_target|task_state|history)\}\}/u);
     const executionIn = messages => {
       const line = messages.flatMap(message => message.content).filter(block => block.type === 'text')
         .flatMap(block => block.text.split(/\r?\n/u)).findLast(text => text.startsWith('{"format":"vctx-execution-state-v1"'));

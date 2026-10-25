@@ -90,9 +90,11 @@ export function createHandler(config, transport, liveContext, diagnostics, repla
         if (request.method === 'POST') {
           const body = JSON.parse(await readBody(request));
           if (!body || Array.isArray(body) || typeof body.session !== 'string' || !body.session || body.session.length > 256
-            || Object.keys(body).some(key => !['session', 'l1_enabled', 'l2_enabled'].includes(key))
-            || !['l1_enabled', 'l2_enabled'].some(key => Object.hasOwn(body, key))
-            || ['l1_enabled', 'l2_enabled'].some(key => Object.hasOwn(body, key) && typeof body[key] !== 'boolean')) throw new Error('invalid automatic settings');
+            || Object.keys(body).some(key => !['session', 'l1_enabled', 'l2_enabled', 'l1_input_budget'].includes(key))
+            || !['l1_enabled', 'l2_enabled', 'l1_input_budget'].some(key => Object.hasOwn(body, key))
+            || ['l1_enabled', 'l2_enabled'].some(key => Object.hasOwn(body, key) && typeof body[key] !== 'boolean')
+            || Object.hasOwn(body, 'l1_input_budget') && (!Number.isSafeInteger(body.l1_input_budget)
+              || body.l1_input_budget < 0 || body.l1_input_budget > 9000000000000)) throw new Error('invalid automatic settings');
           const { session, ...changes } = body;
           return send(response, 200, { ok: true, result: await automation.configure(session, changes) });
         }

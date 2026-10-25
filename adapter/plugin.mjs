@@ -97,14 +97,16 @@ export function mount(ctx, config, defineTool) {
       targetText: '{"format":"vctx-session-target-v1","available":false}',
       taskText: '{"format":"vctx-execution-state-v1","available":false}',
       historyText: UNAVAILABLE_HISTORY };
-    // Runtime contexts always interpolate in the desktop rc SDK. Variable
-    // values are inserted verbatim and are never scanned a second time.
+    // Host contexts resolve {{name}} references unless they set
+    // interpolate:false, which keeps text literal. Variable values are inserted
+    // verbatim and never scanned again, so braces inside page bodies cannot be
+    // mistaken for references.
     state.detachVariable = agent.ctx.systemPrompt.variable('vctx_pages', () => state.text);
     state.detachTarget = agent.ctx.systemPrompt.variable('vctx_session_target', () => state.targetText);
     state.detachTasks = agent.ctx.systemPrompt.variable('vctx_task_state', () => state.taskText);
     state.detachHistory = agent.ctx.systemPrompt.variable('vctx_history', () => state.historyText);
     state.detach = agent.ctx.systemPrompt.context({
-      name: 'virtual-context:pages', order: 9500, interpolate: false,
+      name: 'virtual-context:pages', order: 9500,
       text: () => '{{vctx_pages}}\n{{vctx_session_target}}\n{{vctx_task_state}}\n{{vctx_history}}',
     });
     state.detachUsage = attachUsage(agent);
