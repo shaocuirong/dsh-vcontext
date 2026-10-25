@@ -1,5 +1,11 @@
 # JSON / Python API
 
+## v0.14 看板观察数据
+
+`GET /vctx/dashboard` 新增 `activity` 与 `automation`。activity返回最多80项元数据事件、队列/异常数量及仅对已确认L1操作计算的前后字节差；字段缺失保持null。相同宿主marker与自动回执去重，正文大小、L2估算tokens不混计。某项补充读取失败时返回unavailable来源，保留其余数据。
+
+`live_context.observations` 保存最多60个本进程观察点，含id、kind（derived/request）、at、bytes、message_count、tool_count、roles和fingerprint，不保存正文。重复派生状态不新增点；会话之间隔离，重启重新累计。历史summary默认接口保持不变，内部显式includeActivity才附带最多50项已持久化marker的统计。
+
 ## v0.13 自动整理
 
 宿主本机同源 `GET /vctx/automation?session=<id>` 返回两层配置、只读候选预览、保护原因、访问统计及回执；`POST /vctx/automation` 接受 `{"session":"<id>","l1_enabled":false}` 或 `l2_enabled`，也可同时传两个布尔值。默认两层开启，配置持久化；拒绝多余字段、远端与跨源请求。模型工具不能调用 `auto_*` 管理接口。
