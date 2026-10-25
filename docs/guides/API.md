@@ -172,7 +172,7 @@ with ContextStore('semantic.db', 'session-1', embedder=embedder,
 | `diagnosticLimit` | 1..2000，默认 200，内存诊断记录数上限 |
 | `slowOperationMs` | 1..600000，默认 1000，慢调用阈值 |
 
-插件仅注册一个 `vctx` 工具，固定提示词和工具定义有额外 token 成本。全量正文由动态 user-role runtime context 提供，使用 `interpolate:false` 原样渲染，避免把 `{{...}}` 当成宿主变量。旧快照是否继续占用真实上下文由宿主 compaction 决定。
+插件仅注册一个 `vctx` 工具，固定提示词和工具定义有额外 token 成本。全量正文由动态 runtime context 通过 `{{vctx_pages}}` 等宿主变量注入，变量值原样拼接、不再二次扫描，因此正文里的花括号不会被误认为变量引用。旧快照是否继续占用真实上下文由宿主 compaction 决定。
 
 ## 本地替换策略接口
 

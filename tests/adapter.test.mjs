@@ -107,7 +107,7 @@ test('adapter contract: tool execution, per-agent snapshots, resume, cleanup', a
   assert.equal(history.format,'vctx-history-v1');
   assert.equal(typeof history.available,'boolean');
   assert.equal(variables.get('vctx_history')(),'{"format":"vctx-history-v1","available":false}');
-  assert.equal(snapshots.get(agent.id).interpolate,false);
+  assert.notEqual(snapshots.get(agent.id).interpolate,false);
   const accepted = {kind:'accept',messages:[]};
   assert.equal(await handlers.get('agent/pre-step')({agent,signal},async()=>accepted),accepted);
   await assert.rejects(tools.get('vctx').execute({operation:'status',input:'{}'},{signal}),/calling agent/);
