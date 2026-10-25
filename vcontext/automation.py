@@ -7,7 +7,7 @@ from .task_state import TaskState
 
 OPERATIONS = frozenset({'auto_status', 'auto_configure', 'auto_step', 'auto_preview',
     'auto_tick', 'auto_access', 'auto_observe', 'auto_guard', 'auto_receipt', 'auto_latch'})
-DEFAULTS = dict(l1_enabled=True, l2_enabled=True)
+DEFAULTS = dict(l1_enabled=True, l2_enabled=True, l1_input_budget=131072)
 
 
 def install_automation_schema(db):
@@ -36,6 +36,10 @@ class Automation:
         self.store, self.db, self.scope = store, store.db, store.scope
         self.db.execute('INSERT OR IGNORE INTO va_state(scope,config) VALUES(?,?)',
                         (self.scope, json.dumps(DEFAULTS)))
+        saved = json.loads(self.db.execute('SELECT config FROM va_state WHERE scope=?', (self.scope,)).fetchone()[0])
+        if any(key not in saved for key in DEFAULTS):
+            self.db.execute('UPDATE va_state SET config=? WHERE scope=?',
+                            (json.dumps({**DEFAULTS, **saved}), self.scope))
 
     def state(self):
         row = self.db.execute('SELECT * FROM va_state WHERE scope=?', (self.scope,)).fetchone()
@@ -55,8 +59,10 @@ class Automation:
         return state
 
     def auto_configure(self, **changes):
-        if set(changes) - set(DEFAULTS) or any(type(v) is not bool for v in changes.values()):
-            raise ValueError('automatic settings require l1_enabled/l2_enabled booleans')
+        if set(changes) - set(DEFAULTS) or any(type(changes[k]) is not bool for k in ('l1_enabled', 'l2_enabled') if k in changes):
+            raise ValueError('invalid automatic settings')
+        if 'l1_input_budget' in changes:
+            _integer(changes['l1_input_budget'], 'l1_input_budget', 0, 9000000000000)
         config = {**self.state()['config'], **changes}
         self.db.execute('UPDATE va_state SET config=? WHERE scope=?', (json.dumps(config), self.scope))
         for layer in ('l1', 'l2'):

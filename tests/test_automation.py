@@ -28,12 +28,29 @@ class AutomationTests(unittest.TestCase):
         self.store.dispatch('auto_step', {'seq': 20})
 
     def test_default_flags_and_disabled_settings_survive_reopen(self):
-        self.assertEqual(self.store.dispatch('auto_status', {})['config'], dict(l1_enabled=True, l2_enabled=True))
+        self.assertEqual(self.store.dispatch('auto_status', {})['config'], dict(l1_enabled=True, l2_enabled=True, l1_input_budget=131072))
         self.store.dispatch('auto_configure', {'l1_enabled': False, 'l2_enabled': False})
         self.store.close()
         self.store = ContextStore(self.path, self.scope)
         self.assertFalse(self.store.dispatch('auto_status', {})['config']['l1_enabled'])
         self.assertEqual(self.store.dispatch('auto_tick', {})['outcome'], 'disabled')
+
+    def test_input_budget_migrates_missing_setting_preserves_off_and_reopens(self):
+        self.store.db.execute('UPDATE va_state SET config=? WHERE scope=?',
+                              (json.dumps(dict(l1_enabled=False, l2_enabled=True)), self.scope))
+        self.store.db.commit()
+        self.store.close()
+        self.store = ContextStore(self.path, self.scope)
+        config = self.store.dispatch('auto_status', {})['config']
+        self.assertEqual(config, dict(l1_enabled=False, l2_enabled=True, l1_input_budget=131072))
+        self.store.dispatch('auto_configure', dict(l1_input_budget=65536))
+        self.store.close()
+        self.store = ContextStore(self.path, self.scope)
+        self.assertEqual(self.store.dispatch('auto_status', {})['config']['l1_input_budget'], 65536)
+        self.store.dispatch('auto_configure', dict(l1_input_budget=0))
+        for value in (-1, True, 0.5, '65536', 9000000000001):
+            with self.assertRaises((ValueError, ContextError)):
+                self.store.dispatch('auto_configure', dict(l1_input_budget=value))
 
     def test_high_watermark_reaches_low_and_recent_pages_survive(self):
         pages = self.pages()

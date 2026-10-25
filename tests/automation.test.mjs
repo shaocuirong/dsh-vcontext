@@ -13,13 +13,14 @@ import { restoreReleasedV4Artifact } from '@deepseek-ai/dsh-session-format-v3-to
 import { SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection';
 import { SystemPrompt } from '@deepseek-ai/dsh-system-prompt';
 import { ToolRuntime } from '@deepseek-ai/dsh-tools';
+import * as dshContext from 'dsh-context';
 import { createTransport } from '../adapter/transport.mjs';
 import { createHistoryArchive } from '../adapter/history-archive.mjs';
 import { createAutomation } from '../adapter/automation.mjs';
 
 const text = (id, role, value, source = { kind: 'user' }) => ({ id, role, source, content: [{ type: 'text', text: value }] });
 
-async function fixture(t, loop = false) {
+async function fixture(t, loop = false, nativePressure = false) {
   const directory = await mkdtemp(join(tmpdir(), 'vctx-auto-'));
   const root = new Context();
   const sessions = new SessionStore(root);
@@ -31,12 +32,17 @@ async function fixture(t, loop = false) {
   let agent, handle, requests = [];
   if (loop) {
     new SessionProjectionRegistry(root);
+    if (nativePressure) {
+      const fiber = root.plugin(dshContext, {});
+      if (fiber.inertia) await fiber.inertia;
+    }
     new SystemPrompt(root, {});
     const agents = new AgentRegistry(root);
     const llm = new LlmRuntime(root);
     new ToolRuntime(root);
     new AgentLoop(root, { agents: [], maxParallelToolCalls: createVolatile(10) });
     class Offline extends LlmAdapter {
+      async resolveModel(provider, model) { return { provider, id: model, name: model, context: { contextWindow: 1048576 } }; }
       async *stream() {
         yield { type: 'block-start', index: 0, blockType: 'text' };
         yield { type: 'text-delta', index: 0, text: 'offline answer' };
@@ -49,8 +55,8 @@ async function fixture(t, loop = false) {
     handle = await agents.create({ sessionId: 'auto-loop', meta: { cwd: tmpdir(), delegationDepth: 0 },
       agentOptions: { provider: 'offline-auto', model: 'test', maxTokens: 8192 } });
     agent = handle.agent;
-    for (let i = 0; i < 12; i++) {
-      agent.followup(text('u' + i, 'user', ('SECRET-TURN-' + i + ' ').repeat(1000)));
+    for (let i = 0; i < (nativePressure ? 24 : 12); i++) {
+      agent.followup(text('u' + i, 'user', ('SECRET-TURN-' + i + ' ').repeat(nativePressure ? 1600 : 1000)));
       await agent.whenIdle();
     }
   } else {
@@ -75,7 +81,7 @@ async function fixture(t, loop = false) {
   const projection = { snapshot(session) { return { asOfSeq: session.seq - 1, values: {
     contextTimeline: { ok: true, current: { total: Math.ceil(JSON.stringify(session.deriveMessages()).length / 3) + 2000 }, contextWindow: 32000 },
   } }; } };
-  root.set('sessionProjections', projection);
+  if (!nativePressure) root.set('sessionProjections', projection);
   const auto = createAutomation(root, transport, bridge, archive, async () => {});
   t.after(async () => { await auto.dispose(); await archive.dispose(); await handle?.dispose(); await root.fiber.dispose();
     await transport.dispose(); await rm(directory, { recursive: true, force: true }); });
@@ -109,6 +115,73 @@ test('default L1 organizer changes native Surface, preserves original log and re
     events: structuredClone(f.agent.session.snapshotEvents()), inheritedEventCount: 0 }, KNOWN_SESSION_EVENT_TYPES);
   const replay = Session.create(f.agent.id, artifact.events, artifact.header, artifact.inheritedEventCount);
   assert.deepEqual(replay.deriveMessages(), f.agent.session.deriveMessages());
+});
+
+test('native dsh-context on a million-token model organizes at the independent working budget via idle events', async t => {
+  const f = await fixture(t, true, true);
+  // Real dsh-context folds request/context and every message; no fabricated pressure or step count.
+  await f.auto.configure(f.agent.id, { l1_input_budget: 0 });
+  await f.auto.schedule(f.agent);
+  for (let i = 0; i < 2; i++) {
+    f.agent.followup(text('mature' + i, 'user', 'committed progress ' + i));
+    await f.agent.whenIdle(); await f.auto.schedule(f.agent);
+  }
+  const before = await f.auto.inspect(f.agent.id);
+  assert.equal(before.l1.pressure.model_window, 1048576, JSON.stringify(before.l1.pressure));
+  assert.equal(before.l1.pressure.high, false, JSON.stringify(before.l1.pressure));
+  assert.ok(before.l1.pressure.tokens > 131072 * .85, JSON.stringify(before.l1.pressure));
+  assert.equal((await f.archive.list(f.agent.id)).total, 0);
+  const beforeRequestBytes = Buffer.byteLength(JSON.stringify(f.requests.at(-1)));
+  await f.auto.configure(f.agent.id, { l1_input_budget: 131072 });
+  await f.auto.schedule(f.agent);
+  const archives = await f.archive.list(f.agent.id);
+  assert.ok(archives.total > 0);
+  const first = archives.archives.at(-1);
+  const events = f.agent.session.snapshotEvents();
+  const originals = events[first.created_seq].sourceEventSeqs.map(seq => f.agent.session.deriveEventMessage(events[seq]))
+    .flatMap(m => m?.content ?? []).filter(b => b.type === 'text' && b.text.length > 100).map(b => b.text);
+  assert.ok(originals.length);
+  assert.match((await f.archive.read(f.agent.id, first.ref)).content, /SECRET-TURN/);
+  f.agent.followup(text('verify', 'user', 'verify the next request'));
+  await f.agent.whenIdle(); await f.auto.schedule(f.agent);
+  const sent = JSON.stringify(f.requests.at(-1));
+  for (const original of originals) assert.equal(sent.includes(original), false);
+  assert.match(sent, /vctx:\/\/history\//);
+  assert.match(sent, /verify the next request/);
+  assert.ok(Buffer.byteLength(sent) < beforeRequestBytes);
+  t.diagnostic(JSON.stringify({ fixture: 'native dsh-context, 1 Mi model window, 128 Ki working budget',
+    before_request_bytes: beforeRequestBytes, after_request_bytes: Buffer.byteLength(sent), archived_pages: archives.total,
+    provider_calls: 0, targets_absent: true, reference_readable: true }));
+  const restored = restoreReleasedV4Artifact({ header: structuredClone(f.agent.session.header),
+    events: structuredClone(f.agent.session.snapshotEvents()), inheritedEventCount: 0 }, KNOWN_SESSION_EVENT_TYPES);
+  assert.deepEqual(Session.create(f.agent.id, restored.events, restored.header, 0).deriveMessages(), f.agent.session.deriveMessages());
+});
+
+test('input work budget is bounded by model capacity and zero opts into the entire model window', async t => {
+  const f = await fixture(t);
+  await f.auto.configure(f.agent.id, { l1_input_budget: 9000000000000 });
+  const large = (await f.auto.inspect(f.agent.id)).l1.pressure;
+  assert.equal(large.budget, 32000 - 8192);
+  await f.auto.configure(f.agent.id, { l1_input_budget: 10000 });
+  const small = (await f.auto.inspect(f.agent.id)).l1.pressure;
+  assert.equal(small.budget, 10000);
+  assert.equal(small.high_tokens, 8500);
+  assert.equal(small.low_tokens, 7000);
+  await f.auto.configure(f.agent.id, { l1_input_budget: 0 });
+  assert.equal((await f.auto.inspect(f.agent.id)).l1.pressure.budget, large.budget);
+});
+
+test('plugin reload observes already existing idle agents without an agent-created event', async t => {
+  const f = await fixture(t);
+  await f.auto.dispose();
+  let syncs = 0;
+  const ctx = { on: (...args) => f.root.on(...args), get: key => key === 'agents' ? { list: () => [f.agent], get: id => id === f.agent.id ? f.agent : undefined } : f.root.get(key) };
+  const auto = createAutomation(ctx, f.transport, { async sync() { syncs++; return { state: 'synced' }; } }, f.archive, async () => {});
+  t.after(() => auto.dispose());
+  await new Promise(resolve => setImmediate(resolve));
+  assert.ok(syncs > 0, 'reload must schedule existing idle agents without an explicit schedule call');
+  await auto.schedule(f.agent);
+  assert.ok((await auto.inspect(f.agent.id)).runtime?.l1);
 });
 
 test('automatic page-out is absent from the next real AgentLoop request', async t => {
