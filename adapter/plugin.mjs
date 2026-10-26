@@ -196,7 +196,7 @@ export function mount(ctx, config, defineTool) {
       if (!exec.agent) throw new Error('vctx requires a calling agent');
       const input = JSON.parse(args.input);
       if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('input must encode an object');
-      if (args.operation.startsWith('auto_') || ['state_bind', 'state_sync', 'result_store', 'result_get', 'result_mark', 'result_plan', 'result_plan_list', 'result_plan_finish', 'task_review'].includes(args.operation)) throw new Error('host-only structured state operation');
+      if (args.operation.startsWith('auto_') || args.operation.startsWith('result_upload_') || ['state_bind', 'state_sync', 'result_store', 'result_get', 'result_verify', 'result_find', 'result_mark', 'result_plan', 'result_plan_list', 'result_plan_finish', 'task_review'].includes(args.operation)) throw new Error('host-only structured state operation');
       if (args.operation === 'history_read')
         return historyArchive.read(exec.agent.id, input.ref, input.offset, input.limit, input.seq, input.expected_content_hash);
       if (args.operation === 'history_list') return historyArchive.list(exec.agent.id, input.limit);

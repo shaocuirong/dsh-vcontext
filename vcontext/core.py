@@ -84,11 +84,12 @@ MUTATING_OPERATIONS = frozenset({
     'compact', 'organize', 'prepare_task', 'render', 'checkpoint', 'fold',
     'set_policy', 'policy_tick', 'set_session_enabled', 'record_usage',
     'state_bind', 'state_sync', 'resource_store', 'summary_store', 'result_store', 'result_mark',
-    'result_plan', 'result_plan_finish', 'snapshot_create', 'snapshot_checkout', 'snapshot_detach', 'snapshot_branch',
+    'result_plan', 'result_plan_finish', 'result_upload_begin', 'result_upload_chunk', 'result_upload_finish', 'result_upload_abort',
+    'snapshot_create', 'snapshot_checkout', 'snapshot_detach', 'snapshot_branch',
     'task_create','task_update','task_select','task_fork','task_attach','task_review',
     'quota_configure','quota_admit','quota_release','quota_reserve','quota_commit',
     'quota_release_reservation', 'auto_configure', 'auto_step', 'auto_tick', 'auto_observe',
-    'auto_access', 'auto_receipt', 'auto_latch', 'read', 'search'})
+    'auto_access', 'auto_receipt', 'auto_latch', 'read', 'search', 'result_read'})
 
 STRUCTURED_OPERATIONS = frozenset({'state_bind', 'state_sync', 'state_status',
     'operation_list', 'operation_read', 'resource_store', 'resource_read',
@@ -1166,7 +1167,13 @@ class ContextStore:
                 return self.quota.status()
             return result
         if operation in RESULT_OPERATIONS:
-            return ResultStore(self.db, self.scope).dispatch(operation, arguments)
+            started = time.perf_counter()
+            result = ResultStore(self.db, self.scope).dispatch(operation, arguments)
+            if operation == 'result_read':
+                self.automation.auto_access(key='result:' + result['ref'].removeprefix('vctx://result/'),
+                    kind='original', source='cold', bytes=len(result['content'].encode('utf-8')),
+                    duration_ms=min(600000, (time.perf_counter() - started) * 1000))
+            return result
         if operation in STRUCTURED_OPERATIONS or operation in SNAPSHOT_OPERATIONS or operation in TASK_OPERATIONS:
             return TaskState(self.db, self.scope).dispatch(operation, arguments)
         allowed = {'write','ingest','read','history','search','page_in','page_out','unpin',
