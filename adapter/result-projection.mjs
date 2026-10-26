@@ -1,13 +1,18 @@
 import { createHash } from 'node:crypto';
+import { describeContext } from './live-context.mjs';
+import { automationPressure } from './automation-pressure.mjs';
+import { segmentHistoryPages } from './history-segmenter.mjs';
+import { planOpenResults } from './open-result-planner.mjs';
 
 const MIN_BYTES = 2048;
-const MAX_BYTES = 1024 * 1024;
+const MAX_BYTES = 8 * 1024 * 1024;
+const SMALL_BYTES = 1024 * 1024;
 const READ_TOOLS = new Set(['read', 'read_file', 'readFile', 'file_read', 'file.read', 'fs.read']);
 const ERRORS = {
   INVALID_INPUT: '工具结果请求参数无效。', UNAVAILABLE: '宿主未提供会话维护、历史查询或持久化能力。',
   BUSY: '会话正在运行或维护，请稍后重试。', CANCELLED: '工具结果投影已取消，请刷新后对账。',
   HISTORY_INVALID: '无法取得一致的原生会话历史。', CHANGED: '所选工具结果已改变或不在当前上下文中，请刷新。',
-  PROTECTED: '此结果受保护；仅支持手动移出完整、成功的纯文本读取结果。',
+  PROTECTED: '此结果受保护；仅支持移出完整、成功且无活动任务依赖的纯文本读取结果。',
   STORAGE_FAILED: '原文存储或校验失败，未确认投影完成。',
   PERSISTENCE_FAILED: '宿主投影尚未确认持久化，请刷新并重试同一操作进行对账。',
   RECONCILE_REQUIRED: '宿主投影已保存，索引尚未确认；请重试同一操作进行对账。',
@@ -17,7 +22,7 @@ const ERRORS = {
 const fail = code => { throw Object.assign(new Error(ERRORS[code]), { code }); };
 const sha = value => createHash('sha256').update(value, 'utf8').digest('hex');
 const identity = value => typeof value === 'string' && value.length > 0 && value.length <= 256 && !/[\u0000-\u001f]/u.test(value);
-const same = (left, right) => JSON.stringify(left) === JSON.stringify(right);
+const same = (left, right) => Object.is(left, right) || JSON.stringify(left) === JSON.stringify(right);
 const reference = record => `[VContext stored tool result]\nref: ${record.ref}\nsha256: ${record.content_hash}\noriginal_utf8_bytes: ${record.bytes}\nUse vctx result_read with this ref to retrieve the original stored data. This reference does not assert that the result is current or verified.`;
 const projectedData = (original, record) => ({ ...original, message: { ...original.message,
   content: [{ type: 'text', text: reference(record) }] } });
@@ -31,14 +36,20 @@ function requireOpenTurn(cut) {
 }
 
 /** Explicit, single-result STORE -> PROJECT / RESTORE using native Surface events. */
-export function createResultProjection(ctx, transport, sessionBridge, diagnostics) {
+export function createResultProjection(ctx, transport, sessionBridge, diagnostics, config = {}) {
   const lifetime = new AbortController();
   const pending = new Map();
+  const automatic = new Map();
+  const validatedSources = new WeakMap();
   let disposed = false;
   const log = (name, sessionId, fields = {}) => {
     try { diagnostics?.record(name, 'info', { session_hash: sha(sessionId).slice(0, 12), ...fields }); } catch {}
   };
   const check = signal => { if (disposed) fail('DISPOSED'); if (signal.aborted) fail('CANCELLED'); };
+  const rememberAutomatic = (id, status) => {
+    automatic.delete(id); automatic.set(id, { ...status, checked_at: Date.now() });
+    if (automatic.size > 128) automatic.delete(automatic.keys().next().value);
+  };
   async function resolve(sessionId) {
     if (!identity(sessionId)) fail('INVALID_INPUT');
     if (disposed) fail('DISPOSED');
@@ -101,13 +112,7 @@ export function createResultProjection(ctx, transport, sessionBridge, diagnostic
       || !content.every(block => block?.type === 'text' && typeof block.text === 'string')) return false;
     const serialized = event?.data ? JSON.stringify(event.data) : '';
     const bytes = Buffer.byteLength(serialized, 'utf8');
-    // The resident worker's bounded RPC serializes this JSON string again.
-    // Escaping-heavy text must fit that envelope as well as the content limit.
-    const rpcBytes = Buffer.byteLength(JSON.stringify({ request_id: `tool-result:${event.seq}`,
-      source_seq: event.seq, tool_call_id: event.data.message.toolCallId,
-      tool_name: tool, content: serialized }), 'utf8');
     return bytes >= MIN_BYTES && bytes <= MAX_BYTES
-      && rpcBytes <= 1900000
       && same(agent.session.deriveEventMessage(event), event.data.message);
   }
   function validateStored(record, cut) {
@@ -148,6 +153,84 @@ export function createResultProjection(ctx, transport, sessionBridge, diagnostic
     try { return await transport.call(id, operation, input, signal); }
     catch (error) { if (signal.aborted) fail('CANCELLED'); fail('STORAGE_FAILED'); }
   }
+  async function storeOriginal(agent, cut, event, signal) {
+    const content = JSON.stringify(event.data), request_id = `tool-result:${event.seq}`;
+    const input = { request_id, source_seq: event.seq, tool_call_id: event.data.message.toolCallId,
+      tool_name: toolFor(cut, event), content };
+    if (Buffer.byteLength(content) <= SMALL_BYTES && Buffer.byteLength(JSON.stringify(input)) <= 1900000)
+      return call(agent.id, 'result_store', input, signal);
+    const started = await call(agent.id, 'result_upload_begin', { request_id, source_seq: event.seq,
+      tool_call_id: input.tool_call_id, tool_name: input.tool_name, content_hash: 'sha256:' + sha(content),
+      bytes: Buffer.byteLength(content) }, signal);
+    if (started.committed) return started.result;
+    let offset = 0, part = 0;
+    while (offset < content.length) {
+      check(signal);
+      let end = Math.min(content.length, offset + 65536);
+      const tail = content.charCodeAt(end - 1);
+      if (end < content.length && tail >= 0xd800 && tail <= 0xdbff) end--;
+      const chunk = content.slice(offset, end);
+      if (part >= (started.next_part ?? 0)) await call(agent.id, 'result_upload_chunk', {
+        request_id, part, content: chunk, chunk_hash: 'sha256:' + sha(chunk) }, signal);
+      offset = end; part++;
+    }
+    return call(agent.id, 'result_upload_finish', { request_id }, signal);
+  }
+  const recordAt = (metadata, cut) => ({ ...metadata, content: JSON.stringify(cut.events[metadata.source_seq]?.data) });
+  async function automaticCandidates(agent, signal, { observeUnits = false, allowSource } = {}) {
+    const policy = await call(agent.id, 'auto_status', {}, signal);
+    if (!policy.config.l1_enabled || !policy.config.l1_open_results_enabled)
+      return { status: { outcome: 'disabled' }, candidates: [] };
+    const quota = await call(agent.id, 'quota_status', {}, signal);
+    const pressure = automationPressure(ctx, agent, quota, policy.config, { contextIntegration: config.contextIntegration !== false });
+    if (!pressure.available || pressure.low || !pressure.high && !policy.l1_active)
+      return { status: { outcome: pressure.available ? 'below_high' : 'PRESSURE_UNAVAILABLE', pressure }, candidates: [] };
+    const plan = segmentHistoryPages(agent.session, { include_open: true, body_projection: true, target_bytes: 32768, max_pages: 256 });
+    const units = await call(agent.id, 'auto_observe', { keys: plan.pages.map(p => 'history:' + p.page_id), readonly: !observeUnits }, signal);
+    const guard = await call(agent.id, 'auto_guard', {}, signal);
+    const pages = planOpenResults(agent.session, plan, units.units, guard);
+    const listed = await call(agent.id, 'result_list', {}, signal);
+    const known = new Set(listed.results.map(r => r.source_seq));
+    const cut = await observe(agent, signal), candidates = [], reasons = {};
+    try {
+      for (const page of pages) {
+        for (const reason of page.reasons) reasons[reason] = (reasons[reason] ?? 0) + 1;
+        if (page.reasons.length) continue;
+        for (const seq of page.source_seqs) {
+          const event = cut.events[seq];
+          if (eligible(agent, cut, event) && (!known.has(seq) || seq === allowSource))
+            candidates.push({ page_id: page.page_id, source_seq: seq, bytes: Buffer.byteLength(JSON.stringify(event.data)) });
+        }
+      }
+    } finally { cut.release(); }
+    candidates.sort((a, b) => b.bytes - a.bytes || a.source_seq - b.source_seq);
+    return { status: { outcome: candidates.length ? 'eligible' : 'protected', pressure, candidates: candidates.length,
+      protected_reasons: reasons, scanned_pages: plan.pages.length, truncated: plan.total_pages > plan.pages.length }, candidates };
+  }
+  async function queueAutomatic(agent, signal) {
+    const preview = await automaticCandidates(agent, signal, { observeUnits: true });
+    rememberAutomatic(agent.id, preview.status);
+    if (!preview.candidates.length) return;
+    await call(agent.id, 'auto_latch', { layer: 'l1', active: true }, signal);
+    let bytes = 0, count = 0;
+    const pages = new Set();
+    for (const candidate of preview.candidates) {
+      if (count >= 2 || bytes + candidate.bytes > MAX_BYTES || pages.has(candidate.page_id)) continue;
+      if (await call(agent.id, 'result_find', { source_seq: candidate.source_seq }, signal)) continue;
+      const cut = await observe(agent, signal);
+      try {
+        const event = cut.events[candidate.source_seq];
+        if (!eligible(agent, cut, event)) continue;
+        const record = await storeOriginal(agent, cut, event, signal);
+        if (agent.session.seq !== cut.cursor) fail('CHANGED');
+        const state = await call(agent.id, 'auto_status', {}, signal);
+        if (!state.config.l1_enabled || !state.config.l1_open_results_enabled) break;
+        await call(agent.id, 'result_plan', { ref: record.ref, desired: 'projected', origin: 'automatic' }, signal);
+        bytes += candidate.bytes; count++; pages.add(candidate.page_id);
+      } finally { cut.release(); }
+    }
+    rememberAutomatic(agent.id, { ...preview.status, outcome: count ? 'planned' : 'protected', planned: count, source_bytes: bytes });
+  }
   async function flush(agent, signal) {
     check(signal);
     try {
@@ -187,14 +270,27 @@ export function createResultProjection(ctx, transport, sessionBridge, diagnostic
     pending.set(sessionId, promise);
     try { return await promise; } finally { pending.delete(sessionId); }
   }
-  async function perform(agent, record, desired, cut, signal) {
+  async function perform(agent, record, desired, cut, signal, automaticPlan = false) {
     requireOpenTurn(cut);
     const original = validateStored(record, cut);
     const visible = current(agent, cut, record, original);
     if (!visible) fail('CHANGED');
+    if (desired === 'projected' && visible.status !== 'projected') {
+      const guard = await call(agent.id, 'auto_guard', {}, signal);
+      if (guard.source_seqs.includes(record.source_seq)) fail('PROTECTED');
+      if (automaticPlan) {
+        const preview = await automaticCandidates(agent, signal, { allowSource: record.source_seq });
+        if (!preview.candidates.some(p => p.source_seq === record.source_seq)) fail('PROTECTED');
+        const finalGuard = await call(agent.id, 'auto_guard', {}, signal);
+        if (!finalGuard.config.l1_enabled || !finalGuard.config.l1_open_results_enabled
+          || finalGuard.source_seqs.includes(record.source_seq)) fail('PROTECTED');
+      }
+    }
     // A retry may find an accepted append even when flush/mark previously failed.
     // Re-flush and reconcile that append instead of adding a duplicate event.
     const noop = desired === visible.status || desired === 'restored' && visible.status === 'stored';
+    const header = agent.session.requestHeader?.();
+    const beforeBytes = describeContext(agent.session.deriveMessages(), header?.tools, header?.config).bytes;
     let surfaceSeq = visible.event.seq;
     let target = visible.event;
     let expectedCursor = cut.cursor;
@@ -224,7 +320,8 @@ export function createResultProjection(ctx, transport, sessionBridge, diagnostic
     assertVisible();
     log(`context.result.${desired}`, agent.id, { source_seq: record.source_seq, surface_seq: surfaceSeq, noop });
     return { ref: record.ref, source_seq: record.source_seq, surface_seq: surfaceSeq,
-      status: desired, bytes: record.bytes, noop };
+      status: desired, bytes: record.bytes, noop, before_bytes: beforeBytes,
+      after_bytes: describeContext(agent.session.deriveMessages(), header?.tools, header?.config).bytes };
   }
   async function applyPending(agent, signal = lifetime.signal) {
     if (pending.has(agent.id)) fail('BUSY');
@@ -235,19 +332,34 @@ export function createResultProjection(ctx, transport, sessionBridge, diagnostic
       const admitted = await observe(agent, control);
       try { requireOpenTurn(admitted); }
       finally { admitted.release(); }
+      try { await queueAutomatic(agent, control); }
+      catch (error) { rememberAutomatic(agent.id, { outcome: 'failed', error_code: error?.code ?? 'STORAGE_FAILED' }); }
       const plans = await call(agent.id, 'result_plan_list', {}, control);
       const outcome = { applied: [], failed: [] };
       for (const plan of plans.plans ?? []) {
         try {
-          const record = await call(agent.id, 'result_get', { ref: plan.ref }, control);
+          if (plan.origin === 'automatic') {
+            const state = await call(agent.id, 'auto_status', {}, control);
+            if (!state.config.l1_enabled || !state.config.l1_open_results_enabled) continue;
+          }
+          const metadata = await call(agent.id, 'result_verify', { ref: plan.ref }, control);
           const cut = await observe(agent, control);
           let result;
-          try { result = await perform(agent, record, plan.desired, cut, control); }
+          try { result = await perform(agent, recordAt(metadata, cut), plan.desired, cut, control, plan.origin === 'automatic'); }
           finally { cut.release(); }
           try { await call(agent.id, 'result_plan_finish', { ref: plan.ref,
             revision: plan.revision, status: 'applied' }, control); }
           catch { fail('RECONCILE_REQUIRED'); }
           outcome.applied.push(result);
+          if (plan.origin === 'automatic') {
+            try { await call(agent.id, 'auto_receipt', { request_id: `open-result:${plan.ref}:${plan.revision}`,
+              layer: 'l1', state: 'confirmed', detail: { kind: 'open_result', ref: plan.ref, source_seq: result.source_seq,
+                receipt: { ref: plan.ref, surface_seq: result.surface_seq,
+                  before: { bytes: result.noop ? null : result.before_bytes }, after: { bytes: result.noop ? null : result.after_bytes } } } }, control); }
+            catch { log('context.result.receipt.failed', agent.id, { source_seq: result.source_seq }); }
+            rememberAutomatic(agent.id, { ...(automatic.get(agent.id) ?? {}), outcome: 'applied',
+              last_ref: plan.ref, before_bytes: result.before_bytes, after_bytes: result.after_bytes });
+          }
         } catch (error) {
           const code = Object.hasOwn(ERRORS, error?.code) ? error.code : 'STORAGE_FAILED';
           try { await call(agent.id, 'result_plan_finish', { ref: plan.ref,
@@ -272,6 +384,7 @@ export function createResultProjection(ctx, transport, sessionBridge, diagnostic
   }, { prepend: true });
   return {
     applyPending,
+    automaticStatus(id) { return automatic.has(id) ? structuredClone(automatic.get(id)) : null; },
     async inspect(sessionId) {
       const agent = await resolve(sessionId);
       const signal = lifetime.signal;
@@ -295,18 +408,22 @@ export function createResultProjection(ctx, transport, sessionBridge, diagnostic
         }
         for (const metadata of listed.results ?? []) {
           // The immutable host prefix already has these bodies. Do not pull up to
-          // 100 MiB through SQLite merely to render a metadata-only selection UI.
+          // 100 large bodies through SQLite merely to render a metadata-only UI.
           const source = cut.events[metadata.source_seq];
-          const stored = { ...metadata, content: JSON.stringify(source?.data) };
-          const original = validateStored(stored, cut);
-          const visible = current(agent, cut, stored, original);
-          results.push({ ref: stored.ref, source_seq: stored.source_seq, tool_name: stored.tool_name,
-            bytes: stored.bytes, status: visible?.status ?? 'unavailable', surface_seq: visible?.event.seq ?? null,
-            plan: stored.plan ?? null,
-            can_restore: visible?.status === 'projected' || stored.plan?.status === 'queued' && stored.plan.desired === 'projected' });
-          if (visible && ['stored', 'restored'].includes(visible.status) && candidates.length < 100 && stored.plan?.status !== 'queued')
-            candidates.push({ source_seq: stored.source_seq, tool_name: stored.tool_name,
-              tool_call_id: stored.tool_call_id, bytes: stored.bytes });
+          const cached = source && validatedSources.get(source);
+          const signature = JSON.stringify([metadata.ref, metadata.source_seq, metadata.content_hash, metadata.bytes, metadata.tool_call_id, metadata.tool_name, cut.inherited]);
+          if (cached !== signature) {
+            validateStored({ ...metadata, content: JSON.stringify(source?.data) }, cut);
+            if (Object.isFrozen(source) && Object.isFrozen(source.data)) validatedSources.set(source, signature);
+          }
+          const visible = current(agent, cut, metadata, source.data);
+          results.push({ ref: metadata.ref, source_seq: metadata.source_seq, tool_name: metadata.tool_name,
+            bytes: metadata.bytes, status: visible?.status ?? 'unavailable', surface_seq: visible?.event.seq ?? null,
+            plan: metadata.plan ?? null,
+            can_restore: visible?.status === 'projected' || metadata.plan?.status === 'queued' && metadata.plan.desired === 'projected' });
+          if (visible && ['stored', 'restored'].includes(visible.status) && candidates.length < 100 && metadata.plan?.status !== 'queued')
+            candidates.push({ source_seq: metadata.source_seq, tool_name: metadata.tool_name,
+              tool_call_id: metadata.tool_call_id, bytes: metadata.bytes });
         }
         return { candidates, results, protected_count: protectedCount,
           truncated: candidates.length >= 100 || (listed.results ?? []).length >= 100,
@@ -320,9 +437,9 @@ export function createResultProjection(ctx, transport, sessionBridge, diagnostic
         try {
           const original = cut.events[sourceSeq];
           if (!eligible(agent, cut, original)) fail('PROTECTED');
-          const record = await call(agent.id, 'result_store', { request_id: `tool-result:${sourceSeq}`,
-            source_seq: sourceSeq, tool_call_id: original.data.message.toolCallId,
-            tool_name: toolFor(cut, original), content: JSON.stringify(original.data) }, signal);
+          const guard = await call(agent.id, 'auto_guard', {}, signal);
+          if (guard.source_seqs.includes(sourceSeq)) fail('PROTECTED');
+          const record = await storeOriginal(agent, cut, original, signal);
           const stored = { ...record, content: JSON.stringify(original.data) };
           validateStored(stored, cut);
           const visible = current(agent, cut, stored, original.data);
@@ -337,9 +454,10 @@ export function createResultProjection(ctx, transport, sessionBridge, diagnostic
     restore(sessionId, ref) {
       if (!/^vctx:\/\/result\/[a-f0-9]{32}$/u.test(ref ?? '')) return Promise.reject(Object.assign(new Error(ERRORS.INVALID_INPUT), { code: 'INVALID_INPUT' }));
       return mutate(sessionId, async (agent, signal) => {
-        const record = await call(agent.id, 'result_get', { ref }, signal);
+        const metadata = await call(agent.id, 'result_verify', { ref }, signal);
         const cut = await observe(agent, signal);
         try {
+          const record = recordAt(metadata, cut);
           const original = validateStored(record, cut);
           if (!current(agent, cut, record, original)) fail('CHANGED');
           const plan = await call(agent.id, 'result_plan', { ref, desired: 'restored' }, signal);
@@ -356,6 +474,7 @@ export function createResultProjection(ctx, transport, sessionBridge, diagnostic
       detachStep();
       await Promise.allSettled([...pending.values()]);
       pending.clear();
+      automatic.clear();
     },
   };
 }

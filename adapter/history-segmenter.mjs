@@ -84,6 +84,8 @@ export function segmentHistoryPages(session, options = {}) {
   if (options.include_open !== undefined && typeof options.include_open !== 'boolean')
     fail('INVALID_INPUT', 'include_open 必须是布尔值。');
   const includeOpen = options.include_open === true;
+  if (options.body_projection !== undefined && typeof options.body_projection !== 'boolean')
+    fail('INVALID_INPUT', 'body_projection 必须是布尔值。');
   const maxPages = options.max_pages ?? MAX_PAGES;
   if (!Number.isSafeInteger(maxPages) || maxPages < 1 || maxPages > MAX_PAGES)
     fail('INVALID_INPUT', 'max_pages 必须在 1 到 256 之间。');
@@ -205,6 +207,13 @@ export function segmentHistoryPages(session, options = {}) {
     }
     if (event.type === 'user/message') {
       if (event.data?.source?.kind !== 'user') {
+        // A body-only projection preserves this known context node and every
+        // tool-call/result message. It need not protect unrelated read bodies
+        // merely because a normal runtime-context append precedes their group.
+        // Replacement ownership is still checked by the opaque scanner above.
+        if (options.body_projection === true && event.data?.source?.kind === 'runtime-context') {
+          index++; continue;
+        }
         const owner = ownerBySeq.get(seq);
         if (owner) {
           opaqueSteps.add(stepKey(owner.turn, owner.step));

@@ -40,6 +40,17 @@ test('source size and estimated capacity are not confused with actual context by
   assert.equal(result.events.find(e => e.kind === 'result_project').before, null);
 });
 
+test('automatic open-turn result receipts provide measured L1 changes once without duplicating the result row', () => {
+  const result = buildDashboardActivity({ automation: { operations: [{ request_id: 'open', layer: 'l1', state: 'confirmed',
+    detail: { kind: 'open_result', ref: 'vctx://result/a', source_seq: 12,
+      receipt: { ref: 'vctx://result/a', surface_seq: 80, before: { bytes: 3500000 }, after: { bytes: 50000 } } } }] },
+    results: [{ ref: 'vctx://result/a', status: 'projected', surface_seq: 80, bytes: 3400000 }] });
+  assert.equal(result.events.length, 1);
+  assert.equal(result.events[0].kind, 'result_project');
+  assert.equal(result.events[0].origin, 'automatic');
+  assert.equal(result.confirmed_reduction_bytes, 3450000);
+});
+
 test('zero, negative reduction, missing measurements and no-op receipts keep honest meaning', () => {
   const result = buildDashboardActivity({ history: { recent_operations: [
     { ref: 'zero', before_bytes: 100, after_bytes: 100 }, { ref: 'increased', before_bytes: 100, after_bytes: 200 }, { ref: 'legacy' },

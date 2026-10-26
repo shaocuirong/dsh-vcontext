@@ -8,6 +8,8 @@ export function buildDashboardActivity({ history, automation, results = [], resi
     .map(op => [op.detail?.receipt?.ref, op]));
   const autoByRequest = new Map(ops.filter(op => op.layer === 'l1' && op.state === 'confirmed').map(op => [op.request_id, op]));
   const historyRefs = new Set(), historyRequests = new Set();
+  const resultOperations = new Map(ops.filter(op => op.layer === 'l1' && op.state === 'confirmed' && op.detail?.kind === 'open_result')
+    .map(op => [op.detail.ref, op]));
   for (const row of history?.recent_operations ?? []) {
     const automatic = autoByRef.get(row.ref) ?? autoByRequest.get(row.request_id);
     historyRefs.add(row.ref);
@@ -21,16 +23,19 @@ export function buildDashboardActivity({ history, automation, results = [], resi
     if (op.layer === 'l1' && (historyRefs.has(d.receipt?.ref) || historyRequests.has(op.request_id))) continue;
     const l2 = op.layer === 'l2';
     if (l2 && op.state === 'confirmed' && !d.evicted?.length) continue;
-    events.push({ id: 'automatic:' + op.request_id, kind: l2 ? 'quota' : 'history_page', layer: op.layer,
+    events.push({ id: 'automatic:' + op.request_id, kind: l2 ? 'quota' : d.kind === 'open_result' ? 'result_project' : 'history_page', layer: op.layer,
       state: op.state, origin: 'automatic', unit: l2 ? 'estimated_tokens' : 'bytes', created_at: millis(op.updated),
       before: amount(l2 ? d.before?.session?.used_tokens : d.receipt?.before?.bytes),
       after: amount(l2 ? d.after?.session?.used_tokens : d.receipt?.after?.bytes),
-      page_id: d.page_id ?? null, ref: d.receipt?.ref ?? null, source_count: l2 ? d.evicted?.length ?? 0 : d.source_seqs?.length ?? 0,
+      page_id: d.page_id ?? null, ref: d.receipt?.ref ?? null, source_count: l2 ? d.evicted?.length ?? 0 : d.kind === 'open_result' ? 1 : d.source_seqs?.length ?? 0,
       page_ids: d.evicted ?? [], error_code: d.error_code ?? null, outcome: d.outcome ?? null });
   }
   for (const row of results) {
     const plan = row.plan;
-    if (['projected', 'restored'].includes(row.status)) events.push({
+    const automatic = resultOperations.get(row.ref);
+    const sameAutomatic = row.status === 'projected' && automatic && Number.isSafeInteger(row.surface_seq)
+      && automatic.detail?.receipt?.surface_seq === row.surface_seq;
+    if (['projected', 'restored'].includes(row.status) && !sameAutomatic) events.push({
       id: 'result:' + row.ref + ':' + (row.surface_seq ?? row.status), kind: row.status === 'projected' ? 'result_project' : 'result_restore',
       layer: 'l1', state: 'confirmed', origin: 'host', unit: 'bytes',
       created_at: millis(plan?.status === 'applied' ? plan.updated_at : row.created_at),

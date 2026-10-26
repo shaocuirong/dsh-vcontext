@@ -233,6 +233,32 @@ test('L1 budget presets are persisted independently and empty archive status doe
   assert.match(text(status), /L2 插件页降冷不代表聊天历史已换出/);
 });
 
+test('mixed frontend/backend versions show restart guidance and unknown thresholds instead of NaN', async () => {
+  const { module } = await loadClient();
+  const tree = module.ProtectionStatus({ automation: { config: { l1_enabled: true },
+    l1: { pressure: { available: true, tokens: 150000, budget: 792576 } } },
+    view: { hasProtectionPreview: false, protection: [] }, history: { total_archives: 0 } });
+  assert.doesNotMatch(text(tree), /NaN/);
+  assert.match(text(tree), /完全退出并重启 Harness/);
+});
+
+test('the long-task switch persists independently while retaining both main layer switches', async t => {
+  const renderer = createHookRenderer(), { module } = await loadClient(undefined, renderer.react);
+  const previousFetch = globalThis.fetch, writes = [], config = { l1_enabled: true, l2_enabled: true, l1_open_results_enabled: true };
+  t.after(() => { globalThis.fetch = previousFetch; });
+  globalThis.fetch = async (_path, options) => {
+    if (options?.method === 'POST') { const body = JSON.parse(options.body); writes.push(body); Object.assign(config, body); }
+    return { ok: true, json: async () => ({ ok: true, result: { config: { ...config }, open_results: { outcome: 'protected' } } }) };
+  };
+  const render = () => module.AutomationCard({ sessionId: 's', reload() {} });
+  let tree = await renderer.settle(render);
+  assert.match(text(tree), /候选受保护或已有人工计划/);
+  await findNode(tree, n => n.props['aria-label'] === '长任务中自动外置已完成的读取结果').props.onChange({ target: { checked: false } });
+  tree = await renderer.settle(render);
+  assert.deepEqual(writes, [{ session: 's', l1_open_results_enabled: false }]);
+  assert.equal(config.l1_enabled, true); assert.equal(config.l2_enabled, true);
+});
+
 test('queued replacement shows waiting state without claiming before/after savings', async () => {
   const { module } = await loadClient();
   const tree = module.ReplacementFlow({ event: { id: 'queued', kind: 'result_project', state: 'queued', unit: 'bytes',

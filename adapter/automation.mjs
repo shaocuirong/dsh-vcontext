@@ -1,11 +1,11 @@
 import { randomUUID } from 'node:crypto';
-import { readContextIntegration } from './context-integration.mjs';
+import { automationPressure } from './automation-pressure.mjs';
 
 const fail = code => { throw Object.assign(new Error(code), { code }); };
 const validId = id => typeof id === 'string' && id.length > 0 && id.length <= 256;
 
 /** Idle host coordinator. Does not wake agents, generate summaries, or edit source logs. */
-export function createAutomation(ctx, transport, sessionBridge, historyArchive, refresh, config = {}) {
+export function createAutomation(ctx, transport, sessionBridge, historyArchive, refresh, config = {}, resultProjection) {
   const entries = new Map(), lifetime = new AbortController();
   const pending = new Set();
   let disposed = false;
@@ -25,21 +25,7 @@ export function createAutomation(ctx, transport, sessionBridge, historyArchive, 
   const call = (id, op, input = {}) => transport.call(id, op, input, lifetime.signal);
   const check = () => { lifetime.signal.throwIfAborted(); if (disposed) fail('DISPOSED'); };
   function pressure(agent, quota, policy) {
-    const view = readContextIntegration(ctx, agent.session, { enabled: config.contextIntegration !== false });
-    const p = view.pressure;
-    const maxTokens = agent.session.requestHeader?.()?.config?.maxTokens;
-    const reserve = Number.isSafeInteger(maxTokens) && maxTokens > 0 ? maxTokens : 8192;
-    if (!p || !Number.isFinite(p.tokens) || !(p.window > reserve)
-      || view.as_of_seq !== agent.session.seq - 1) return { available: false, reason: 'PRESSURE_UNAVAILABLE' };
-    const modelBudget = p.window - reserve;
-    const configured = policy.l1_input_budget ?? 131072;
-    const budget = configured > 0 ? Math.min(modelBudget, configured) : modelBudget;
-    return { available: true, tokens: p.tokens, budget, model_window: p.window, model_input_budget: modelBudget,
-      configured_budget: configured, high_tokens: Math.ceil(budget * quota.config.high_watermark),
-      low_tokens: Math.floor(budget * quota.config.low_watermark), output_reserve: reserve,
-      ratio: p.tokens / budget, source: p.source,
-      high: p.tokens >= budget * quota.config.high_watermark,
-      low: p.tokens <= budget * quota.config.low_watermark };
+    return automationPressure(ctx, agent, quota, policy, { contextIntegration: config.contextIntegration !== false });
   }
   async function preview(agent, { observe = false } = {}) {
     check();
@@ -73,7 +59,8 @@ export function createAutomation(ctx, transport, sessionBridge, historyArchive, 
         access_step: u?.access_step ?? 0, position: i };
     });
     return { config: l2.config, step: guards.step, l1_active: guards.l1_active, l2, l1: { pressure: pressure(agent, l2.quota, l2.config),
-      surface_generation: plan.surface_generation, total_pages: plan.total_pages, pages }, runtime: entries.get(agent.id)?.last ?? null };
+      surface_generation: plan.surface_generation, total_pages: plan.total_pages, pages },
+      open_results: resultProjection?.automaticStatus(agent.id) ?? null, runtime: entries.get(agent.id)?.last ?? null };
   }
   async function sync(agent) {
     const state = await sessionBridge.sync(agent, lifetime.signal);
