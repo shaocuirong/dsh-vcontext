@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Context } from '@deepseek-ai/cordis';
 import { SessionStore } from '@deepseek-ai/dsh-session';
+import { markAgentLoopRequest } from '@deepseek-ai/dsh-llm';
 import { createLiveContext, describeContext } from '../adapter/live-context.mjs';
 
 test('observed trends are bounded, metadata-only and do not invent repeated refresh points', async () => {
@@ -18,7 +19,7 @@ test('observed trends are bounded, metadata-only and do not invent repeated refr
     assert.equal(result.observations.length, 60);
     assert.doesNotMatch(JSON.stringify(result.observations), /SECRET_BODY|preview/);
     assert.equal((await live.read('other')).observations.length, 0);
-    root.waterfall('llm/stream', { sessionId: 'a', messages: session.deriveMessages() }, () => null);
+    root.waterfall('llm/stream', markAgentLoopRequest({ sessionId: 'a', messages: session.deriveMessages() }), () => null);
     assert.equal((await live.read('a')).observations.at(-1).kind, 'request');
   } finally { live.dispose(); await root.fiber.dispose(); }
 });
@@ -33,7 +34,7 @@ test('reads current derived history each time and captures each request separate
   const live = createLiveContext(root);
   try {
     assert.equal((await live.read('alice')).current.message_count, 2);
-    const send = () => root.waterfall('llm/stream', { sessionId: 'alice', messages, apiKey: 'DO_NOT_EXPOSE' }, () => 'stream');
+    const send = () => root.waterfall('llm/stream', markAgentLoopRequest({ sessionId: 'alice', messages, apiKey: 'DO_NOT_EXPOSE' }), () => 'stream');
     assert.equal(send(), 'stream');
     const first = (await live.read('alice')).last_request;
     messages = [...messages, { role: 'assistant', content: 'new reply' }];
@@ -48,6 +49,22 @@ test('reads current derived history each time and captures each request separate
     assert.equal((await live.read('bob')).current, null);
     assert.equal((await live.read('bob')).last_request, null);
     assert.doesNotMatch(JSON.stringify((await live.read('alice'))), /DO_NOT_EXPOSE/);
+  } finally { live.dispose(); await root.fiber.dispose(); }
+});
+
+test('auxiliary LLM calls never overwrite the last main AgentLoop request or its trend', async () => {
+  const root = new Context(), live = createLiveContext(root);
+  try {
+    root.waterfall('llm/stream', { sessionId: 's', messages: [{ role: 'user', content: 'AUXILIARY_SECRET' }] }, () => null);
+    assert.equal((await live.read('s')).last_request, null);
+    root.waterfall('llm/stream', markAgentLoopRequest({ sessionId: 's', messages: [{ role: 'user', content: 'real conversation' }] }), () => null);
+    const before = await live.read('s');
+    root.waterfall('llm/stream', { sessionId: 's', messages: [{ role: 'user', content: 'AUXILIARY_SECRET' }] }, () => null);
+    const after = await live.read('s');
+    assert.equal(after.last_request.fingerprint, before.last_request.fingerprint);
+    assert.equal(after.observations.filter(p => p.kind === 'request').length, 1);
+    assert.equal(after.auxiliary_calls.count, 2);
+    assert.doesNotMatch(JSON.stringify(after.auxiliary_calls), /SECRET|preview/);
   } finally { live.dispose(); await root.fiber.dispose(); }
 });
 

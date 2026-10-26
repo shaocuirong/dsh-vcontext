@@ -49,6 +49,8 @@ async function fixture(t, { real = false } = {}) {
   const records = new Map();
   const memoryTransport = { async call(id, operation, input, signal) {
     signal?.throwIfAborted();
+    if (operation === 'auto_guard') return { source_seqs: [] };
+    if (operation === 'auto_status') return { config: { l1_enabled: true, l1_open_results_enabled: false } };
     if (operation === 'result_store') {
       let record = [...records.values()].find(value => value.source_seq === input.source_seq);
       if (!record) {
@@ -65,10 +67,14 @@ async function fixture(t, { real = false } = {}) {
     const record = records.get(input.ref);
     if (!record) throw new Error('missing');
     if (operation === 'result_get') return structuredClone(record);
+    if (operation === 'result_verify') {
+      assert.equal(record.content_hash, `sha256:${createHash('sha256').update(record.content).digest('hex')}`);
+      const { content, ...metadata } = record; return structuredClone(metadata);
+    }
     if (operation === 'result_plan') {
       if (record.plan?.status !== 'queued' || record.plan.desired !== input.desired)
         record.plan = { ref: input.ref, revision: (record.plan?.revision ?? 0) + 1,
-          desired: input.desired, status: 'queued', error_code: null };
+          desired: input.desired, status: 'queued', error_code: null, origin: input.origin ?? 'manual' };
       return structuredClone(record.plan);
     }
     if (operation === 'result_plan_finish') {
@@ -198,13 +204,14 @@ test('arbitrary shell/test/vctx outputs, errors, mixed media and tiny results re
   assert.equal((await f.controller.inspect(f.agent.id)).candidates.length, 0);
 });
 
-test('escaping-heavy results that exceed the bounded RPC envelope are excluded before storage', async t => {
-  const f = await fixture(t);
+test('escaping-heavy results use chunked storage without increasing the bounded RPC envelope', async t => {
+  const f = await fixture(t, { real: true });
   const original = appendResult(f.session, { text: '\\'.repeat(490000) });
   assert.ok(Buffer.byteLength(JSON.stringify(original.data)) < 1048576);
-  assert.equal((await f.controller.inspect(f.agent.id)).candidates.length, 0);
-  await assert.rejects(f.project(original.seq), { code: 'PROTECTED' });
-  assert.equal(f.records.size, 0);
+  assert.equal((await f.controller.inspect(f.agent.id)).candidates.length, 1);
+  const result = await f.project(original.seq);
+  assert.equal(result.status, 'projected');
+  assert.equal((await f.transport.call(f.agent.id, 'result_get', { ref: result.ref })).content, JSON.stringify(original.data));
 });
 
 test('a foreign replacement or host compaction cannot be overwritten by stale restore', async t => {
@@ -291,6 +298,23 @@ test('fork inherited results remain protected even when visible in the child Sur
   const seq = child.seq;
   await assert.rejects(f.controller.project(child.id, original.seq), { code: 'PROTECTED' });
   assert.equal(child.seq, seq);
+});
+
+test('unfinished task evidence is checked at selection and again at the applying step boundary', async t => {
+  const f = await fixture(t, { real: true }), original = appendResult(f.session);
+  const queued = await f.controller.project(f.agent.id, original.seq);
+  const created = await f.transport.call(f.agent.id, 'task_create', { request_id: 'protect', expected_revision: 0, title: 'keep read evidence' });
+  await f.transport.call(f.agent.id, 'task_attach', { request_id: 'attach', expected_revision: created.revision,
+    ref: created.task.ref, expected_version: created.task.version, history_source_seqs: [original.seq] });
+  const before = f.session.seq;
+  await assert.rejects(f.controller.project(f.agent.id, original.seq), { code: 'PROTECTED' });
+  assert.equal(f.session.seq, before);
+  f.session.append('turn/start', { turn: 20 });
+  const outcome = await f.controller.applyPending(f.agent);
+  assert.equal(outcome.failed.find(p => p.ref === queued.ref).error_code, 'PROTECTED');
+  assert.equal(f.session.surface.nodes.includes(original.seq), true);
+  assert.equal(f.session.deriveEventMessage(original).content[0].text, body);
+  f.session.append('turn/end', { turn: 20, reason: { kind: 'completed' } });
 });
 
 test('large metadata inspections are bounded and do not fetch every stored body through SQLite', async t => {

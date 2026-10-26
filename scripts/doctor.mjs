@@ -10,7 +10,7 @@ const report = {
   node: { version: process.versions.node, ok: Number(process.versions.node.split('.')[0]) >= 22 },
   python: { ok: python.status === 0 && /Python 3\.(1[0-9]|[2-9][0-9])\./.test(python.stdout || python.stderr || ''),
     version: (python.stdout || python.stderr || '').trim() || 'unavailable' },
-  sdk: { ok: available('@deepseek-ai/dsh-tools') },
+  sdk: { ok: available('@deepseek-ai/dsh-tools') && available('@deepseek-ai/dsh-llm') },
   context_integration: { optional: true, installed: available('dsh-context') },
   database: { configured: true, modified: false },
 };

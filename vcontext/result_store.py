@@ -9,13 +9,14 @@ import time
 import uuid
 
 from .state import StructuredState, _atomic, _integer, _text
+from .result_chunks import ChunkedResults, CHUNK_OPERATIONS, RESPONSE_BYTES, install_chunk_schema
 
 
 SCHEMA_VERSION = 1
 MAX_CONTENT_BYTES = 1024 * 1024
 REF_PREFIX = 'vctx://result/'
 OPERATIONS = frozenset({'result_store', 'result_mark', 'result_get', 'result_read', 'result_list',
-                       'result_plan', 'result_plan_list', 'result_plan_finish'})
+                       'result_plan', 'result_plan_list', 'result_plan_finish', 'result_find'}) | CHUNK_OPERATIONS
 
 
 def install_result_schema(db):
@@ -60,6 +61,7 @@ def install_result_schema(db):
     for statement in statements:
         db.execute(statement)
     db.execute('INSERT OR IGNORE INTO vcr_schema(version) VALUES(?)', (SCHEMA_VERSION,))
+    install_chunk_schema(db)
 
 
 def _result_id(ref):
@@ -68,7 +70,7 @@ def _result_id(ref):
     return ref[len(REF_PREFIX):]
 
 
-class ResultStore(StructuredState):
+class ResultStore(ChunkedResults, StructuredState):
     def dispatch(self, operation, arguments):
         if operation not in OPERATIONS:
             raise ValueError('unknown tool-result operation')
@@ -104,18 +106,25 @@ class ResultStore(StructuredState):
                         (*self._scope, result_id))
         if row is None:
             return None
+        policy = self._one('SELECT origin FROM vcr_plan_policy WHERE namespace=? AND session_id=? AND result_id=? AND revision=?',
+                           (*self._scope, result_id, row['revision']))
         return {'ref': REF_PREFIX + result_id, 'revision': row['revision'], 'desired': row['desired'],
                 'status': row['status'], 'error_code': row['error_code'],
+                'origin': policy['origin'] if policy else 'manual',
                 'created_at': row['created_at'], 'updated_at': row['updated_at']}
 
     @_atomic
-    def result_plan(self, ref, desired):
+    def result_plan(self, ref, desired, origin='manual'):
         result_id = _result_id(ref)
         self._row(result_id)
         if desired not in ('projected', 'restored'):
             raise ValueError('result plan desired must be projected or restored')
+        if origin not in ('manual', 'automatic'):
+            raise ValueError('invalid result plan origin')
         previous = self._plan(result_id)
-        if previous and previous['status'] == 'queued' and previous['desired'] == desired:
+        if origin == 'automatic' and previous and previous['origin'] == 'manual':
+            raise ValueError('automatic projection cannot override manual intent')
+        if previous and previous['status'] == 'queued' and previous['desired'] == desired and previous['origin'] == origin:
             return previous
         revision = _integer(previous['revision'] + 1 if previous else 1, 'revision', 1)
         now = time.time()
@@ -126,6 +135,8 @@ class ResultStore(StructuredState):
         else:
             self.db.execute('INSERT INTO vcr_plans VALUES(?,?,?,?,?,?,?,?,?)',
                             (*self._scope, result_id, revision, desired, 'queued', None, now, now))
+        self.db.execute('INSERT INTO vcr_plan_policy VALUES(?,?,?,?,?) ON CONFLICT(namespace,session_id,result_id) DO UPDATE SET revision=excluded.revision,origin=excluded.origin',
+                        (*self._scope, result_id, revision, origin))
         return self._plan(result_id)
 
     def result_plan_list(self, limit=100):
@@ -239,15 +250,36 @@ class ResultStore(StructuredState):
 
     def result_get(self, ref):
         row = self._row(_result_id(ref))
+        if row['byte_count'] > MAX_CONTENT_BYTES:
+            raise ValueError('large tool results require bounded result_read')
         return {**self._metadata(row), 'content': self._object_text(row['content_hash'])}
 
-    def result_read(self, ref, offset=0, limit=65536):
+    def result_find(self, source_seq):
+        _integer(source_seq, 'source_seq')
+        row = self._one('SELECT result_id FROM vcr_results WHERE namespace=? AND session_id=? AND source_seq=?', (*self._scope, source_seq))
+        return self._metadata(self._row(row['result_id'])) if row else None
+
+    def result_read(self, ref, offset=0, limit=65536, expected_content_hash=None):
         _integer(offset, 'offset')
         _integer(limit, 'limit', 1, 262144)
         row = self._row(_result_id(ref))
-        content = self._object_text(row['content_hash'])[offset:offset + limit]
-        return {**self._metadata(row), 'content': content, 'offset': offset,
-                'next_offset': offset + len(content), 'has_more': offset + len(content) < row['char_count']}
+        if expected_content_hash is not None and expected_content_hash != row['content_hash']:
+            raise ValueError('content hash changed; restart pagination')
+        self._verify_object(row)
+        content = self._one('SELECT substr(content,?,?) AS text FROM vc_objects WHERE content_hash=?',
+                            (offset + 1, limit, row['content_hash']))['text']
+        metadata = self._metadata(row)
+        def response(count):
+            return {**metadata, 'content': content[:count], 'offset': offset,
+                    'next_offset': offset + count, 'has_more': offset + count < row['char_count']}
+        low, high = 0, len(content)
+        while low < high:
+            mid = (low + high + 1) // 2
+            if len(json.dumps(response(mid), ensure_ascii=False, separators=(',', ':')).encode('utf-8')) + 1024 <= RESPONSE_BYTES:
+                low = mid
+            else:
+                high = mid - 1
+        return response(low)
 
     def result_list(self, limit=100):
         _integer(limit, 'limit', 1, 100)

@@ -433,3 +433,21 @@ v0.11.1 宿主分页入口（本机同源，JSON 正文上限 16 KiB）：
 v0.11.2：分页计划增加 `total_pages`（按 include_open 过滤后、max_pages 截断前的总页数）。返回 pages 是最旧的至多 max_pages 页，quota_trial 的字节与页数只统计返回页；最近页保护使用完整历史中的位置，因此缩短预览不改变页面换出资格。替换节点仅使其来源链上已知的 turn/step 变为 opaque，未知替换被隔离，页面不会跨越它合并。
 
 本会话合法 page-out 回执经页面标识、来源原始事件、字节及工具配对校验后，仅隔离自身 marker，不扩大为整个 step/turn 的 opaque 保护，因此支持连续换页；普通或损坏替换标记继续保守处理。
+
+## v0.16 大工具结果与长任务
+
+本机同源 `POST /vctx/automation` 新增可选布尔 `l1_open_results_enabled`，缺失设置初始化 true；`l1_enabled=false` 时子策略暂停。模型拒绝所有 auto_* 与下列宿主上传/计划接口，不能配置策略或解除保护。GET 的 `open_results` 为本进程最后观察状态，重启后等待下一步骤，不冒充持久成功回执。
+
+| 宿主 operation | 参数 | 行为 |
+|---|---|---|
+| result_upload_begin | request_id,source_seq,tool_call_id,tool_name,content_hash,bytes | 验证本会话原生成功来源；bytes≤8MiB，hash 为 sha256:64位小写；返回 committed/result 或 next_part/max_chunk_chars |
+| result_upload_chunk | request_id,part,content,chunk_hash | part从0顺序递增；≤65536 Unicode码点且≤262144字节；逐块校验；完全一致重试幂等 |
+| result_upload_finish | request_id | 整体大小/哈希/JSON身份验证后事务提交；重试重放已完成元数据 |
+| result_upload_abort | request_id | 删除本会话未完成暂存，不删除已提交证据 |
+| result_verify | ref | 有界扫描校验对象，只返回元数据 |
+| result_find | source_seq | 本会话已存来源元数据或null；不返回正文 |
+| result_plan | ref,desired,origin? | origin默认manual，可为automatic；自动不能覆盖任何既有人工计划；人工可用新修订覆盖自动计划 |
+
+模型可用 `result_list`、`result_read`：后者接受 ref、offset默认0、limit默认65536（1–262144）、expected_content_hash可选（含sha256:前缀）。offset/limit按Unicode码点，内容为序列化JSON文本，片段不保证可单独JSON解析；响应含 content、total_chars、next_offset、content_hash、has_more。最终JSON响应≤128KiB，必要时缩短片段，续读必须用返回的 next_offset；哈希不匹配拒绝续读。每次先校验完整对象，明确冷读取计入可观察访问，不自动加入L2。旧result_get仍只接受≤1MiB完整结果，大结果必须分页。
+
+新表独立版本为 vcr_transfer_schema1，旧 vcr_schema1 与主schema9不变；旧引用兼容，较大新结果不兼容旧整包读取客户端。完整协议、保护与恢复边界见[设计](../architecture/LONG-TASKS-0.16.0.md)。

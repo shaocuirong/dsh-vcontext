@@ -28,7 +28,7 @@ class AutomationTests(unittest.TestCase):
         self.store.dispatch('auto_step', {'seq': 20})
 
     def test_default_flags_and_disabled_settings_survive_reopen(self):
-        self.assertEqual(self.store.dispatch('auto_status', {})['config'], dict(l1_enabled=True, l2_enabled=True, l1_input_budget=131072))
+        self.assertEqual(self.store.dispatch('auto_status', {})['config'], dict(l1_enabled=True, l2_enabled=True, l1_input_budget=131072, l1_open_results_enabled=True))
         self.store.dispatch('auto_configure', {'l1_enabled': False, 'l2_enabled': False})
         self.store.close()
         self.store = ContextStore(self.path, self.scope)
@@ -42,7 +42,7 @@ class AutomationTests(unittest.TestCase):
         self.store.close()
         self.store = ContextStore(self.path, self.scope)
         config = self.store.dispatch('auto_status', {})['config']
-        self.assertEqual(config, dict(l1_enabled=False, l2_enabled=True, l1_input_budget=131072))
+        self.assertEqual(config, dict(l1_enabled=False, l2_enabled=True, l1_input_budget=131072, l1_open_results_enabled=True))
         self.store.dispatch('auto_configure', dict(l1_input_budget=65536))
         self.store.close()
         self.store = ContextStore(self.path, self.scope)
@@ -176,6 +176,16 @@ class AutomationTests(unittest.TestCase):
         result = self.store.dispatch('auto_observe', {'keys': ['history:hp_x'], 'readonly': True})
         self.assertEqual(result['units'], [])
         self.assertEqual(self.store.db.total_changes, before)
+
+    def test_page_preview_does_not_register_unobserved_residency(self):
+        self.pages(12)
+        self.store.db.execute("DELETE FROM va_units WHERE scope=? AND key LIKE 'page:%'", (self.scope,))
+        before = self.store.db.total_changes
+        preview = self.store.dispatch('auto_preview', {})
+        self.assertEqual(self.store.db.total_changes, before)
+        self.assertTrue(preview['pages'])
+        self.assertTrue(all('MIN_RESIDENT' in p['reasons'] for p in preview['pages']))
+        self.assertEqual(self.store.db.execute('SELECT COUNT(*) FROM va_units WHERE scope=?', (self.scope,)).fetchone()[0], 0)
 
     def test_hysteresis_survives_restart_between_high_and_low(self):
         self.pages(32)

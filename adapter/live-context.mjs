@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { isAgentLoopRequest } from '@deepseek-ai/dsh-llm';
 import { readContextIntegration } from './context-integration.mjs';
 
 // Keep only displayable request data: never retain connection configuration,
@@ -21,6 +22,7 @@ export function describeContext(messages, tools = [], route = {}) {
 
 export function createLiveContext(ctx, { diagnostics, contextIntegration = true } = {}) {
   const sent = new Map();
+  const auxiliary = new Map();
   const observations = new Map();
   let observationId = 0;
   function remember(id, view, kind) {
@@ -43,10 +45,18 @@ export function createLiveContext(ctx, { diagnostics, contextIntegration = true 
     try {
       if (typeof options.sessionId === 'string' && Array.isArray(options.messages)) {
         const snapshot = { ...describeContext(options.messages, options.tools, options), captured_at: Date.now() };
-        sent.delete(options.sessionId);
-        sent.set(options.sessionId, snapshot);
-        remember(options.sessionId, snapshot, 'request');
-        if (sent.size > 128) sent.delete(sent.keys().next().value);
+        if (isAgentLoopRequest(options)) {
+          sent.delete(options.sessionId);
+          sent.set(options.sessionId, snapshot);
+          remember(options.sessionId, snapshot, 'request');
+          if (sent.size > 128) sent.delete(sent.keys().next().value);
+        } else {
+          const count = (auxiliary.get(options.sessionId)?.count ?? 0) + 1;
+          auxiliary.delete(options.sessionId);
+          auxiliary.set(options.sessionId, { count, bytes: snapshot.bytes, message_count: snapshot.message_count,
+            captured_at: snapshot.captured_at, provider: snapshot.provider, model: snapshot.model });
+          if (auxiliary.size > 128) auxiliary.delete(auxiliary.keys().next().value);
+        }
       }
     } catch {
       diagnostics?.record('context.capture.failed', 'warn', { error_type: 'Error' });
@@ -66,6 +76,7 @@ export function createLiveContext(ctx, { diagnostics, contextIntegration = true 
       diagnostics?.record('context.derive.failed', 'warn', { error_type: 'Error' });
     }
     return { current, last_request: sent.get(sessionId) ?? null, checked_at: Date.now(),
+      auxiliary_calls: auxiliary.get(sessionId) ?? null,
       observations: structuredClone(observations.get(sessionId) ?? []),
       dsh_context: readContextIntegration(ctx, session, { enabled: contextIntegration, diagnostics }),
       source: current ? source : 'unavailable', ...(readError ? { read_error: readError } : {}) };
@@ -118,6 +129,6 @@ export function createLiveContext(ctx, { diagnostics, contextIntegration = true 
       try { return await task; }
       finally { pending.delete(sessionId); }
     },
-    dispose() { lifetime.abort(); dispose(); sent.clear(); observations.clear(); },
+    dispose() { lifetime.abort(); dispose(); sent.clear(); auxiliary.clear(); observations.clear(); },
   };
 }
