@@ -7,7 +7,7 @@ from .task_state import TaskState
 
 OPERATIONS = frozenset({'auto_status', 'auto_configure', 'auto_step', 'auto_preview',
     'auto_tick', 'auto_access', 'auto_observe', 'auto_guard', 'auto_receipt', 'auto_latch'})
-DEFAULTS = dict(l1_enabled=True, l2_enabled=True, l1_input_budget=131072)
+DEFAULTS = dict(l1_enabled=True, l2_enabled=True, l1_input_budget=131072, l1_open_results_enabled=True)
 
 
 def install_automation_schema(db):
@@ -59,7 +59,7 @@ class Automation:
         return state
 
     def auto_configure(self, **changes):
-        if set(changes) - set(DEFAULTS) or any(type(changes[k]) is not bool for k in ('l1_enabled', 'l2_enabled') if k in changes):
+        if set(changes) - set(DEFAULTS) or any(type(changes[k]) is not bool for k in ('l1_enabled', 'l2_enabled', 'l1_open_results_enabled') if k in changes):
             raise ValueError('invalid automatic settings')
         if 'l1_input_budget' in changes:
             _integer(changes['l1_input_budget'], 'l1_input_budget', 0, 9000000000000)
@@ -150,7 +150,7 @@ class Automation:
     def auto_guard(self):
         return dict(**self.state(), **self.dependencies())
 
-    def page_reasons(self, rows, extra_protect=()):
+    def page_reasons(self, rows, extra_protect=(), observe=True):
         deps = self.dependencies()
         recent = sorted(rows, key=lambda r: (-r['touched'], -r['seq'], r['id']))
         protected = {r['id'] for r in recent[:6]}
@@ -163,7 +163,11 @@ class Automation:
         result = []
         for row in rows:
             key = 'page:' + row['id']
-            unit = self.unit(key)
+            unit = self.unit(key) if observe else self.db.execute(
+                'SELECT * FROM va_units WHERE scope=? AND key=?', (self.scope, key)).fetchone()
+            if unit is None:
+                step = self.state()['step']
+                unit = dict(resident_step=step, restore_step=-100, move_step=-100, moves=0, access_step=step)
             age = self.state()['step'] - unit['resident_step']
             reasons = []
             if row['tier'] == 'core' or row['outline']:
@@ -185,7 +189,7 @@ class Automation:
 
     def auto_preview(self):
         return dict(**self.auto_status(), quota=self.store.quota.status(),
-                    pages=self.page_reasons(self.store._all(resident=True)))
+                    pages=self.page_reasons(self.store._all(resident=True), observe=False))
 
     def auto_tick(self, incoming=None, protect=None):
         incoming, protect = incoming or [], protect or []
