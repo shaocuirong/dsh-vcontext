@@ -99,6 +99,7 @@ export function createEvidenceDirectory(ctx, transport, historyArchive) {
       const roots = data.items.filter(i => !covered.has(i.ref));
       const entries = roots.slice(0, 8).map(i => ({ ref: i.ref, kind: i.kind, level: i.level,
         title: i.title, excerpt: i.excerpt, source_version: i.source_version,
+        excerpt_truncated: i.excerpt_truncated === true,
         origin: i.origin,
         verification: i.kind === 'note' ? 'not_tested' : undefined }));
       const view = { format: 'vctx-evidence-v1', available: true, trust: 'untrusted_navigation', entries,

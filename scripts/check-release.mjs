@@ -35,6 +35,9 @@ for (const path of ['index.mjs', 'lib/client.js', 'adapter/context-integration.m
   'docs/architecture/WORKING-BUDGET-0.15.0.md', 'adapter/open-result-planner.mjs',
   'adapter/automation-pressure.mjs', 'vcontext/result_chunks.py', 'tests/test_result_chunks.py',
   'tests/open-result-request.test.mjs', 'tests/open-result-planner.test.mjs',
-  'docs/architecture/LONG-TASKS-0.16.0.md', 'docs/releases/nodes/NODES-0.16.0.md'])
+  'docs/architecture/LONG-TASKS-0.16.0.md', 'docs/releases/nodes/NODES-0.16.0.md',
+  'adapter/evidence-directory.mjs', 'adapter/evidence-index.mjs', 'vcontext/evidence.py',
+  'tests/evidence-directory.test.mjs', 'tests/test_evidence.py',
+  'docs/architecture/EVIDENCE-0.17.0.md', 'docs/releases/nodes/NODES-0.17.0.md'])
   await read(path);
 console.log(`Release metadata and entry points verified: v${version}`);
