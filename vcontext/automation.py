@@ -7,7 +7,7 @@ from .task_state import TaskState
 
 OPERATIONS = frozenset({'auto_status', 'auto_configure', 'auto_step', 'auto_preview',
     'auto_tick', 'auto_access', 'auto_observe', 'auto_guard', 'auto_receipt', 'auto_latch'})
-DEFAULTS = dict(l1_enabled=True, l2_enabled=True, l1_input_budget=131072, l1_open_results_enabled=True)
+DEFAULTS = dict(l1_enabled=True, l2_enabled=True, l1_input_budget=131072, l1_open_results_enabled=True, evidence_directory_enabled=True)
 
 
 def install_automation_schema(db):
@@ -59,7 +59,7 @@ class Automation:
         return state
 
     def auto_configure(self, **changes):
-        if set(changes) - set(DEFAULTS) or any(type(changes[k]) is not bool for k in ('l1_enabled', 'l2_enabled', 'l1_open_results_enabled') if k in changes):
+        if set(changes) - set(DEFAULTS) or any(type(changes[k]) is not bool for k in ('l1_enabled', 'l2_enabled', 'l1_open_results_enabled', 'evidence_directory_enabled') if k in changes):
             raise ValueError('invalid automatic settings')
         if 'l1_input_budget' in changes:
             _integer(changes['l1_input_budget'], 'l1_input_budget', 0, 9000000000000)

@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { describeContext } from './live-context.mjs';
 import { segmentHistoryPages } from './history-segmenter.mjs';
 import { planHistoryPageOut, quotaTrial } from './history-planner.mjs';
+import { describeArchive } from './evidence-index.mjs';
 
 const MAX_NODES = 256;
 const MAX_BYTES = 8 * 1024 * 1024;
@@ -289,6 +290,20 @@ export function createHistoryArchive(ctx, diagnostics, onAccess) {
     try { return await operation; } finally { pending.delete(id); }
   }
   return {
+    async catalog(id, { ref, offset = 0, limit = 100 } = {}) {
+      if (!validId(id) || !Number.isSafeInteger(offset) || offset < 0
+        || !Number.isSafeInteger(limit) || limit < 1 || limit > 256) fail('INVALID_INPUT');
+      const agent = await resolve(id);
+      const { events, markers } = scanArchives(agent, id);
+      const tools = new Map(events.filter(e => e.type === 'tool/call').map(e => [e.data?.callId, e.data]));
+      if (ref !== undefined) {
+        const marker = markers.find(m => m.ref === ref);
+        if (!marker) fail('NOT_FOUND');
+        return describeArchive(events, marker, tools);
+      }
+      return { items: markers.slice(offset, offset + limit).map(m => describeArchive(events, m, tools)),
+        total: markers.length, truncated: offset + limit < markers.length };
+    },
     async pages(id, options = {}) {
       const agent = await resolve(id);
       const plan = segmentHistoryPages(agent.session, options);
