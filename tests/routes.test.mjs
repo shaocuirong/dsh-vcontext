@@ -518,6 +518,26 @@ test('unknown routes 404 and an unreachable ledger is not a route failure', asyn
   assert.match(degraded.body.error, /service down/);
 });
 
+test('evidence routes enforce local same-origin access, preserve versions and assign the human actor', async () => {
+  const calls = [];
+  const evidence = Object.fromEntries(['list', 'read', 'note'].map(op => [op, async (...args) => { calls.push({ op, args }); return { items: [], total: 0 }; }]));
+  const handler = createHandler(CONFIG, transport({}), undefined, undefined, undefined, undefined,
+    undefined, undefined, undefined, undefined, undefined, undefined, evidence);
+  assert.equal((await invoke(handler, 'GET', '/vctx/evidence?session=s&query=E_TIMEOUT&limit=2')).status, 200);
+  assert.deepEqual(calls.at(-1), { op: 'list', args: ['s', { query: 'E_TIMEOUT', limit: 2 }] });
+  assert.equal((await invoke(handler, 'GET', '/vctx/evidence/read?session=s&ref=r&expected_source_version=v&offset=4')).status, 200);
+  assert.equal(calls.at(-1).args[1].expected_source_version, 'v');
+  assert.equal((await invoke(handler, 'POST', '/vctx/evidence/note', JSON.stringify({ session: 's', request_id: 'n', title: 't', summary: 'text', sources: [] }))).status, 200);
+  assert.equal(calls.at(-1).args[2].origin, 'human');
+  for (const path of ['/vctx/evidence?session=s&limit=abc', '/vctx/evidence?session=s&force=true', '/vctx/evidence/read?session=s&origin=model'])
+    assert.equal((await invoke(handler, 'GET', path)).status, 400);
+  const req = request('GET', '/vctx/evidence?session=s');
+  req.headers.origin = 'https://foreign.invalid';
+  const res = response(); await handler(req, res);
+  assert.equal(res.captured.status, 403);
+  assert.equal(calls.length, 3);
+});
+
 test('the /virtual-context command toggles this session and reports status', async () => {
   const stub = transport({
     session_state: () => ({ enabled: false, configured: false, params: {} }),

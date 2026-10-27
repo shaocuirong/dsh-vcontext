@@ -17,6 +17,7 @@ import { createResultJobs } from '../adapter/result-jobs.mjs';
 import { createReplacement } from '../adapter/replacement.mjs';
 import { createTaskController } from '../adapter/task-controller.mjs';
 import { createHandler } from '../adapter/routes.mjs';
+import { createEvidenceDirectory } from '../adapter/evidence-directory.mjs';
 
 const directory = await mkdtemp(join(tmpdir(), 'vctx-dashboard-preview-'));
 const root = new Context(), sessions = new SessionStore(root);
@@ -76,7 +77,8 @@ await transport.call(session.id, 'task_attach', { request_id: 'preview-attach', 
 const automation = createAutomation(root, transport, bridge, archive, async () => {});
 const projection = createResultProjection(root, transport, bridge), jobs = createResultJobs(projection);
 const replacement = createReplacement(root), tasks = createTaskController(root, transport, bridge);
-const handler = createHandler(settings, transport, live, undefined, replacement, bridge, projection, jobs, undefined, tasks, archive, automation);
+const evidence = createEvidenceDirectory(root, transport, archive);
+const handler = createHandler(settings, transport, live, undefined, replacement, bridge, projection, jobs, undefined, tasks, archive, automation, evidence);
 const bundle = await build({ stdin: { contents: `import React from 'react'; import {createRoot} from 'react-dom/client';
 window.__ModuleLoader__={load(def){const module=def.factory(()=>React);createRoot(document.getElementById('app')).render(React.createElement(module.Dashboard,{sessionId:'dashboard-preview',prefs:{enabled:true,showTab:true,showPanel:true,showUsage:true,showLedger:true,events:200,refreshMs:1500}}));}};
 const script=document.createElement('script');script.src='/client.js';document.head.appendChild(script);
@@ -110,7 +112,7 @@ const server = createServer(async (req, res) => {
 server.listen(Number(process.env.PORT ?? 0), '127.0.0.1', () => console.log(`Dashboard preview: http://127.0.0.1:${server.address().port}`));
 async function close() {
   server.closeAllConnections(); server.close(); await automation.dispose(); await jobs.dispose(); await tasks.dispose(); await replacement.dispose();
-  live.dispose(); await archive.dispose(); await bridge.dispose(); await transport.dispose(); await root.fiber.dispose(); await rm(directory, { recursive: true, force: true });
+  live.dispose(); await evidence.dispose(); await archive.dispose(); await bridge.dispose(); await transport.dispose(); await root.fiber.dispose(); await rm(directory, { recursive: true, force: true });
 }
 process.once('SIGINT', () => close().finally(() => process.exit()));
 process.once('SIGTERM', () => close().finally(() => process.exit()));

@@ -15,7 +15,7 @@ export const name = 'virtual-context';
 export const inject = ['tools', 'agents', 'systemPrompt'];
 export function apply(ctx, config = {}) {
   const settings = resolveConfig(config);
-  const { transport, diagnostics, sessionBridge, historyArchive, refresh } = mount(ctx, settings, defineTool);
+  const { transport, diagnostics, sessionBridge, historyArchive, evidenceDirectory, refresh } = mount(ctx, settings, defineTool);
   const liveContext = createLiveContext(ctx, { diagnostics, contextIntegration: settings.contextIntegration });
   const replacement = createReplacement(ctx, diagnostics);
   const resultProjection = createResultProjection(ctx, transport, sessionBridge, diagnostics, settings);
@@ -32,7 +32,7 @@ export function apply(ctx, config = {}) {
   // The client half reads the dashboard through this route, and
   // /virtual-context flips the per-session switch the route reports.
   ctx.inject(['webServer'], carrier => {
-    carrier.effect(() => mountRoutes(carrier, settings, transport, liveContext, diagnostics, replacement, sessionBridge, resultProjection, resultJobs, sessionSnapshots, taskController, historyArchive, automation), 'virtual-context: dashboard routes');
+    carrier.effect(() => mountRoutes(carrier, settings, transport, liveContext, diagnostics, replacement, sessionBridge, resultProjection, resultJobs, sessionSnapshots, taskController, historyArchive, automation, evidenceDirectory), 'virtual-context: dashboard routes');
   });
   ctx.inject(['commands'], carrier => {
     carrier.effect(() => mountCommand(carrier, settings, transport), 'virtual-context: command');
