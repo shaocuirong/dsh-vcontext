@@ -1,6 +1,6 @@
 # dsh-vcontext
 
-当前版本：**[v0.16.0](https://github.com/shaocuirong/dsh-vcontext/releases/tag/v0.16.0)** · [可视看板](docs/guides/UI.md) · [0.16.0 节点](docs/releases/nodes/NODES-0.16.0.md) · [长任务设计](docs/architecture/LONG-TASKS-0.16.0.md) · [更新日志](CHANGELOG.md) · [验证记录](docs/releases/VALIDATION.md)
+当前版本：**[v0.17.0](https://github.com/shaocuirong/dsh-vcontext/releases/tag/v0.17.0)** · [可视看板](docs/guides/UI.md) · [0.17.0 节点](docs/releases/nodes/NODES-0.17.0.md) · [证据目录设计](docs/architecture/EVIDENCE-0.17.0.md) · [更新日志](CHANGELOG.md) · [验证记录](docs/releases/VALIDATION.md)
 
 **DeepSeek Harness 客户端虚拟上下文管理器**：结构化操作、可追溯资源版本、有来源的摘要、按需换页与会话内看板。
 
@@ -12,6 +12,8 @@
 > 仓库名为 `dsh-vcontext`；安装包名和插件标识保留 `dsh-virtual-context`，兼容既有配置。界面统一显示“上下文缓存”。
 
 ## 功能
+
+0.17.0 增加“证据目录”：换出的历史自动生成有来源的原文索引，模型可在正常任务中留下绑定来源版本的摘要，也可由用户添加笔记。摘要最多归纳三级，上层目录覆盖下层重复条目，原文及下层笔记仍可检索和分页读取。所有摘要均标记未验证；默认注入最多 4 KiB，可在“操作与策略”独立关闭。程序索引无需模型调用，摘要保存/恢复仍有普通工具往返成本；本版是可验证的导航试验，不承诺模型会自主准确归纳或产生固定比例的费用收益。
 
 0.16.0 起，长任务无需等整轮结束：在后续真实步骤开始前，将较早、完整的成功文本读取结果换成可恢复引用。支持序列化后 2 KiB–8 MiB，分块保存并校验；保留最近 6 页/8192 估算 tokens、至少 2 步驻留与任务证据。默认随 L1 开启，可在“操作与策略”单独关闭。原生离线 AgentLoop 实验中，同一轮下一请求从约 3.49 MB 降至 53.2 KB，原文可分页读取及完整恢复；这不是供应商计费或答案质量指标。
 
@@ -110,6 +112,8 @@
 **数据库升级注意**：从0.9.0升至0.10.0无数据库迁移，无Python内核改动；旧版本升级至主schema9仍须先完全退出所有使用同一数据库的宿主，再更新并重启（包括托盘）。主schema1–8先生成唯一 `.pre-schema9-<id>.bak` 再事务迁移至schema9/vc2/vcr1/vcs1/vct1。旧0.7拒绝新库，禁止混跑版本。插件不覆盖数据库、备份或profile。
 
 0.16.0 新增独立 `vcr_transfer_schema1` 分块暂存及计划来源表，主 schema9/vcr1 保持；旧引用继续可读，超过 1 MiB 的新结果需新版有界读取接口。完全退出再升级并重启，勿混跑新旧内核。既有 L1 关闭状态保留；新长任务子开关仅初始化缺失项，不覆盖数据库或本机配置。
+
+0.17.0 新增独立 `ved_schema1` 不可变导航笔记表，主 schema9 及旧引用保持兼容。升级只初始化缺失的目录开关，已有 L1/L2 设置保留。完全退出并重启后生效；程序不覆盖数据库、本机配置或原始宿主日志。
 
 先完全退出桌面端，包括系统托盘，再安装：
 

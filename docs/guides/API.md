@@ -1,5 +1,21 @@
 # JSON / Python API
 
+## v0.17 证据目录与来源摘要
+
+模型通过vctx操作以下接口，会话身份由宿主提供；底层ved_*为host-only，模型不能直接调用或伪造人工身份。
+
+| operation | 参数 | 返回与限制 |
+|---|---|---|
+| evidence_list | query可选≤128 UTF16码元；offset默认0；limit默认20、1–32 | items、total（扫描内匹配数）、scanned、next_offset、has_more、truncated、coverage；最新256归档/100结果/100笔记的有界搜索，笔记全文匹配但列表只预览200码点 |
+| evidence_read | ref；expected_source_version可选；原文offset/limit可选 | 笔记返回完整title/summary/sources/origin/level/verification；原文默认4096码点，继续使用原有分页返回。来源版本不符CHANGED；笔记不接受分页参数 |
+| evidence_note | request_id≤256、title≤120码点、summary≤1600码点、sources数组1–8项 | 每项必须为ref/source_version，复制目录或笔记返回值；返回note/replayed，始终origin=model/not_tested，最多三级 |
+
+原文历史source_version绑定归档marker及不可变来源身份；结果使用content_hash；笔记使用不可变载荷SHA256。它们统一以sha256:前缀返回。历史原文分页的content_hash仍绑定序列化正文，与source_version用途不同。来源必须本会话可访问，Fork继承的父归档不继承登记。笔记原文不可改删，同request_id不同载荷拒绝；来源链保留，不自动晋升验证、解除保护或替换原文。
+
+本机同源路由：`GET /vctx/evidence?session=…&query=…&offset=…&limit=…`；`GET /vctx/evidence/read?session=…&ref=…&expected_source_version=…`；`POST /vctx/evidence/note`正文为session及evidence_note参数，固定origin=human。POST必须Origin，额外origin/verification等字段拒绝，模型不能走底层ved_*。CHANGED/BUSY为409，失败不自动重试写入。
+
+`POST /vctx/automation`新增布尔evidence_directory_enabled，缺失初始化true；关闭后停止vctx_evidence目录注入，查询和恢复继续可用。注入≤4096 UTF8字节/8条，摘要标为不可信导航；上层来源覆盖下层重复注入，原证据仍可读。设计与边界见[说明](../architecture/EVIDENCE-0.17.0.md)。
+
 ## v0.15 聊天输入工作预算
 
 `POST /vctx/automation` 新增 `l1_input_budget`（整数0–9,000,000,000,000，默认131072，可单独提交）。0表示跟随模型窗口；正数表示L1输入工作预算。有效预算为 `min(l1_input_budget, contextWindow-outputReserve)`，0时只取后者。全部输入组成仍由新鲜公开压力测量；预算不是插件页面的L2在线配额。模型不能调用此配置入口。

@@ -59,7 +59,7 @@ function localCarrier(request) {
     && (request.method !== 'POST' || Boolean(request.headers?.origin));
 }
 
-export function createHandler(config, transport, liveContext, diagnostics, replacement, sessionBridge, resultProjection, resultJobs, sessionSnapshots, taskController, historyArchive, automation) {
+export function createHandler(config, transport, liveContext, diagnostics, replacement, sessionBridge, resultProjection, resultJobs, sessionSnapshots, taskController, historyArchive, automation, evidenceDirectory) {
   const settings = validateConfig(config);
   return async function handle(request, response) {
     let url;
@@ -78,6 +78,37 @@ export function createHandler(config, transport, liveContext, diagnostics, repla
     if (foreignOrigin || request.headers?.['sec-fetch-site'] === 'cross-site')
       return send(response, 403, { ok: false, error: 'same-origin request required' });
 
+    if (url.pathname === `${ROUTE_PREFIX}evidence` || url.pathname === `${ROUTE_PREFIX}evidence/read`) {
+      if (!localCarrier(request)) return send(response, 403, { ok: false, error: '仅接受本机同源请求。' });
+      if (!evidenceDirectory) return send(response, 503, { ok: false, error: '证据目录服务不可用。' });
+      try {
+        if (request.method !== 'GET') return send(response, 405, { ok: false, error: 'GET only' });
+        const session = sessionOf(url);
+        if (!session) throw new Error('session required');
+        const reading = url.pathname.endsWith('/read');
+        const allowed = reading ? ['session', 'ref', 'expected_source_version', 'offset', 'limit'] : ['session', 'query', 'offset', 'limit'];
+        if ([...url.searchParams.keys()].some(k => !allowed.includes(k))) throw new Error('invalid query');
+        const input = Object.fromEntries([...url.searchParams].filter(([k]) => k !== 'session'));
+        for (const k of ['offset', 'limit']) if (k in input) {
+          if (!/^\d+$/u.test(input[k])) throw new Error('invalid pagination');
+          input[k] = Number(input[k]);
+        }
+        const result = await evidenceDirectory[reading ? 'read' : 'list'](session, input);
+        return send(response, 200, { ok: true, result });
+      } catch (error) { return send(response, ['CHANGED', 'BUSY'].includes(error?.code) ? 409 : 400,
+        { ok: false, error_code: error?.code ?? 'failed', error: String(error?.message ?? error) }); }
+    }
+    if (url.pathname === `${ROUTE_PREFIX}evidence/note`) {
+      if (!localCarrier(request)) return send(response, 403, { ok: false, error: '仅接受本机同源请求。' });
+      if (!evidenceDirectory) return send(response, 503, { ok: false, error: '证据目录服务不可用。' });
+      if (request.method !== 'POST') return send(response, 405, { ok: false, error: 'POST only' });
+      try {
+        const { session, ...input } = JSON.parse(await readBody(request));
+        if (!session || typeof session !== 'string' || session.length > 256) throw new Error('session required');
+        return send(response, 200, { ok: true, result: await evidenceDirectory.note(session, input, { origin: 'human' }) });
+      } catch (error) { return send(response, ['CHANGED', 'BUSY'].includes(error?.code) ? 409 : 400,
+        { ok: false, error_code: error?.code ?? 'failed', error: String(error?.message ?? error) }); }
+    }
     if (url.pathname === `${ROUTE_PREFIX}automation`) {
       if (!localCarrier(request)) return send(response, 403, { ok: false, error: '仅接受本机同源请求。' });
       if (!automation) return send(response, 503, { ok: false, error: '自动整理服务不可用。' });
@@ -90,9 +121,9 @@ export function createHandler(config, transport, liveContext, diagnostics, repla
         if (request.method === 'POST') {
           const body = JSON.parse(await readBody(request));
           if (!body || Array.isArray(body) || typeof body.session !== 'string' || !body.session || body.session.length > 256
-            || Object.keys(body).some(key => !['session', 'l1_enabled', 'l2_enabled', 'l1_input_budget', 'l1_open_results_enabled'].includes(key))
-            || !['l1_enabled', 'l2_enabled', 'l1_input_budget', 'l1_open_results_enabled'].some(key => Object.hasOwn(body, key))
-            || ['l1_enabled', 'l2_enabled', 'l1_open_results_enabled'].some(key => Object.hasOwn(body, key) && typeof body[key] !== 'boolean')
+            || Object.keys(body).some(key => !['session', 'l1_enabled', 'l2_enabled', 'l1_input_budget', 'l1_open_results_enabled', 'evidence_directory_enabled'].includes(key))
+            || !['l1_enabled', 'l2_enabled', 'l1_input_budget', 'l1_open_results_enabled', 'evidence_directory_enabled'].some(key => Object.hasOwn(body, key))
+            || ['l1_enabled', 'l2_enabled', 'l1_open_results_enabled', 'evidence_directory_enabled'].some(key => Object.hasOwn(body, key) && typeof body[key] !== 'boolean')
             || Object.hasOwn(body, 'l1_input_budget') && (!Number.isSafeInteger(body.l1_input_budget)
               || body.l1_input_budget < 0 || body.l1_input_budget > 9000000000000)) throw new Error('invalid automatic settings');
           const { session, ...changes } = body;
@@ -467,7 +498,7 @@ export function createHandler(config, transport, liveContext, diagnostics, repla
   };
 }
 
-export function mountRoutes(ctx, config, transport, liveContext, diagnostics, replacement, sessionBridge, resultProjection, resultJobs, sessionSnapshots, taskController, historyArchive, automation) {
+export function mountRoutes(ctx, config, transport, liveContext, diagnostics, replacement, sessionBridge, resultProjection, resultJobs, sessionSnapshots, taskController, historyArchive, automation, evidenceDirectory) {
   const webServer = ctx.get('webServer');
   // The shipped web and desktop profiles always carry the HTTP carrier. A CLI
   // or SDK-only composition has none, and then there is simply no route to
@@ -475,5 +506,5 @@ export function mountRoutes(ctx, config, transport, liveContext, diagnostics, re
   // service-resolution waterfall and can corrupt the value other plugins read,
   // which is exactly what the real-SDK test caught.
   if (!webServer || typeof webServer.register !== 'function') return () => {};
-  return webServer.register({ kind: 'prefix', path: ROUTE_PREFIX.slice(0, -1), handler: createHandler(config, transport, liveContext, diagnostics, replacement, sessionBridge, resultProjection, resultJobs, sessionSnapshots, taskController, historyArchive, automation) });
+  return webServer.register({ kind: 'prefix', path: ROUTE_PREFIX.slice(0, -1), handler: createHandler(config, transport, liveContext, diagnostics, replacement, sessionBridge, resultProjection, resultJobs, sessionSnapshots, taskController, historyArchive, automation, evidenceDirectory) });
 }

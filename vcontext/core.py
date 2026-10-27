@@ -19,6 +19,7 @@ from .migrations import backup_legacy
 from .quota import (OPERATIONS as QUOTA_OPERATIONS, QuotaExceeded, QuotaLedger,
                    install_quota_schema)
 from .automation import Automation, OPERATIONS as AUTO_OPERATIONS, install_automation_schema
+from .evidence import EvidenceNotes, OPERATIONS as EVIDENCE_OPERATIONS, install_evidence_schema
 
 
 class ContextError(ValueError):
@@ -83,7 +84,7 @@ MUTATING_OPERATIONS = frozenset({
     'write', 'ingest', 'page_in', 'page_out', 'unpin', 'recall', 'restore',
     'compact', 'organize', 'prepare_task', 'render', 'checkpoint', 'fold',
     'set_policy', 'policy_tick', 'set_session_enabled', 'record_usage',
-    'state_bind', 'state_sync', 'resource_store', 'summary_store', 'result_store', 'result_mark',
+    'state_bind', 'state_sync', 'resource_store', 'summary_store', 'result_store', 'result_mark', 'ved_note_store',
     'result_plan', 'result_plan_finish', 'result_upload_begin', 'result_upload_chunk', 'result_upload_finish', 'result_upload_abort',
     'snapshot_create', 'snapshot_checkout', 'snapshot_detach', 'snapshot_branch',
     'task_create','task_update','task_select','task_fork','task_attach','task_review',
@@ -235,6 +236,7 @@ class ContextStore:
         install_task_schema(self.db)
         install_quota_schema(self.db)
         install_automation_schema(self.db)
+        install_evidence_schema(self.db)
         self.quota = QuotaLedger(self.db, self.scope, project='default', defaults=self._quota_defaults)
         self.quota.sync(self._resident_units(), enforce=False, operation='initialize', managed_prefix='page:')
         self.automation = Automation(self)
@@ -1158,6 +1160,8 @@ class ContextStore:
 
     @atomic
     def dispatch(self, operation, arguments):
+        if operation in EVIDENCE_OPERATIONS:
+            return getattr(EvidenceNotes(self.db, self.scope), operation)(**arguments)
         if operation in AUTO_OPERATIONS:
             return getattr(self.automation, operation)(**arguments)
         if operation in QUOTA_OPERATIONS:

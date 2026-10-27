@@ -9,7 +9,7 @@ export const MUTATING_OPERATIONS = new Set([
   'set_policy', 'policy_tick', 'set_session_enabled',
   'record_usage',
   'state_bind', 'state_sync', 'resource_store', 'resource_capture', 'summary_store',
-  'result_store', 'result_mark', 'result_plan', 'result_plan_finish',
+  'result_store', 'result_mark', 'result_plan', 'result_plan_finish', 'ved_note_store',
   'result_upload_begin', 'result_upload_chunk', 'result_upload_finish', 'result_upload_abort',
   'snapshot_create', 'snapshot_checkout', 'snapshot_detach', 'snapshot_branch',
   'task_create', 'task_update', 'task_select', 'task_fork', 'task_attach', 'task_review',
@@ -23,7 +23,7 @@ export const READ_OPERATIONS = new Set([
   'auto_status', 'auto_preview', 'auto_guard',
   'checkpoints', 'schedule', 'replacement_policy', 'session_state', 'dashboard', 'usage',
   'state_status', 'operation_list', 'operation_read', 'resource_read', 'resource_history', 'summary_read',
-  'result_list', 'result_get', 'result_plan_list', 'result_verify', 'result_find',
+  'result_list', 'result_get', 'result_plan_list', 'result_verify', 'result_find', 'ved_note_read', 'ved_note_list',
   'snapshot_status', 'snapshot_list', 'snapshot_read', 'snapshot_diff',
   'task_status', 'task_context', 'task_list', 'task_read', 'task_history',
 ]);

@@ -100,7 +100,7 @@ test('adapter contract: tool execution, per-agent snapshots, resume, cleanup', a
   await handlers.get('agent/created')({agent,signal});
   const result = await tools.get('vctx').execute({operation:'write',input:JSON.stringify({content:'task result {{verbatim}}',tier:'working'})},{agent,signal});
   assert.ok(result.page.id);
-  assert.equal(snapshots.get(agent.id).text(),'{{vctx_pages}}\n{{vctx_session_target}}\n{{vctx_task_state}}\n{{vctx_history}}');
+  assert.equal(snapshots.get(agent.id).text(),'{{vctx_pages}}\n{{vctx_session_target}}\n{{vctx_task_state}}\n{{vctx_history}}\n{{vctx_evidence}}');
   assert.match(variables.get('vctx_pages')(),/task result \{\{verbatim\}\}/);
   assert.equal(variables.has('vctx_history'),true);
   const history = JSON.parse(variables.get('vctx_history')());
@@ -113,13 +113,13 @@ test('adapter contract: tool execution, per-agent snapshots, resume, cleanup', a
   await assert.rejects(tools.get('vctx').execute({operation:'status',input:'{}'},{signal}),/calling agent/);
   await assert.rejects(tools.get('vctx').execute({operation:'state_sync',input:'{}'},{agent,signal}),/host-only/);
   for (const operation of ['result_store', 'result_get', 'result_verify', 'result_find', 'result_mark', 'result_plan', 'result_plan_list', 'result_plan_finish',
-    'result_upload_begin', 'result_upload_chunk', 'result_upload_finish', 'result_upload_abort'])
+    'result_upload_begin', 'result_upload_chunk', 'result_upload_finish', 'result_upload_abort', 'ved_note_store', 'ved_note_read', 'ved_note_list'])
     await assert.rejects(tools.get('vctx').execute({operation,input:'{}'},{agent,signal}),/host-only/);
   await assert.rejects(tools.get('vctx').execute({operation:'resource_store',input:JSON.stringify({source_revision:'working-tree:forged'})},{agent,signal}),/host-owned/);
   handlers.get('agent/disposed')({agent});
   assert.equal(snapshots.size,0); assert.equal(variables.size,0);
   await handlers.get('agent/created')({agent,signal});
-  assert.equal(snapshots.get(agent.id).text(),'{{vctx_pages}}\n{{vctx_session_target}}\n{{vctx_task_state}}\n{{vctx_history}}');
+  assert.equal(snapshots.get(agent.id).text(),'{{vctx_pages}}\n{{vctx_session_target}}\n{{vctx_task_state}}\n{{vctx_history}}\n{{vctx_evidence}}');
   assert.match(variables.get('vctx_pages')(),/task result \{\{verbatim\}\}/);
   assert.equal(JSON.parse(variables.get('vctx_history')()).format,'vctx-history-v1');
 });

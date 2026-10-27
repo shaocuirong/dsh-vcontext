@@ -512,3 +512,34 @@ test('a replayed archive receipt keeps the original reduction instead of X -> X 
   assert.equal(status.includes('60 B → 60 B'), false);
   assert.equal(status.includes('已将'), false);
 });
+
+test('evidence UI separates extracts from notes and retries the same immutable submission after an uncertain save', async () => {
+  const calls = [], source = { ref: 'vctx://history/' + 'a'.repeat(16) + '/9', source_version: 'sha256:' + 'b'.repeat(64),
+    title: '登录状态检查', excerpt: '源消息摘录', kind: 'history', level: 0 };
+  let attempts = 0;
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    if (options.method === 'POST' && attempts++ === 0) throw new Error('lost acknowledgement');
+    return { ok: true, status: 200, json: async () => ({ ok: true, result: options.method === 'POST' ? {} :
+      { items: [source], total: 1, scanned: 1, offset: 0, has_more: false, truncated: false } }) };
+  };
+  const { react, settle } = createHookRenderer(), { module } = await loadClient(null, react);
+  const render = () => module.EvidenceDirectory({ sessionId: 's' });
+  let tree = await settle(render);
+  assert.match(text(tree), /原文索引 · 摘录/);
+  await findNode(tree, n => n.type === 'button' && text(n) === '添加来源笔记').props.onClick();
+  tree = await settle(render);
+  findNode(tree, n => n.type === 'textarea').props.onChange({ target: { value: '保留日志，原因待核对。' } });
+  tree = await settle(render);
+  await findNode(tree, n => n.type === 'button' && text(n) === '保存来源笔记').props.onClick();
+  tree = await settle(render);
+  assert.match(text(tree), /lost acknowledgement/);
+  assert.equal(findNode(tree, n => n.type === 'textarea').props.disabled, true);
+  await findNode(tree, n => n.type === 'button' && text(n) === '重试保存同一笔记').props.onClick();
+  tree = await settle(render);
+  const submitted = calls.filter(c => c.options.method === 'POST').map(c => JSON.parse(c.options.body));
+  assert.equal(submitted.length, 2);
+  assert.deepEqual(submitted[0], submitted[1]);
+  assert.deepEqual(submitted[0].sources, [{ ref: source.ref, source_version: source.source_version }]);
+  assert.match(text(tree), /笔记已保存/);
+});
