@@ -94,12 +94,15 @@ export function createEvidenceDirectory(ctx, transport, historyArchive) {
       const policy = await call(id, 'auto_status');
       if (policy.config.evidence_directory_enabled === false)
         return { format: 'vctx-evidence-v1', available: true, enabled: false, entries: [] };
-      const data = await list(id, { limit: 8 });
-      const entries = data.items.map(i => ({ ref: i.ref, kind: i.kind, level: i.level,
+      const data = await list(id, { limit: 32 });
+      const covered = new Set(data.items.flatMap(i => i.kind === 'note' ? i.sources.map(s => s.ref) : []));
+      const roots = data.items.filter(i => !covered.has(i.ref));
+      const entries = roots.slice(0, 8).map(i => ({ ref: i.ref, kind: i.kind, level: i.level,
         title: i.title, excerpt: i.excerpt, source_version: i.source_version,
+        origin: i.origin,
         verification: i.kind === 'note' ? 'not_tested' : undefined }));
       const view = { format: 'vctx-evidence-v1', available: true, trust: 'untrusted_navigation', entries,
-        total_scanned: data.scanned, truncated: data.has_more || data.truncated };
+        total_scanned: data.scanned, truncated: data.has_more || data.truncated || roots.length > entries.length };
       while (Buffer.byteLength(JSON.stringify(view)) > 4096 && entries.length) { entries.pop(); view.truncated = true; }
       return view;
     },

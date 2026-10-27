@@ -14,6 +14,7 @@ import { SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection';
 import { SystemPrompt } from '@deepseek-ai/dsh-system-prompt';
 import { ToolRuntime, defineTool } from '@deepseek-ai/dsh-tools';
 import { mount } from '../adapter/plugin.mjs';
+import { createEvidenceDirectory } from '../adapter/evidence-directory.mjs';
 
 async function fixture(t) {
   const directory = await mkdtemp(join(tmpdir(), 'vctx-evidence-'));
@@ -113,5 +114,27 @@ test('directory validates ownership, versions, actor, hierarchy, bounded search 
   const rootNote = await api.read(f.agent.id, { ref: current.ref, expected_source_version: current.source_version });
   assert.equal(rootNote.sources.length, 1);
   assert.equal(rootNote.verification, 'not_tested');
+  const outline = await api.outline(f.agent.id);
+  assert.equal(outline.entries.filter(i => i.kind === 'note').length, 1);
+  assert.equal(outline.entries[0].ref, current.ref);
+  assert.equal(outline.entries.some(i => i.ref === f.source.ref), false, 'covered source remains searchable without duplicate injection');
   assert.equal(f.agent.session.snapshotEvents().filter(e => e.surfaceOp?.op === 'replace').length, 1);
+});
+
+test('note submissions freeze caller data before waiting and bound concurrent mutations', async () => {
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const source = { ref: 'vctx://history/' + 'a'.repeat(16) + '/9', source_version: 'sha256:' + 'b'.repeat(64) };
+  const calls = [];
+  const api = createEvidenceDirectory({}, { async call(id, op, input) { calls.push({ id, op, input }); return { note: input }; } },
+    { async catalog() { await gate; return source; } });
+  const input = { request_id: 'freeze', title: 'original', summary: 'original summary', sources: [source] };
+  const pending = api.note('s', input);
+  input.summary = 'changed while awaiting';
+  await assert.rejects(api.note('s', input), { code: 'BUSY' });
+  release(); await pending;
+  assert.equal(calls[0].input.summary, 'original summary');
+  assert.equal(calls[0].input.origin, 'model');
+  await api.dispose();
+  await assert.rejects(api.list('s'), { code: 'UNAVAILABLE' });
 });
