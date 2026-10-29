@@ -41,6 +41,8 @@
 
 ## 规划
 
+- [方案三：上下文控制层重构与优化](../skills/dsh-context-control/references/refactor-plan.md)
+- [上下文控制层维护 Skill](../skills/dsh-context-control/SKILL.md)
 - [History Paging Roadmap](planning/ROADMAP-HISTORY-PAGING.md)
 - [0.10 实施计划](planning/superpowers/plans/2026-10-23-history-virtual-context.md)
 - [0.10 设计](planning/superpowers/specs/2026-10-23-history-virtual-context-design.md)

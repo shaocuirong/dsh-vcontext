@@ -1,0 +1,4 @@
+interface:
+  display_name: "DSH 上下文控制层"
+  short_description: "按混合表示方案重构上下文控制与调度，维护版本、失效、恢复及提交契约"
+  default_prompt: "使用 $dsh-context-control 按方案三推进上下文控制层重构，先核对连接层能力，再完成当前节点与相应验证。"
