@@ -4,6 +4,8 @@
 
 开发分支正在进行分块重构：[会话连接 A1 进度与后续边界](docs/planning/SESSION-REFACTOR.md) · [Session Access 维护 skill](skills/dsh-session-access/SKILL.md)。这些改动尚未发布，当前发行版本仍为上方 v0.17.0。
 
+上下文控制已开始方案三的兼容迁移：[C0/C1 首批进度](skills/dsh-context-control/references/progress.md) · [完整重构与优化方案](skills/dsh-context-control/references/refactor-plan.md)。首批统一候选保护、预算观测和手动压缩写入口；版本失效账本、统一目录及阶段摘要仍待后续节点。
+
 **DeepSeek Harness 客户端虚拟上下文管理器**：结构化操作、可追溯资源版本、有来源的摘要、按需换页与会话内看板。
 
 [![Tests](https://github.com/shaocuirong/dsh-vcontext/actions/workflows/test.yml/badge.svg)](https://github.com/shaocuirong/dsh-vcontext/actions/workflows/test.yml)
