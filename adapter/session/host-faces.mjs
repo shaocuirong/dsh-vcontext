@@ -8,12 +8,19 @@ export function hostFaces(ctx) {
   const sessions = ctx.get('sessions');
   const query = ctx.get('sessionQuery');
   const projections = ctx.get('sessionProjections');
+  const controller = ctx.get('sessionController');
+  const agents = ctx.get('agents');
+  const presets = ctx.get('agentPresets');
+  const compaction = ctx.get('compaction');
   return {
-    sessions, query, projections,
+    sessions, query, projections, controller, presets, compaction,
     get: typeof sessions?.get === 'function' ? sessions.get.bind(sessions) : null,
     prepare: typeof sessions?.prepare === 'function' ? sessions.prepare.bind(sessions) : null,
     observe: typeof query?.observeSession === 'function' ? query.observeSession.bind(query) : null,
     snapshot: typeof projections?.snapshot === 'function' ? projections.snapshot.bind(projections) : null,
+    resolveAgent: typeof controller?.resolveAgent === 'function' ? controller.resolveAgent.bind(controller) : null,
+    agent: typeof agents?.get === 'function' ? agents.get.bind(agents) : null,
+    serviceFor: typeof presets?.serviceFor === 'function' ? presets.serviceFor.bind(presets) : null,
   };
 }
 

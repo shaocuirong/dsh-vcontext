@@ -30,7 +30,7 @@ function fixture(t) {
 
 test('能力每次读取当前服务，关闭后仍明确标识已释放', async t => {
   const f = fixture(t);
-  assert.deepEqual(f.access.capabilities(), { disposed: false, liveRead: true, coldRead: true, liveCut: true, projections: false });
+  assert.deepEqual(f.access.capabilities(), { disposed: false, liveRead: true, coldRead: true, liveCut: true, projections: false, write: false });
   f.ctx.set('sessionQuery', {});
   assert.equal(f.access.capabilities().coldRead, false);
   f.ctx.set('sessionQuery', f.query);
