@@ -141,12 +141,22 @@ export function projectCatalog(catalog, baseline, previous, { maxBytes = 4096, m
   return view;
 }
 
-export function createContextCatalog(transport, evidence) {
+export function createContextCatalog(transport, evidence, { guardStage = async (_id, stage) => stage } = {}) {
   const call = (id, op, input, signal) => transport.call(id, op, input, signal);
+  const resourcesFor = async (id, input, signal) => {
+    const resources = await call(id, 'catalog_resources', input, signal);
+    if (resources.stage) {
+      const previous = resources.stage.current_stage?.ref;
+      resources.stage = await guardStage(id, resources.stage, signal);
+      if (previous && !resources.stage.current_stage) resources.representations = (resources.representations ?? [])
+        .map(r => r.id === previous ? { ...r, freshness: 'stale', applicability: 'historical_evidence' } : r);
+    }
+    return resources;
+  };
   const views = new Map();
   return {
     async read(id, signal) {
-      const [legacy, resources] = await Promise.all([evidence.scan(id, signal), call(id, 'catalog_resources', {}, signal)]);
+      const [legacy, resources] = await Promise.all([evidence.scan(id, signal), resourcesFor(id, {}, signal)]);
       return adaptCatalog(id, legacy, resources);
     },
     async list(id, input = {}, signal) {
@@ -155,7 +165,7 @@ export function createContextCatalog(transport, evidence) {
         || ![undefined, 'page', 'resource'].includes(kind) || !Number.isSafeInteger(offset) || offset < 0
         || !Number.isSafeInteger(limit) || limit < 1 || limit > 32) throw new Error('invalid context_list input');
       if (kind === 'resource') {
-        const resources = await call(id, 'catalog_resources', { offset, limit }, signal);
+        const resources = await resourcesFor(id, { offset, limit }, signal);
         const catalog = adaptCatalog(id, { items: [], truncated: false, coverage: 'not_requested' }, resources);
         const result = { ...resources, items: catalog.entries, representations: catalog.representations, trust: 'untrusted_navigation' };
         while (Buffer.byteLength(JSON.stringify(result)) > 130048 && result.items.length) {

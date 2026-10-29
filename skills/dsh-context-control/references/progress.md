@@ -1,6 +1,6 @@
 # 上下文控制层：C0–C6a 实施记录
 
-日期：2026-10-29。分支 codex/context-control。设计与发行基线 v0.17.0 / 2dcb2b7，已合并本地连接层 4afb083，未推送、发版或启用正式插件。
+更新：2026-10-30。分支 codex/context-control。设计与发行基线 v0.17.0 / 2dcb2b7，已合并本地连接层 4afb083，未推送、发版或启用正式插件。
 
 ## 已完成的范围
 
@@ -12,10 +12,10 @@
 | C3 | 已落地：page/resource 来源适配、有界 1c 投影、成功主请求基线及接续 delta |
 | C4 | 已落地：统一仲裁与后台轮转、持久阶段账本、历史/结果对账、L2原子 tick 及原生压缩未决屏障 |
 | C5 | 已落地：固定引用定位缓存、每步有界读取/来源展开、候选恢复容量及可用计量下的发送前拒绝 |
-| C6 | 首批 C6a：固定资源/插件历史页的显式候选、语义评审、CAS 激活；原生证据证明和可选后台生成仍未完成 |
+| C6 | C6a 已接入：固定资源/页及原生历史/native/PTC 来源、显式候选/语义评审/CAS 激活；可选 C6b 未启用，真实模型评估未做 |
 | C7 | 未实施：测量驱动的策略优化 |
 
-当前推进至 C6a 首批；原生证据证明、可选后台生成和测量优化仍待后续节点，不能称完整方案三。
+当前推进至 C6a 原生来源闭环；C7 测量优化尚未实施，可选 C6b 未启用，不能称完整方案三已验证。
 
 ## C0/C1 基础变化
 
@@ -52,7 +52,7 @@
 
 本地提交节点：8d7205c（共享契约与候选）、716a29e（宿主压缩共享写入口）。设计与 skill 的初始提交为 cff2b00，连接层合并为 dc7f959。
 
-下一节点为 C6a 原生证据证明。现有固定资源/插件历史页具备候选、评审和激活闭环，继续补全原生历史及工具来源证明。详见 refactor-plan.md 和 contract.md。
+下一节点为 C7 离线测量与策略优化。现有来源覆盖固定资源/插件历史页及原生历史/native/PTC，显式候选、评审和激活闭环已接入；真实模型质量仍需单独评估。详见 refactor-plan.md 和 contract.md。
 
 C4 的精细动作能力仍须与 compaction 独立，不因已接入 withWrite 就跳过业务持久化协议。
 
@@ -131,3 +131,16 @@ C2 详细契约见 [effects.md](effects.md)。专项用 effects profile；账本
 wheel 构建成功，stages/core/migrations/retrieval/共享策略与源码字节一致；SHA256为31e4e3de12cea34ab0e3421f45f4b53305ab1502f5363a30302970f95aa0729b。doctor、release metadata、skill frontmatter/包内链接及 diff 检查通过。新交付包采用 dsh-context-control-c6a.skill，不覆盖既有包、不安装全局 skill。
 
 版本仍0.17.0，未推送、发版、正式激活或操作正式数据库；未跑远端CI、真实模型语义质量/费用、浏览器交互或正式宿主重启。下一节点补 C6a 原生历史/工具调用的权威来源证明，之后再评估可选 C6b 和 C7。实际接口与迁移见 [stages.md](stages.md)。
+
+## C6a 原生来源实施与验证（2026-10-30）
+
+- 完成边界冻结已关联原生消息及 native/PTC 调用/结果的身份；共享 LiveCut 计算公开证据视图版本，vsp_schema1 只保存不可变证明描述符。模型不能自报证明，旧候选不会被追加证明重新绑定。
+- 固定 event ref 接入既有 C5 读取/展开额度，正文只包含公开消息/参数/结果，拒绝宿主指令、配置、替换投影和调试/replay 字段。精确错误片段经过相同版本的正常正文读取核验，不绕过单步额度。
+- 激活及当前投影装配重新读取宿主原文；不可用/版本失配撤下 current_stage，同一目录表示标 stale，历史候选保留。source seq、call/subCall id、事件类型与继承状态均有门禁。
+- 一次证明最多64条来源、8MiB公开正文扫描；证明32,000字节、补齐 basis64,000字节。pending/继承执行/缺链等缺口不能通过评审清除；无冻结原生 required seq 的旧 basis 需明确更新任务版本，不补猜历史。
+
+完整 Node：353通过、0失败、0跳过；完整 Python：275通过、0失败、0跳过；stages profile 实际22项、Python阶段专项21项通过。真实离线 ToolRuntime/AgentLoop 覆盖原生及PTC来源、错误片段、跨会话拒绝、激活与请求注入，未增加辅助模型调用。全量临时夹具、日志和 wheel 输出继续使用独立E盘目录，未操作正式配置或数据库。
+
+wheel 构建成功，stage_proofs/stages/core/migrations/共享策略与源字节一致，SHA256为869cc7761da149844cb8b65ec6c3f6de6fa93fbfe8782ff53ba9c0052ec31433；doctor、release metadata、skill frontmatter/包内引用和 diff 检查通过。交付新的 dsh-context-control-c6a-native.skill，不覆盖旧包，不安装全局 skill。
+
+当前 C6a 程序闭环已包含已登记的固定资源/插件页及原生历史/native/PTC，不承诺未关联历史或外部状态全覆盖。C6b 可选后台生成器未启用；下一节点 C7 离线测量与策略优化，真实模型语义质量、任务成功和费用仍须单独评估。版本保持0.17.0，未推送、发版、正式激活、远端CI或浏览器/正式重启验收。详细契约见 [native-evidence.md](native-evidence.md)。

@@ -7,6 +7,7 @@ const idOK = value => typeof value === 'string' && value.length > 0 && value.len
 const refKind = ref => {
   if (typeof ref !== 'string' || ref.length > 256) fail('INVALID_INPUT');
   if (/^vctx:\/\/history\/[a-f0-9]{16}\/[0-9]+$/u.test(ref)) return 'history';
+  if (/^vctx:\/\/event\/[a-f0-9]{16}\/[0-9]+$/u.test(ref)) return 'event';
   const match = /^vctx:\/\/(resource|summary|evidence|result|stage)\/[a-f0-9]{32}$/u.exec(ref);
   if (match) return match[1];
   if (/^vctx:\/\/page\/[a-f0-9]{32}\/[1-9][0-9]*$/u.test(ref)) return 'page';
@@ -15,7 +16,7 @@ const refKind = ref => {
 const bytes = value => Buffer.byteLength(JSON.stringify(value), 'utf8');
 
 // 只缓存固定引用的定位描述；路径、新鲜度、正文及宿主 lease 不进入 TLB。
-export function createContextResolver(ctx, getTransport, history, evidence) {
+export function createContextResolver(ctx, getTransport, history, evidence, native) {
   const cache = new Map(), objectIds = new WeakMap(), budgets = new Map();
   const counters = { hits: 0, misses: 0, evictions: 0, invalidations: 0, bytes: 0 };
   let nextId = 0, disposed = false;
@@ -49,6 +50,10 @@ export function createContextResolver(ctx, getTransport, history, evidence) {
   }
   async function authority(agent, ref, signal) {
     const kind = refKind(ref), transport = getTransport();
+    if (kind === 'event') {
+      if (!native) fail('NATIVE_EVIDENCE_UNAVAILABLE');
+      return native.resolve(agent, ref, signal);
+    }
     if (kind === 'history') {
       const record = await history.catalog(agent.id, { ref });
       signal?.throwIfAborted();
@@ -142,7 +147,9 @@ export function createContextResolver(ctx, getTransport, history, evidence) {
       && input.expected_content_hash !== locator.source_version) fail('CHANGED');
     let result;
     try {
-      if (locator.source_type === 'history') result = await history.read(exec.agent.id, input.ref, input.offset ?? 0, input.limit,
+      if (locator.source_type === 'event') result = await native.read(exec.agent, { ...input,
+        expected_source_version: locator.source_version }, maxBytes, exec.signal);
+      else if (locator.source_type === 'history') result = await history.read(exec.agent.id, input.ref, input.offset ?? 0, input.limit,
         input.seq, input.expected_content_hash);
       else if (locator.source_type === 'result') result = await getTransport().call(exec.agent.id, 'result_read', {
         ref: input.ref, offset: input.offset ?? 0, limit: input.limit, expected_content_hash: locator.source_version,

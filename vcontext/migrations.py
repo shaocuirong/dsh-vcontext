@@ -25,6 +25,9 @@ def backup_legacy(connection):
     elif version[0] == '9' and not connection.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='vsm_schema'").fetchone():
         upgrade = 'stages1'
+    elif version[0] == '9' and not connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='vsp_schema'").fetchone():
+        upgrade = 'stage-proofs1'
     else:
         return None
     filename = next((row[2] for row in connection.execute('PRAGMA database_list') if row[1] == 'main'), '')

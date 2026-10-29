@@ -1,6 +1,6 @@
-# C6a 首批实际契约：显式阶段摘要
+# C6a 实际契约：显式阶段摘要
 
-本节点支持已登记的固定资源与插件历史页。它不是 C6 全部完成：原生历史、工具调用的原始事件证明尚未接入；存在这类关联时记录覆盖缺口，不能激活。没有后台模型调用，也没有借用宿主 compact 生成定制摘要。
+当前支持已登记的固定资源、插件历史页及原生历史/native/PTC 证据证明。后者通过追加证明接入，不回写旧候选；详见[原生证据契约](native-evidence.md)。没有后台模型调用，也没有借用宿主 compact 生成定制摘要；真实模型质量与费用对照尚未验证。
 
 ## 流程与边界
 
@@ -16,7 +16,7 @@ flowchart LR
 
 `task_update/attach` 经 ContextStore dispatch 完成时，在同一事务捕获 basis。每个 namespace/session/task/version 只生成一个 basis；先取出 basis，模型在事务外生成，再显式提交，生成期间不持租约。旧库已有 completed 任务通过 stage_prepare 捕获时标记 `explicit_current_snapshot`，不伪称完成当时的版本。容量耗尽不阻止任务完成，但 stage_prepare 会明确报错。
 
-来源为任务显式关联的 resource refs 和 page ids。page id 在完成边界解析成带修订号的固定 ref。相同内容的不同来源身份仍分别保留。工具自身的 vctx 管理操作不构成阶段工作证据；其他 operation 和 history seq 暂时分别产生 `NATIVE_OPERATION_REQUIRES_PROOF/NATIVE_HISTORY_REQUIRES_PROOF`。来源超限、无来源、basis 字节超限均为缺口，不能靠语义评审覆盖。
+来源为任务显式关联的 resource refs 和 page ids。page id 在完成边界解析成带修订号的固定 ref。相同内容的不同来源身份仍分别保留。工具自身的 vctx 管理操作不构成阶段工作证据；其他 operation 和 history seq 在宿主证明前分别产生 `NATIVE_OPERATION_REQUIRES_PROOF/NATIVE_HISTORY_REQUIRES_PROOF`，stage_prepare 补齐宿主证明后方可使用。来源超限、无来源、basis 字节超限均为缺口，不能靠语义评审覆盖。
 
 `registered_task_sources` 只表示本任务已登记的来源集合，没有承诺所有宿主历史、磁盘或语义事实都已覆盖。模型语义遗漏需要评审，程序只能检查引用身份、版本、精确文本和结构约束。
 
@@ -84,4 +84,4 @@ checks 必须完整包含 goals/decisions/constraints/unresolved/contradictions 
 
 [ACE v3](https://arxiv.org/html/2510.04618v3) 的局部条目增量和确定性合并用于避免全历史反复改写；[MAGE v2](https://arxiv.org/html/2606.06090v2) 的已完成子目标边界与语义检查用于组织候选。这里的确定性门禁是工程实现，不能当作论文结论或形式证明。
 
-后续 C6a 接入原生事件/工具证据的宿主权威证明，补完整任务来源；C6b 只有在能力、预算、取消及权限契约核实后才考虑独立生成器。真实模型的错误回忆、语义遗漏、任务成功率及总费用对照仍未验证，C7 尚未实施。
+原生事件/工具来源证明已接入，仍只承诺已登记来源；C6b 只有在能力、预算、取消及权限契约核实后才考虑独立生成器。真实模型的错误回忆、语义遗漏、任务成功率及总费用对照仍未验证，C7 尚未实施。

@@ -142,4 +142,48 @@ test('真实工具与 AgentLoop 请求：候选评审激活、跨会话隔离、
     if (limited.incomplete) break;
   }
   assert.equal(limited.incomplete, true, 'stage_read 兼容入口也不能绕过每步正文额度');
+  await send('native-phase');
+  let nativeTask = (await mutate('task_create', { title: 'native evidence', parent_ref: parent.ref })).task;
+  await mutate('task_select', { ref: nativeTask.ref });
+  const user = agent.session.append('user/message', { id: 'native-user', role: 'user', source: { kind: 'user' },
+    content: [{ type: 'text', text: '保留 ERR_NATIVE_42 原样' }] }, { surfaceOp: 'append' });
+  agent.session.append('assistant/message', { message: { id: 'native-call-message', role: 'assistant',
+    source: { kind: 'model', provider: 'offline-stages', model: 'fixture' }, content: [
+    { type: 'tool-call', id: 'native-read', name: 'read_file', arguments: '{"path":"a.py"}' }] } }, { surfaceOp: 'append' });
+  agent.session.append('tool/call', { turn: 4, step: 4, callId: 'native-read', name: 'read_file', arguments: '{"path":"a.py"}' });
+  const original = agent.session.append('tool/result', { turn: 4, step: 4, message: { id: 'native-result', role: 'tool',
+    toolCallId: 'native-read', isError: true, content: [{ type: 'text', text: 'ERR_NATIVE_42: 不能改写' }] } }, { surfaceOp: 'append' });
+  agent.session.append('tool/ptc-dispatch-start', { subCallId: 'ptc-read', name: 'read_file', arguments: '{"path":"b.py"}' });
+  agent.session.append('tool/ptc-dispatch', { subCallId: 'ptc-read', name: 'read_file', isError: false, content: [{ type: 'text', text: 'B is false' }] });
+  nativeTask = (await mutate('task_attach', { ref: nativeTask.ref, expected_version: nativeTask.version, history_source_seqs: [user.seq] })).task;
+  await mutate('task_update', { ref: nativeTask.ref, expected_version: nativeTask.version, status: 'completed' });
+  await mutate('task_select', { ref: parent.ref });
+  const prepared = await execute('stage_prepare', { task_ref: nativeTask.ref });
+  assert.deepEqual(prepared.basis.gaps, []);
+  assert.equal(prepared.basis.sources.length, 5, 'native/PTC 调用与结果均为不同的历史页成员');
+  assert.ok(prepared.basis.proof_ref);
+  const errorSource = prepared.basis.sources.find(s => s.source_seq === original.seq);
+  const text = (await execute('context_read', { ref: errorSource.ref })).content;
+  const offset = Array.from(text.slice(0, text.indexOf('ERR_NATIVE_42'))).length;
+  const nativeCapsule = { ...capsule, brief: 'NATIVE_STAGE_ACTIVE', anchors: [{ source_id: errorSource.id, offset, text: 'ERR_NATIVE_42' }],
+    contradictions: [{ text: '用户陈述与 B 的结果待核对', source_ids: [prepared.basis.sources[0].id, prepared.basis.sources[4].id] }] };
+  assert.equal((await raw(agent, 'stage_attest', { basis_ref: prepared.basis.ref, sources: [] })).isError, true);
+  assert.equal((await raw(agent, 'stage_propose', { request_id: 'forged-native', basis_ref: prepared.basis.ref,
+    capsule: nativeCapsule, anchor_proofs: [] })).isError, true);
+  const badNative = await raw(agent, 'stage_propose', { request_id: 'bad-native-anchor', basis_ref: prepared.basis.ref,
+    capsule: { ...nativeCapsule, anchors: [{ ...nativeCapsule.anchors[0], text: 'ERR_NATIVE_43' }] } });
+  assert.equal(badNative.isError, true);
+  const drafted = (await execute('stage_propose', { request_id: 'native-proposal', basis_ref: prepared.basis.ref, capsule: nativeCapsule })).candidate;
+  await execute('stage_review', { request_id: 'native-review', ref: drafted.ref, outcome: 'pass',
+    checks: Object.fromEntries(['goals', 'decisions', 'constraints', 'unresolved', 'contradictions'].map(k => [k, true])), explanation: 'semantic only' });
+  assert.equal((await execute('stage_activate', { request_id: 'native-activate', ref: drafted.ref, expected_revision: 1 })).activated, true);
+  const graph = await execute('context_expand', { ref: drafted.ref });
+  assert.equal(graph.incomplete, false);
+  assert.equal(graph.edges.length, 5);
+  assert.ok(graph.edges.every(e => e.version_match));
+  assert.equal((await raw(other, 'context_read', { ref: errorSource.ref })).isError, true);
+  await send('native-request');
+  assert.equal(requests.length, 4, '证明、摘要和评审不启动辅助模型调用');
+  assert.equal(directoryIn(requests.at(-1)).current_stage.brief, 'NATIVE_STAGE_ACTIVE');
+  assert.deepEqual(directoryIn(requests.at(-1)).current_stage.anchors, ['ERR_NATIVE_42']);
 });

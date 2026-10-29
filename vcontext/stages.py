@@ -6,6 +6,7 @@ import uuid
 from .state import _json, _integer, _text
 from .task_state import TaskState
 from .effects import EffectsState
+from .stage_proofs import StageProofs
 
 OPERATIONS = frozenset({'stage_prepare', 'stage_propose', 'stage_review', 'stage_activate',
                         'stage_read', 'stage_list', 'stage_context'})
@@ -98,7 +99,11 @@ class StageState(TaskState):
             sources.append(source)
         if not sources:
             gaps.append('NO_FIXED_SOURCES')
-        return sources, sorted(set(gaps))
+        native, native_gaps = StageProofs(self).requirements(links[:64])
+        gaps.extend(native_gaps)
+        if len(native) + len(sources) > 64:
+            gaps.append('SOURCE_LIMIT')
+        return sources, sorted(set(gaps)), native[:64]
 
     def capture(self, task_ref, capture_kind='explicit_current_snapshot'):
         row = self._task(task_ref)
@@ -112,11 +117,12 @@ class StageState(TaskState):
         count = self.db.execute('SELECT COUNT(*) FROM vsm_bases WHERE namespace=? AND session_id=?', self._scope).fetchone()[0]
         if count >= 1024:
             raise ValueError('stage basis capacity exceeded')
-        sources, gaps = self._sources(task_ref)
+        sources, gaps, native = self._sources(task_ref)
         ref = 'vctx://stage-basis/' + uuid.uuid4().hex
         binding = self._binding()
         basis = dict(ref=ref, task_ref=task_ref, task_version=row['version'], task_hash=digest(task),
                      anchor_ref=row['parent_ref'] or task_ref, title=task['title'], sources=sources,
+                     native_requirements=native,
                      links_hash=digest(self._links(task_ref)),
                      coverage='incomplete' if gaps else 'registered_task_sources', gaps=gaps,
                      capture_kind=capture_kind, scope=dict(project_id=binding['project_id'], root=binding['root_path']),
@@ -129,7 +135,7 @@ class StageState(TaskState):
         return basis
 
     def stage_prepare(self, task_ref):
-        basis = self.capture(task_ref)
+        basis = StageProofs(self).basis(self.capture(task_ref), latest=True)
         return dict(basis=basis, currentness=self._currentness(basis), generator='explicit_model_candidate',
                     automatic_generation=False)
 
@@ -157,6 +163,9 @@ class StageState(TaskState):
         selected = ({e['path']: e['ref'] for e in self._snapshot(basis['target']['snapshot_ref'])[1]}
                     if basis['target']['mode'] == 'pinned' else None)
         for source in basis['sources']:
+            if source['ref'].startswith('vctx://event/'):
+                # 原生正文由宿主在准备、生成、激活及注入时重新核对，不复制进内核。
+                continue
             locator = retrieval.source_resolve(ref=source['ref'])
             if locator['source_version'] != source['source_version']:
                 reasons.append('SOURCE_CHANGED')
@@ -176,8 +185,11 @@ class StageState(TaskState):
             path = self._path(focus) if focus else []
             if not any(basis['anchor_ref'] in (item['ref'], item.get('source_ref')) for item in path):
                 reasons.append('TASK_SCOPE_INACTIVE')
-        return dict(applicable=not reasons, reasons=sorted(set(reasons)), freshness='stale' if reasons else 'unknown',
-                    filesystem_verified=False, coverage=basis['coverage'])
+        result = dict(applicable=not reasons, reasons=sorted(set(reasons)), freshness='stale' if reasons else 'unknown',
+                      filesystem_verified=False, coverage=basis['coverage'])
+        if basis.get('proof_ref'):
+            result.update(native_authority='host_attested', native_live_verified=False)
+        return result
 
     def _mutation(self, kind, request_id, payload, use):
         fingerprint, replay = self._request('stage-' + kind, request_id, payload)
@@ -187,7 +199,7 @@ class StageState(TaskState):
         self._remember('stage-' + kind, request_id, fingerprint, _json(result))
         return dict(result, replayed=False)
 
-    def _capsule(self, capsule, basis):
+    def _capsule(self, capsule, basis, anchor_proofs=None):
         if not isinstance(capsule, dict) or set(capsule) != {'brief', 'decisions', 'constraints', 'next_action', 'unresolved', 'anchors', 'contradictions'}:
             raise ValueError('invalid stage capsule')
         _text(capsule['brief'], 'brief', 320)
@@ -202,17 +214,23 @@ class StageState(TaskState):
         anchors = capsule['anchors']
         if not isinstance(anchors, list) or len(anchors) > 8:
             raise ValueError('stage anchor limit')
+        expected_proofs = []
         for anchor in anchors:
             if not isinstance(anchor, dict) or set(anchor) != {'source_id', 'offset', 'text'} or anchor['source_id'] not in by_id:
                 raise ValueError('invalid stage anchor')
             _integer(anchor['offset'], 'anchor offset')
             _text(anchor['text'], 'anchor text', 160)
             source = by_id[anchor['source_id']]
+            if source['ref'].startswith('vctx://event/'):
+                expected_proofs.append(dict(anchor, source_version=source['source_version']))
+                continue
             from .retrieval import RetrievalSources
             value = RetrievalSources(self.store).source_read(ref=source['ref'], offset=anchor['offset'],
                 limit=len(anchor['text']), expected_source_version=source['source_version'])
             if value['content'] != anchor['text']:
                 raise ValueError('stage anchor does not match exact source text')
+        if (anchor_proofs or []) != expected_proofs:
+            raise ValueError('native stage anchor requires exact host proof')
         conflicts = capsule['contradictions']
         if not isinstance(conflicts, list) or len(conflicts) > 4:
             raise ValueError('stage contradiction limit')
@@ -226,18 +244,26 @@ class StageState(TaskState):
         if len(_json(capsule).encode()) > 8192:
             raise ValueError('stage capsule exceeds byte budget')
 
-    def stage_propose(self, request_id, basis_ref, capsule):
+    def stage_propose(self, request_id, basis_ref, capsule, anchor_proofs=None):
         def use():
-            basis = self._document('vsm_bases', basis_ref)
-            self._capsule(capsule, basis)
+            basis = StageProofs(self).basis(self._document('vsm_bases', basis_ref), latest=True)
+            self._capsule(capsule, basis, anchor_proofs)
             count = self.db.execute('SELECT COUNT(*) FROM vsm_candidates WHERE base_ref=?', (basis_ref,)).fetchone()[0]
             if count >= 16:
                 raise ValueError('stage candidate capacity exceeded')
             ref = 'vctx://stage/' + uuid.uuid4().hex
             candidate = dict(ref=ref, basis_ref=basis_ref, capsule=capsule, origin='model', assessment='not_tested', revision=count + 1)
+            if basis.get('proof_ref'):
+                candidate['proof_ref'] = basis['proof_ref']
             self.db.execute('INSERT INTO vsm_candidates VALUES(?,?,?,?)', (ref, basis_ref, _json(candidate), digest(candidate)))
             return dict(candidate=candidate, currentness=self._currentness(basis))
-        return self._mutation('propose', request_id, dict(basis_ref=basis_ref, capsule=capsule), use)
+        payload = dict(basis_ref=basis_ref, capsule=capsule)
+        if anchor_proofs is not None:
+            payload['anchor_proofs'] = anchor_proofs
+        return self._mutation('propose', request_id, payload, use)
+
+    def _candidate_basis(self, candidate):
+        return StageProofs(self).basis(self._document('vsm_bases', candidate['basis_ref']), candidate.get('proof_ref'))
 
     def stage_review(self, request_id, ref, outcome, checks, explanation):
         def use():
@@ -253,7 +279,7 @@ class StageState(TaskState):
                           candidate_version=digest(candidate), outcome=outcome, checks=checks, explanation=explanation,
                           origin='model', assessment='semantic_review_only', verification='not_tested')
             self.db.execute('INSERT INTO vsm_reviews VALUES(?,?,?,?)', (review['ref'], ref, _json(review), digest(review)))
-            return dict(review=review, currentness=self._currentness(self._document('vsm_bases', candidate['basis_ref'])))
+            return dict(review=review, currentness=self._currentness(self._candidate_basis(candidate)))
         return self._mutation('review', request_id, dict(ref=ref, outcome=outcome, checks=checks, explanation=explanation), use)
 
     def _active(self):
@@ -272,14 +298,17 @@ class StageState(TaskState):
             raise ValueError('stage projection capacity exceeded; propose a smaller capsule')
         return result
 
-    def stage_activate(self, request_id, ref, expected_revision):
+    def stage_activate(self, request_id, ref, expected_revision, native_check=None):
         def use():
             _integer(expected_revision, 'expected_revision')
             active = self._active()
             if active['revision'] != expected_revision:
                 raise ValueError('stage activation revision conflict')
             candidate = self._document('vsm_candidates', ref)
-            basis = self._document('vsm_bases', candidate['basis_ref'])
+            basis = self._candidate_basis(candidate)
+            native = [dict(ref=s['ref'], source_version=s['source_version']) for s in basis['sources'] if s['ref'].startswith('vctx://event/')]
+            if native and native_check != dict(proof_ref=basis['proof_ref'], sources=native):
+                raise ValueError('stage activation requires current native host check')
             review_row = self._one('SELECT ref FROM vsm_reviews WHERE candidate_ref=? ORDER BY rowid DESC LIMIT 1', (ref,))
             review = self._document('vsm_reviews', review_row['ref']) if review_row else None
             if not review or review['outcome'] != 'pass' or review['candidate_version'] != digest(candidate):
@@ -296,7 +325,7 @@ class StageState(TaskState):
 
     def stage_read(self, ref):
         candidate = self._document('vsm_candidates', ref)
-        basis = self._document('vsm_bases', candidate['basis_ref'])
+        basis = self._candidate_basis(candidate)
         review_row = self._one('SELECT ref FROM vsm_reviews WHERE candidate_ref=? ORDER BY rowid DESC LIMIT 1', (ref,))
         return dict(candidate=candidate, source_version=digest(candidate), basis=basis,
                     review=self._document('vsm_reviews', review_row['ref']) if review_row else None,

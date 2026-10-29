@@ -521,3 +521,11 @@ stage_prepare({task_ref}) 返回已完成任务的固定 basis；stage_propose({
 current_stage 最多1536字节，位于现有4KiB目录内，保留决定、约束、下一步、未决、精确错误片段和矛盾。超限拒绝激活，不裁掉关键字段；普通目录项先折叠。任务/目标/来源变化、观察落后或新写信号会撤销适用性，固定历史候选仍可查。当前按所有写版本保守失效，尚未排除无关路径写入。
 
 新增 vsm_schema1，首次扩展非覆盖备份；没有后台摘要模型调用。详细字段、调用例子、容量、迁移及剩余范围见 [C6a实际契约](../../skills/dsh-context-control/references/stages.md)。
+
+## 开发分支：C6a 原生来源证明（未发布）
+
+stage_prepare 现可从共享 LiveCut 为已登记原生历史和 native/PTC 调用/结果补齐不可变证明。固定 vctx://event/<owner>/<seq> 通过 context_resolve/read/expand 恢复原始公开证据 JSON，受 C5 正文额度限制；offset/anchor 均以该 JSON 的 Unicode 码点计。原始参数和消息内容保留，宿主配置、投影、stream、调试 meta 和 provider replay 不进入正文。
+
+模型不能调用 stage_requirements/stage_attest，也不能传 anchor_proofs/native_check。新候选绑定 proof_ref，旧候选不随补证明改变；激活和注入前重验宿主来源，不可用/失配即撤销当前投影。一次证明扫描最多8MiB，来源合计最多64项；pending/继承执行/容量等缺口不会被语义评审消除。
+
+独立 vsp_schema1 首次扩展先备份。旧版没有冻结原生 required seq 的 basis 须明确 task_update/attach 形成新版本再准备，不能补猜完成当时的事件。详见[原生证据契约](../../skills/dsh-context-control/references/native-evidence.md)。C6b 独立后台生成未启用，C7 测量优化待实施。

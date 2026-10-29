@@ -8,6 +8,7 @@ from pathlib import Path
 
 from vcontext.core import ContextStore
 from vcontext.stages import CHECKS, install_stage_schema
+from vcontext.stage_proofs import install_proof_schema
 
 
 class StageTests(unittest.TestCase):
@@ -200,6 +201,124 @@ class StageTests(unittest.TestCase):
         task = self.task_mutate('task_update', ref=task['ref'], expected_version=task['version'], status='completed')['task']
         value = self.call('stage_prepare', task_ref=task['ref'])
         self.assertIn('SOURCE_OUTSIDE_TARGET', value['currentness']['reasons'])
+
+    def native_basis(self, pending=False):
+        events = [dict(seq=0, type='user/message', inherited=False),
+                  dict(seq=1, type='tool/call', inherited=False, call_id='read-a', tool='read')]
+        if not pending:
+            events.append(dict(seq=2, type='tool/result', inherited=False, call_id='read-a', status='failed'))
+        self.call('state_sync', events=events, through_seq=events[-1]['seq'])
+        self.call('effects_sync', events=[dict(seq=e['seq'], phase='none') for e in events], through_seq=events[-1]['seq'])
+        operation = self.call('operation_list')['operations'][0]
+        self.child = self.task_mutate('task_attach', ref=self.child['ref'], expected_version=self.child['version'],
+                                     operation_ids=[operation['operation_id']], history_source_seqs=[0])['task']
+        self.basis = self.call('stage_prepare', task_ref=self.child['ref'])['basis']
+        return self.call('stage_requirements', basis_ref=self.basis['ref'])
+
+    def native_proofs(self, required):
+        # 这是内核宿主边界的夹具；真实正文和哈希的核对由 Node 用例覆盖。
+        import hashlib
+        return [dict(ref=r['ref'], source_seq=r['seq'], event_type=r['type'], inherited=r['inherited'], kind='page',
+                     source_type='event', form='raw', read_operation='context_read', bytes=128, chars=64,
+                     source_version='sha256:' + hashlib.sha256(str(r['seq']).encode()).hexdigest())
+                for r in required]
+
+    def test_native_proof_seals_new_candidates_without_rebinding_old_drafts(self):
+        request = self.native_basis()
+        old = self.propose(request_id='old')
+        old_version = self.call('stage_read', ref=old['ref'])['source_version']
+        proofs = self.native_proofs(request['native_requirements'])
+        seal = self.call('stage_attest', basis_ref=self.basis['ref'], sources=proofs)
+        self.assertFalse(seal['replayed'])
+        self.assertTrue(self.call('stage_attest', basis_ref=self.basis['ref'], sources=proofs)['replayed'])
+        prepared = self.call('stage_prepare', task_ref=self.child['ref'])
+        self.assertEqual(len(prepared['basis']['sources']), 4)
+        self.assertEqual(prepared['basis']['gaps'], [])
+        self.assertTrue(prepared['currentness']['applicable'])
+        new = self.propose(request_id='new')
+        self.assertEqual(new['proof_ref'], seal['proof_ref'])
+        old_read = self.call('stage_read', ref=old['ref'])
+        self.assertEqual(old_read['source_version'], old_version)
+        self.assertEqual(len(old_read['basis']['sources']), 1)
+        self.assertIn('NATIVE_OPERATION_REQUIRES_PROOF', old_read['basis']['gaps'])
+        self.review(new)
+        with self.assertRaisesRegex(ValueError, 'current native host check'):
+            self.activate(new)
+        native_check = dict(proof_ref=seal['proof_ref'], sources=[dict(ref=p['ref'], source_version=p['source_version']) for p in proofs])
+        self.assertTrue(self.call('stage_activate', request_id='checked', ref=new['ref'], expected_revision=0, native_check=native_check)['activated'])
+        self.assertEqual(self.call('source_links', ref=new['ref'])['total'], 4)
+
+    def test_native_proofs_require_full_exact_identity_and_immutable_versions(self):
+        request = self.native_basis()
+        proofs = self.native_proofs(request['native_requirements'])
+        with self.assertRaisesRegex(ValueError, 'exact bounded source set'):
+            self.call('stage_attest', basis_ref=self.basis['ref'], sources=proofs[:-1])
+        with self.assertRaisesRegex(ValueError, 'identity mismatch'):
+            self.call('stage_attest', basis_ref=self.basis['ref'], sources=list(reversed(proofs)))
+        self.call('stage_attest', basis_ref=self.basis['ref'], sources=proofs)
+        changed = [dict(p) for p in proofs]
+        changed[0]['source_version'] = 'sha256:' + 'f' * 64
+        with self.assertRaisesRegex(ValueError, 'version conflict'):
+            self.call('stage_attest', basis_ref=self.basis['ref'], sources=changed)
+        with self.assertRaisesRegex(sqlite3.IntegrityError, 'immutable'):
+            self.store.db.execute('UPDATE vsp_proofs SET content=?', ('{}',))
+
+    def test_native_anchor_needs_host_verified_exact_fragment(self):
+        request = self.native_basis()
+        self.call('stage_attest', basis_ref=self.basis['ref'], sources=self.native_proofs(request['native_requirements']))
+        basis = self.call('stage_prepare', task_ref=self.child['ref'])['basis']
+        anchor = dict(source_id='s4', offset=12, text='ERR_NATIVE_42')
+        capsule = dict(self.capsule, anchors=[anchor])
+        with self.assertRaisesRegex(ValueError, 'exact host proof'):
+            self.propose(capsule=capsule)
+        candidate = self.call('stage_propose', request_id='host-checked-anchor', basis_ref=basis['ref'], capsule=capsule,
+                              anchor_proofs=[dict(anchor, source_version=basis['sources'][3]['source_version'])])['candidate']
+        self.assertEqual(candidate['capsule']['anchors'], [anchor])
+
+    def test_pending_operation_remains_incomplete_even_with_valid_call_proof(self):
+        request = self.native_basis(pending=True)
+        self.call('stage_attest', basis_ref=self.basis['ref'], sources=self.native_proofs(request['native_requirements']))
+        value = self.call('stage_prepare', task_ref=self.child['ref'])
+        self.assertIn('OPERATION_PENDING', value['basis']['gaps'])
+        self.assertFalse(value['currentness']['applicable'])
+
+    def test_late_native_attestation_rejects_changed_task(self):
+        request = self.native_basis()
+        self.task_mutate('task_update', ref=self.child['ref'], expected_version=self.child['version'], summary='changed')
+        with self.assertRaisesRegex(ValueError, 'changed before attestation'):
+            self.call('stage_attest', basis_ref=self.basis['ref'], sources=self.native_proofs(request['native_requirements']))
+
+    def test_native_aggregate_scan_budget_and_schema_upgrade(self):
+        request = self.native_basis()
+        proofs = self.native_proofs(request['native_requirements'])
+        for proof in proofs:
+            proof['bytes'] = 8388608
+        with self.assertRaisesRegex(ValueError, 'scan budget'):
+            self.call('stage_attest', basis_ref=self.basis['ref'], sources=proofs)
+        self.store.close()
+        with closing(sqlite3.connect(self.path)) as db:
+            db.execute('DROP TABLE vsp_schema')
+            db.commit()
+        self.store = ContextStore(self.path, json.dumps(['ns', 'a']))
+        self.assertIn('.pre-stage-proofs1-', self.store.migration_backup)
+        with closing(sqlite3.connect(':memory:')) as db:
+            db.execute('CREATE TABLE vsp_schema(version INTEGER)')
+            db.execute('INSERT INTO vsp_schema VALUES(2)')
+            with self.assertRaisesRegex(ValueError, 'unsupported stage proof schema'):
+                install_proof_schema(db)
+
+    def test_legacy_native_basis_does_not_invent_completion_time_metadata(self):
+        self.native_basis()
+        from vcontext.stages import digest
+        legacy = {k: v for k, v in self.basis.items() if k != 'native_requirements'}
+        # 临时夹具模拟上一节点的持久格式；业务代码不改写旧 basis。
+        self.store.db.execute('DROP TRIGGER vsm_bases_immutable_update')
+        self.store.db.execute('UPDATE vsm_bases SET content=?,content_hash=? WHERE ref=?',
+                              (json.dumps(legacy, ensure_ascii=False, separators=(',', ':')), digest(legacy), legacy['ref']))
+        request = self.call('stage_requirements', basis_ref=legacy['ref'])
+        self.assertTrue(request['legacy_native_basis'])
+        with self.assertRaisesRegex(ValueError, 'legacy native basis'):
+            self.call('stage_attest', basis_ref=legacy['ref'], sources=[])
 
     def test_upgrade_backup_and_future_schema_rejected(self):
         self.store.close()

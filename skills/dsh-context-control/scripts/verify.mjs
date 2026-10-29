@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process';
 
 // 显式选择仓库与验证范围；不安装依赖、不读取正式配置、不自动切分支。
 const profiles = {
-  stages: ['context-stages', 'context-catalog', 'context-resolver', 'task-request'],
+  stages: ['context-stages', 'context-native-evidence', 'context-catalog', 'context-resolver', 'task-request'],
   resolver: ['context-resolver', 'context-admission', 'result-projection', 'open-result-request',
     'resource-capture', 'snapshot-request', 'quota-transport'],
   coordinator: ['context-control-coordinator', 'context-control-commit', 'session-write', 'automation',
@@ -51,7 +51,7 @@ if (values.profile === 'package') {
   // 独立于目标运行时依赖，检查可移植包及内部引用；不宣称验证调度行为。
   const required = ['SKILL.md', 'agents/openai.yaml', 'scripts/verify.mjs',
     'references/contract.md', 'references/scheduling.md', 'references/refactor-plan.md',
-    'references/validation.md', 'references/research.md', 'references/effects.md', 'references/catalog.md', 'references/coordinator.md', 'references/resolver.md', 'references/stages.md'];
+    'references/validation.md', 'references/research.md', 'references/effects.md', 'references/catalog.md', 'references/coordinator.md', 'references/resolver.md', 'references/stages.md', 'references/native-evidence.md'];
   const missing = required.filter(p => !existsSync(join(skillRoot, p)));
   if (missing.length) fail('skill 包缺文件：' + missing.join(', '));
   const files = [];

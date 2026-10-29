@@ -99,3 +99,5 @@ requestAdmission 默认为启用，可由宿主配置 false；contextIntegration
 context_find 仅覆盖原证据目录的有界历史/结果/笔记扫描，不代表全仓库文本搜索。项目资源导航继续用 context_list(kind=resource)。source_resolve/read/links 是宿主 RPC，vctx 拒绝 source_ 前缀。
 
 本节点不新增数据库 schema，不安装全局 skill，不发布或改正式数据库。resolver/scheduler profile 和完整结果见 progress.md；真实供应商 token、费用、远端CI、UI及正式激活另行验收。
+
+C6a 新增固定 event/stage ref 接入同一解析/读取额度。event 是原始公开页成员视图，不是宿主配置读取入口；具体白名单、版本和证明边界见 [native-evidence.md](native-evidence.md)。

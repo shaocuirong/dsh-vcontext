@@ -10,6 +10,7 @@ export const MUTATING_OPERATIONS = new Set([
   'record_usage',
   'state_bind', 'state_sync', 'resource_store', 'resource_capture', 'summary_store',
   'stage_prepare', 'stage_propose', 'stage_review', 'stage_activate',
+  'stage_attest', 'stage_requirements',
   'effects_sync', 'effects_observe', 'effects_bind', 'catalog_delivered', 'control_record', 'control_tick', 'source_read',
   'result_store', 'result_mark', 'result_plan', 'result_plan_finish', 'ved_note_store',
   'result_upload_begin', 'result_upload_chunk', 'result_upload_finish', 'result_upload_abort',

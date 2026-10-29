@@ -25,6 +25,7 @@ from .catalog import CatalogState, OPERATIONS as CATALOG_OPERATIONS, install_cat
 from .control_commit import ControlCommit, OPERATIONS as COMMIT_OPERATIONS, install_control_schema
 from .retrieval import RetrievalSources, OPERATIONS as RETRIEVAL_OPERATIONS
 from .stages import StageState, OPERATIONS as STAGE_OPERATIONS, install_stage_schema
+from .stage_proofs import StageProofs, OPERATIONS as PROOF_OPERATIONS, install_proof_schema
 
 
 class ContextError(ValueError):
@@ -92,6 +93,7 @@ MUTATING_OPERATIONS = frozenset({
     'state_bind', 'state_sync', 'resource_store', 'summary_store', 'result_store', 'result_mark', 'ved_note_store',
     'effects_sync', 'effects_observe', 'effects_bind', 'catalog_delivered', 'control_record', 'control_tick', 'source_read',
     'stage_prepare', 'stage_propose', 'stage_review', 'stage_activate',
+    'stage_attest', 'stage_requirements',
     'result_plan', 'result_plan_finish', 'result_upload_begin', 'result_upload_chunk', 'result_upload_finish', 'result_upload_abort',
     'snapshot_create', 'snapshot_checkout', 'snapshot_detach', 'snapshot_branch',
     'task_create','task_update','task_select','task_fork','task_attach','task_review',
@@ -248,6 +250,7 @@ class ContextStore:
         install_catalog_schema(self.db)
         install_control_schema(self.db)
         install_stage_schema(self.db)
+        install_proof_schema(self.db)
         self.quota = QuotaLedger(self.db, self.scope, project='default', defaults=self._quota_defaults)
         self.quota.sync(self._resident_units(), enforce=False, operation='initialize', managed_prefix='page:')
         self.automation = Automation(self)
@@ -1171,6 +1174,8 @@ class ContextStore:
 
     @atomic
     def dispatch(self, operation, arguments):
+        if operation in PROOF_OPERATIONS:
+            return getattr(StageProofs(StageState(self)), operation)(**arguments)
         if operation in STAGE_OPERATIONS:
             return getattr(StageState(self), operation)(**arguments)
         if operation in RETRIEVAL_OPERATIONS:
