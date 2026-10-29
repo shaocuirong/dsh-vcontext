@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { describeContext } from './live-context.mjs';
+import { createSessionAccess } from './session/access.mjs';
 
 const ERROR_TEXT = {
   unavailable: '宿主未提供手动上下文压缩服务，请检查 Harness 的 compaction 插件。',
@@ -19,39 +20,31 @@ function metrics(session) {
   return { messages: view.message_count, bytes: view.bytes };
 }
 
-/** One bounded, observable job per session. All actual edits belong to Harness. */
-export function createReplacement(ctx, diagnostics) {
+const ACCESS_ERRORS = new Map([['BUSY', 'busy'], ['NOT_FOUND', 'inactive'], ['UNAVAILABLE', 'unavailable'],
+  ['CANCELLED', 'cancelled'], ['DISPOSED', 'cancelled']]);
+
+/** 每会话一个可观察任务，写能力由共享连接层提供。 */
+export function createReplacement(ctx, diagnostics, { access: suppliedAccess } = {}) {
+  const access = suppliedAccess ?? createSessionAccess(ctx, { diagnostics });
   const jobs = new Map();
   const lifetime = new AbortController();
   let disposed = false;
   const view = job => job ? structuredClone(job.state) : null;
-  function fail(code) {
-    throw Object.assign(new Error(ERROR_TEXT[code] ?? ERROR_TEXT.failed), { code });
-  }
   async function execute(sessionId, job) {
     const fields = { request_id: job.state.id,
       session_hash: createHash('sha256').update(sessionId).digest('hex').slice(0, 12) };
     diagnostics?.record('context.replace.started', 'info', fields);
     try {
-      let agent;
-      const controller = ctx.get('sessionController');
-      if (typeof controller?.resolveAgent === 'function') {
-        // This is the public Host-API activation seam; Harness keeps ownership
-        // of the resumed Agent and its preset, persistence and model selection.
-        const resolved = await controller.resolveAgent(sessionId);
-        if (!resolved?.agent) fail('inactive');
-        agent = resolved.agent;
-      } else agent = ctx.get('agents')?.get(sessionId);
-      if (!agent) fail('inactive');
-      // Presets may isolate services even from agent.ctx. Use the public
-      // registry seam before falling back to non-preset/TUI compositions.
-      const engine = ctx.get('agentPresets')?.serviceFor?.(agent, 'compaction')
-        ?? agent.ctx?.get?.('compaction') ?? ctx.get('compaction');
-      if (typeof engine?.compactNow !== 'function') fail('unavailable');
-      lifetime.signal.throwIfAborted();
-      job.state.before = metrics(agent.session);
-      const result = await engine.compactNow(agent, lifetime.signal);
-      job.state.after = metrics(agent.session);
+      const result = await access.withWrite(sessionId, {
+        signal: lifetime.signal, grant: { requestId: job.state.id, purpose: 'host_compact' },
+      }, async handle => {
+        handle.check();
+        job.state.before = metrics(handle.agent.session);
+        const result = await handle.compact();
+        handle.check();
+        job.state.after = metrics(handle.agent.session);
+        return result;
+      });
       job.state.status = 'completed';
       job.state.outcome = result === null ? 'noop' : 'replaced';
       job.state.shadowed_items = result?.shadowedSeqs?.length ?? 0;
@@ -61,8 +54,9 @@ export function createReplacement(ctx, diagnostics) {
       diagnostics?.record('context.replace.completed', 'info', { ...fields,
         duration_ms: Date.now() - job.state.started_at, outcome: job.state.outcome });
     } catch (error) {
+      const accessCode = ACCESS_ERRORS.get(error?.code);
       const code = lifetime.signal.aborted ? 'cancelled'
-        : Object.hasOwn(ERROR_TEXT, error?.code) ? error.code : 'failed';
+        : accessCode ?? (Object.hasOwn(ERROR_TEXT, error?.code) ? error.code : 'failed');
       job.state.status = 'failed';
       job.state.error_code = code;
       job.state.message = ERROR_TEXT[code];
@@ -94,6 +88,7 @@ export function createReplacement(ctx, diagnostics) {
       disposed = true;
       lifetime.abort();
       await Promise.allSettled([...jobs.values()].map(job => job.promise));
+      if (!suppliedAccess) await access.dispose();
       jobs.clear();
     },
   };
