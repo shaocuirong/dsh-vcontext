@@ -30,6 +30,8 @@ export function validateConfig(config) {
     throw new Error('contextIntegration must be a boolean');
   if (config.resourceCapture !== undefined && typeof config.resourceCapture !== 'boolean')
     throw new Error('resourceCapture must be a boolean');
+  if (config.requestAdmission !== undefined && typeof config.requestAdmission !== 'boolean')
+    throw new Error('requestAdmission must be a boolean');
   const rawVirtual = config.virtualContext ?? {};
   if (!rawVirtual || typeof rawVirtual !== 'object' || Array.isArray(rawVirtual))
     throw new Error('virtualContext must be an object');

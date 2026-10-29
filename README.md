@@ -4,7 +4,7 @@
 
 开发分支正在进行分块重构：[会话连接 A1 进度与后续边界](docs/planning/SESSION-REFACTOR.md) · [Session Access 维护 skill](skills/dsh-session-access/SKILL.md)。这些改动尚未发布，当前发行版本仍为上方 v0.17.0。
 
-上下文控制正在推进方案三：[C0–C4 进度](skills/dsh-context-control/references/progress.md) · [完整重构与优化方案](skills/dsh-context-control/references/refactor-plan.md)。已统一候选保护、预算观测和手动压缩写入口，并接入工具变更账本、现场版本核验、统一目录、有界投影与接续增量，并统一写仲裁与提交恢复；有界恢复准入和自动阶段摘要仍待后续节点。
+上下文控制正在推进方案三：[C0–C5 进度](skills/dsh-context-control/references/progress.md) · [完整重构与优化方案](skills/dsh-context-control/references/refactor-plan.md)。已统一候选保护、预算观测和手动压缩写入口，并接入工具变更账本、现场版本核验、统一目录、有界投影与接续增量、统一写仲裁与提交恢复，并加入有界引用读取和请求容量守卫；自动阶段摘要及策略优化仍待后续节点。
 
 **DeepSeek Harness 客户端虚拟上下文管理器**：结构化操作、可追溯资源版本、有来源的摘要、按需换页与会话内看板。
 

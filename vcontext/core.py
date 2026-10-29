@@ -23,6 +23,7 @@ from .evidence import EvidenceNotes, OPERATIONS as EVIDENCE_OPERATIONS, install_
 from .effects import EffectsState, OPERATIONS as EFFECT_OPERATIONS, install_effect_schema
 from .catalog import CatalogState, OPERATIONS as CATALOG_OPERATIONS, install_catalog_schema
 from .control_commit import ControlCommit, OPERATIONS as COMMIT_OPERATIONS, install_control_schema
+from .retrieval import RetrievalSources, OPERATIONS as RETRIEVAL_OPERATIONS
 
 
 class ContextError(ValueError):
@@ -88,7 +89,7 @@ MUTATING_OPERATIONS = frozenset({
     'compact', 'organize', 'prepare_task', 'render', 'checkpoint', 'fold',
     'set_policy', 'policy_tick', 'set_session_enabled', 'record_usage',
     'state_bind', 'state_sync', 'resource_store', 'summary_store', 'result_store', 'result_mark', 'ved_note_store',
-    'effects_sync', 'effects_observe', 'effects_bind', 'catalog_delivered', 'control_record', 'control_tick',
+    'effects_sync', 'effects_observe', 'effects_bind', 'catalog_delivered', 'control_record', 'control_tick', 'source_read',
     'result_plan', 'result_plan_finish', 'result_upload_begin', 'result_upload_chunk', 'result_upload_finish', 'result_upload_abort',
     'snapshot_create', 'snapshot_checkout', 'snapshot_detach', 'snapshot_branch',
     'task_create','task_update','task_select','task_fork','task_attach','task_review',
@@ -1167,6 +1168,8 @@ class ContextStore:
 
     @atomic
     def dispatch(self, operation, arguments):
+        if operation in RETRIEVAL_OPERATIONS:
+            return getattr(RetrievalSources(self), operation)(**arguments)
         if operation == 'control_tick':
             ledger = ControlCommit(self.db, self.scope)
             request_id = arguments.get('request_id')

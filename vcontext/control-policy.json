@@ -9,7 +9,14 @@
     "online_batch_pages": 8,
     "history_batch_bytes": 262144,
     "result_batch_count": 2,
-    "result_max_bytes": 8388608
+    "result_max_bytes": 8388608,
+    "resolver_entries": 256,
+    "resolver_bytes": 131072,
+    "resolver_entry_bytes": 4096,
+    "retrieval_response_bytes": 65536,
+    "retrieval_step_bytes": 131072,
+    "retrieval_expand_nodes": 16,
+    "retrieval_expand_depth": 3
   },
   "reasons": {
     "OPEN": {

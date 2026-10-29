@@ -365,7 +365,10 @@ class StateTests(unittest.TestCase):
         self.assertEqual(chunk['next_offset'], 8)
         self.assertTrue(chunk['has_more'])
         default = self.state.resource_read(ref=resource['ref'])
-        self.assertEqual(len(default['content']), 65536)
+        self.assertLessEqual(len(default['content']), 65536)
+        self.assertEqual(default['content'], text[:default['next_offset']])
+        self.assertLessEqual(len(json.dumps(default, ensure_ascii=False, separators=(',', ':')).encode()) + 512, 131072)
+        self.assertTrue(default['has_more'])
         self.assertFalse(self.state.resource_read(ref=resource['ref'], offset=len(text))['has_more'])
         for args in [{'ref': resource['ref'], 'limit': 262145}, {'ref': resource['ref'], 'offset': -1},
                      {'ref': resource['ref'], 'path': 'src/core.py'}, {}, {'ref': 'vctx://resource/invalid'}]:

@@ -10,6 +10,9 @@ import { createResultProjection } from '../adapter/result-projection.mjs';
 import { createSessionBridge } from '../adapter/session-bridge.mjs';
 import { Service } from '../adapter/service.mjs';
 import { createControlCoordinator } from '../adapter/control/coordinator.mjs';
+import { createRequestAdmission } from '../adapter/control/admission.mjs';
+import { SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection';
+import * as dshContext from 'dsh-context';
 
 const body = '\ufeff原文 {{literal}}\r\n'.repeat(220);
 function appendResult(session, { name = 'read', text = body, isError = false, content, id = `call-${session.seq}` } = {}) {
@@ -23,7 +26,7 @@ function appendResult(session, { name = 'read', text = body, isError = false, co
     content: content ?? [{ type: 'text', text }], ...(isError ? { isError: true } : {}),
   }, ...(isError ? { error: { name: 'HarnessError', code: 'TEST_ERROR', reason: 'private' } } : {}) }, { surfaceOp: 'append' });
 }
-async function fixture(t, { real = false, coordinated = false } = {}) {
+async function fixture(t, { real = false, coordinated = false, admission = false } = {}) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'vctx-results-'));
   const root = new Context();
   const sessions = new SessionStore(root);
@@ -94,8 +97,14 @@ async function fixture(t, { real = false, coordinated = false } = {}) {
   const transport = service ?? memoryTransport;
   const bridge = real ? createSessionBridge(root, transport) : { sync: async () => ({ state: 'synced' }), dispose: async () => {} };
   const diagnostics = [];
+  let requestAdmission;
+  if (admission) {
+    new SessionProjectionRegistry(root);
+    const fiber = root.plugin(dshContext, {}); if (fiber.inertia) await fiber.inertia;
+    requestAdmission = createRequestAdmission(root);
+  }
   let coordinator = coordinated ? createControlCoordinator(root, transport) : undefined;
-  let controller = createResultProjection(root, transport, bridge, { record(...args) { diagnostics.push(args); } }, {}, { coordinator });
+  let controller = createResultProjection(root, transport, bridge, { record(...args) { diagnostics.push(args); } }, {}, { coordinator, requestAdmission });
   let fixtureTurn = 50;
   async function drive(action, input) {
     const queued = await controller[action](agent.id, input);
@@ -112,7 +121,7 @@ async function fixture(t, { real = false, coordinated = false } = {}) {
     } finally { session.append('turn/end', { turn, reason: { kind: 'completed' } }); }
   }
   t.after(async () => {
-    await controller.dispose(); await coordinator?.dispose(); await bridge.dispose(); await service?.dispose();
+    await controller.dispose(); requestAdmission?.dispose(); await coordinator?.dispose(); await bridge.dispose(); await service?.dispose();
     await root.fiber.dispose(); await rm(directory, { recursive: true, force: true });
   });
   return { root, sessions, session, agent, agents, transport, bridge, records, diagnostics, removeFlush,
@@ -122,9 +131,25 @@ async function fixture(t, { real = false, coordinated = false } = {}) {
     set failFlush(value) { failFlush = value; }, set failMark(value) { failMark = value; }, set held(value) { held = value; },
     async restart() { await controller.dispose(); await coordinator?.dispose();
       coordinator = coordinated ? createControlCoordinator(root, transport) : undefined;
-      controller = createResultProjection(root, transport, bridge, undefined, {}, { coordinator }); },
+      controller = createResultProjection(root, transport, bridge, undefined, {}, { coordinator, requestAdmission }); },
   };
 }
+
+test('恢复大正文前按同一公开投影检查容量，拒绝时引用与原文都保留', async t => {
+  const f = await fixture(t, { real: true, coordinated: true, admission: true });
+  f.session.append('request/header', { reason: 'initial', header: { config: { provider: 'offline', model: 'fixture', maxTokens: 64 } } });
+  f.session.append('request/context', { provider: 'offline', model: 'fixture', contextWindow: 1024 });
+  const original = appendResult(f.session, { text: 'LARGE_RESTORE_EVIDENCE '.repeat(3000) });
+  const projected = await f.project(original.seq);
+  const replacements = f.session.snapshotEvents().filter(e => e.surfaceOp?.op === 'replace').length;
+  await assert.rejects(f.restore(projected.ref), { code: 'REQUEST_CAPACITY' });
+  assert.equal(f.session.snapshotEvents().filter(e => e.surfaceOp?.op === 'replace').length, replacements);
+  assert.equal((await f.controller.inspect(f.agent.id)).results[0].status, 'projected');
+  assert.match((await f.transport.call(f.agent.id, 'result_read', { ref: projected.ref, limit: 500 })).content, /LARGE_RESTORE_EVIDENCE/);
+  const operations = await f.coordinator.status(f.agent.id);
+  assert.equal(operations.pending.length, 0);
+  assert.equal(operations.recent[0].state, 'not_applied');
+});
 
 test('统一提交账本在结果 append 后保存失败时保留计划，重启对账不进入维护或重复 append', async t => {
   const f = await fixture(t, { real: true, coordinated: true });

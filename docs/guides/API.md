@@ -499,3 +499,15 @@ control_status/read/record/tick 为宿主内部 RPC，模型拒绝 control_ 前�
 新增本机同源 `GET /vctx/control?session=<id>` 查询未决和近期回执；`POST /vctx/control` 接受 `{session,request_id,state,note}`，人工复核仅处理 intent/uncertain，note非空且最多512码点。state为confirmed/not_applied；confirmed只允许host_compact，精细动作不能凭说明伪造成功结果。入口只更新审计回执，不执行宿主动作或提升验证等级。未核实的操作保持未决。
 
 独立 vcc_schema1 不改主schema9，首次扩展非覆盖备份；32项未决不会按TTL过期，终态重放保留最近128项。control_status 的全部未决身份始终保留，近期详情按128KiB响应预算裁剪。完整契约见[C4说明](../../skills/dsh-context-control/references/coordinator.md)。写屏障不等于模型请求拦截，后者属于C5。
+
+## 开发分支：C5 有界恢复与请求准入（未发布）
+
+新增模型只读入口 context_resolve({ref})、context_read({ref,offset?,limit?,expected_source_version?})、context_expand({ref,offset?,max_nodes?,max_depth?})、context_find({query,offset?,limit?}) 和 context_status({})。来源包括资源、历史、原始结果、笔记、资源摘要及固定 `vctx://page/<id>/<version>` 页面修订。已知引用 miss 不替换成语义搜索；source_resolve/read/links 是宿主 RPC，模型拒绝 source_ 前缀。
+
+正常证据响应默认64KiB，同step合计128KiB；额度不足返回 incomplete/reason/continuation。来源展开默认16节点/3层，每页8条边，有界返回后续offset，不读正文或自动page_in。context_find只是现有证据目录的有界查询；资源目录仍用context_list。
+
+legacy read/resource_read/summary_read/result_read/history_read/evidence_read 接入读取额度。resource_read 同时限制完整JSON码点和UTF-8字节并预留封套空间，默认上限65536字符会因字节预算提前分页；按 next_offset 和固定 resource.ref/source_ref 续读。原字段、原文及hash保留。
+
+恢复结果正文前，用 detached Session 和公开投影检查最近路由容量；超限在append前拒绝。实际主请求在 llm/stream 适配器调用前检查当前路由窗口、消息/工具与投影新鲜度，超限抛 VCTX_REQUEST_CAPACITY 并保留原日志。reason=protected_capacity/request_capacity，返回 used/budget/gap 和估算来源。
+
+计量始终标 estimated_tokens、provider_token_guarantee=false；缺失/过期测量或能力不足时 available=false/enforced=false，继续原宿主流程，不宣称已保证容量。宿主可配置 requestAdmission=false；contextIntegration=false 会使计量不可用。context_status 返回本会话读取额度、缓存计数及最近主请求观测(as_of_seq)。详细范围及限制见[C5实际契约](../../skills/dsh-context-control/references/resolver.md)。

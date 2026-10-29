@@ -19,6 +19,7 @@ const ERRORS = {
   RECONCILE_REQUIRED: '宿主投影已保存，索引尚未确认；请重试同一操作进行对账。',
   NOT_IN_TURN: '工具结果投影只能在宿主真实模型步骤的开放轮次中应用。',
   DISPOSED: '工具结果投影服务已卸载。',
+  REQUEST_CAPACITY: '恢复后的请求超过当前可计量容量，未恢复正文。请先缩小上下文后重新排队。',
 };
 const fail = code => { throw Object.assign(new Error(ERRORS[code]), { code }); };
 const sha = value => createHash('sha256').update(value, 'utf8').digest('hex');
@@ -37,7 +38,7 @@ function requireOpenTurn(cut) {
 }
 
 /** Explicit, single-result STORE -> PROJECT / RESTORE using native Surface events. */
-export function createResultProjection(ctx, transport, sessionBridge, diagnostics, config = {}, { coordinator } = {}) {
+export function createResultProjection(ctx, transport, sessionBridge, diagnostics, config = {}, { coordinator, requestAdmission } = {}) {
   const lifetime = new AbortController();
   const pending = new Map();
   const automatic = new Map();
@@ -292,6 +293,14 @@ export function createResultProjection(ctx, transport, sessionBridge, diagnostic
     // A retry may find an accepted append even when flush/mark previously failed.
     // Re-flush and reconcile that append instead of adding a duplicate event.
     const noop = desired === visible.status || desired === 'restored' && visible.status === 'stored';
+    let capacity;
+    if (desired === 'restored' && !noop && requestAdmission) {
+      capacity = requestAdmission.previewReplacement(agent, cut, visible.event.seq, original, signal);
+      if (capacity.blocked) {
+        await transaction?.prepared({ capacity });
+        throw Object.assign(new Error(ERRORS.REQUEST_CAPACITY), { code: 'REQUEST_CAPACITY', capacity });
+      }
+    }
     const header = agent.session.requestHeader?.();
     const beforeBytes = describeContext(agent.session.deriveMessages(), header?.tools, header?.config).bytes;
     let surfaceSeq = visible.event.seq;
@@ -327,6 +336,7 @@ export function createResultProjection(ctx, transport, sessionBridge, diagnostic
     assertVisible();
     log(`context.result.${desired}`, agent.id, { source_seq: record.source_seq, surface_seq: surfaceSeq, noop });
     return { ref: record.ref, source_seq: record.source_seq, surface_seq: surfaceSeq,
+      ...(capacity ? { capacity } : {}),
       status: desired, bytes: record.bytes, noop, before_bytes: beforeBytes,
       after_bytes: describeContext(agent.session.deriveMessages(), header?.tools, header?.config).bytes };
   }
@@ -384,7 +394,7 @@ export function createResultProjection(ctx, transport, sessionBridge, diagnostic
               revision: plan.revision, status: 'failed', error_code: code }, control); } catch {}
           }
           log('context.result.apply.failed', agent.id, { error_code: code });
-          outcome.failed.push({ ref: plan.ref, error_code: code });
+          outcome.failed.push({ ref: plan.ref, error_code: code, ...(error.capacity ? { capacity: error.capacity } : {}) });
         }
       }
       return outcome;

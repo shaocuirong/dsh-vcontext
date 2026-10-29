@@ -20,7 +20,7 @@ export function describeContext(messages, tools = [], route = {}) {
   };
 }
 
-export function createLiveContext(ctx, { diagnostics, contextIntegration = true, access: suppliedAccess } = {}) {
+export function createLiveContext(ctx, { diagnostics, contextIntegration = true, access: suppliedAccess, admission } = {}) {
   const access = suppliedAccess ?? createSessionAccess(ctx, { diagnostics });
   let disposed = false, disposal;
   const sent = new Map();
@@ -79,6 +79,7 @@ export function createLiveContext(ctx, { diagnostics, contextIntegration = true,
       diagnostics?.record('context.derive.failed', 'warn', { error_type: 'Error' });
     }
     return { current, last_request: sent.get(sessionId) ?? null, checked_at: Date.now(),
+      ...(admission ? { admission: admission.status(sessionId) } : {}),
       auxiliary_calls: auxiliary.get(sessionId) ?? null,
       observations: structuredClone(observations.get(sessionId) ?? []),
       dsh_context: readContextIntegration(ctx, session, { enabled: contextIntegration, diagnostics }),
