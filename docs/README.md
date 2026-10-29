@@ -42,7 +42,7 @@
 ## 规划
 
 - [方案三：上下文控制层重构与优化](../skills/dsh-context-control/references/refactor-plan.md)
-- [上下文控制层 C0/C1 首批实施记录](../skills/dsh-context-control/references/progress.md)
+- [上下文控制层 C0–C2 实施记录](../skills/dsh-context-control/references/progress.md)
 - [上下文控制层维护 Skill](../skills/dsh-context-control/SKILL.md)
 - [会话连接分块重构：A1进度与后续边界](planning/SESSION-REFACTOR.md)
 - [History Paging Roadmap](planning/ROADMAP-HISTORY-PAGING.md)

@@ -467,3 +467,13 @@ v0.11.2：分页计划增加 `total_pages`（按 include_open 过滤后、max_pa
 模型可用 `result_list`、`result_read`：后者接受 ref、offset默认0、limit默认65536（1–262144）、expected_content_hash可选（含sha256:前缀）。offset/limit按Unicode码点，内容为序列化JSON文本，片段不保证可单独JSON解析；响应含 content、total_chars、next_offset、content_hash、has_more。最终JSON响应≤128KiB，必要时缩短片段，续读必须用返回的 next_offset；哈希不匹配拒绝续读。每次先校验完整对象，明确冷读取计入可观察访问，不自动加入L2。旧result_get仍只接受≤1MiB完整结果，大结果必须分页。
 
 新表独立版本为 vcr_transfer_schema1，旧 vcr_schema1 与主schema9不变；旧引用兼容，较大新结果不兼容旧整包读取客户端。完整协议、保护与恢复边界见[设计](../architecture/LONG-TASKS-0.16.0.md)。
+
+## 开发分支：C2 源版本与适用性（未发布）
+
+resource_capture 新增 version_descriptor 与 currentness。resource_read(path) 仍返回已保存内容；原有 resourceCapture=true 时才允许经宿主 fs 有界重验当前文件，默认不隐式读盘。现场观察可能与返回的快照哈希不同，不能把旧正文当成当前文件。
+
+currentness.freshness 为 fresh/stale/pending/unknown；只有本次现场匹配且 filesystem_verified=true 才可标 fresh。账本未观察到变更不证明磁盘没变。summary_read 同样返回基于资源来源的 currentness，原摘要和固定 ref 不被覆盖；pinned path 不访问现场。
+
+version_descriptor 区分 git_worktree/snapshot，记录工作树作用域、commit、路径范围 dirty 与内容指纹；dirty 不代表全仓状态。stored_snapshot 带已保存 ref；observation_only 只记录现场指纹，不承诺能恢复未保存正文。
+
+effects_status/sync/observe/freshness/bind 均为 host-only，模型入口拒绝 effects_ 前缀。独立 vfx_schema1 不改变旧事件哈希；schema9 首次扩展前自动创建非覆盖备份。实际契约见[C2说明](../../skills/dsh-context-control/references/effects.md)。

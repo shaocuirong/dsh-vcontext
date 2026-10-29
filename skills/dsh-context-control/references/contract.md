@@ -67,6 +67,8 @@ changed_paths 溢出、未知 shell 效果和外部编辑要反映 coverage。�
 
 ## 4. 失效信号
 
+C2 的本会话效果、现场版本及 host-only 操作已实现，见[实际契约](effects.md)。以下通用目录契约仍需 C3 消费；effects revision 不等于全局索引版本。
+
 分别记录 freshness(fresh/stale/unknown/pending)、assessment 和 commit_state。源变更撤销当前适用性，不删除历史；先撤销过期声明，再按预算重算。
 
 变更账本：

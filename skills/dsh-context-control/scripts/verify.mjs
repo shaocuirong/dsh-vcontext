@@ -7,6 +7,7 @@ import { spawnSync } from 'node:child_process';
 
 // 显式选择仓库与验证范围；不安装依赖、不读取正式配置、不自动切分支。
 const profiles = {
+  effects: ['context-effects', 'context-versions', 'session-bridge', 'resource-capture', 'snapshot-request'],
   foundation: ['context-control-contract', 'context-control-planner', 'context-control-commit',
     'session-write', 'open-result-planner', 'automation', 'replacement'],
   existing: ['history-segmenter', 'open-result-planner', 'history-archive', 'result-projection',
@@ -16,7 +17,7 @@ const profiles = {
     'context-effects', 'context-resolver', 'context-control-commit'],
 };
 const pythonTests = ['test_automation.py', 'test_quota.py', 'test_core_quota.py', 'test_task_state.py',
-  'test_evidence.py', 'test_session_snapshots.py', 'test_result_store.py', 'test_result_chunks.py', 'test_control_policy.py'];
+  'test_evidence.py', 'test_session_snapshots.py', 'test_result_store.py', 'test_result_chunks.py', 'test_control_policy.py', 'test_effects.py'];
 const skillRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const fail = message => { console.error('验证前置条件失败：' + message); process.exit(2); };
 let values, root;
@@ -27,7 +28,7 @@ try {
     help: { type: 'boolean', default: false },
   }, allowPositionals: false }));
   if (values.help) {
-    console.log('verify.mjs --repo <绝对路径> --profile package|foundation|existing|connection|scheduler|python [--list] [--python <解释器>]');
+    console.log('verify.mjs --repo <绝对路径> --profile package|foundation|effects|existing|connection|scheduler|python [--list] [--python <解释器>]');
     process.exit(0);
   }
   if (!values.repo || !isAbsolute(values.repo)) throw new Error('必须提供 --repo 仓库绝对路径');

@@ -1,4 +1,4 @@
-# 上下文控制层：C0/C1 首批实施记录
+# 上下文控制层：C0–C2 实施记录
 
 日期：2026-10-29。分支 codex/context-control。设计与发行基线 v0.17.0 / 2dcb2b7，已合并本地连接层 4afb083，未推送、发版或启用正式插件。
 
@@ -8,16 +8,16 @@
 |---|---|
 | C0 | 首批落地：一份 Node/Python 策略、动作边界、保护依据、独立预算 DTO、带必要版本读集的不可变计划 |
 | C1 | 首批落地：历史整页与开放 turn 正文共用候选投影，手动/自动换页共用结构检查，事务内守卫保留 |
-| C2 | 未实施：完整版本描述符、工具变更账本、反向依赖及当前路径校验 |
+| C2 | 已落地：本会话工具变更账本、工作树/快照版本、资源/摘要依赖、现场哈希核验与后台回填 |
 | C3 | 未实施：page/resource 统一目录、1c 投影与接续 delta |
 | C4 | 先行接入 host_compact 的共享 withWrite；统一协调器、跨执行器仲裁和持久对账仍未完成 |
 | C5 | 未实施：解析缓存、恢复准入与真实请求阻断能力 |
 | C6 | 未实施：阶段摘要生成/评审/激活 |
 | C7 | 未实施：测量驱动的策略优化 |
 
-首批不是完整方案三，不能据此声称已经具备自动索引失效或自动阶段摘要。
+当前完成至 C2；统一目录消费失效、1c 投影刷新和自动阶段摘要仍待后续节点，不能称完整方案三。
 
-## 运行时变化
+## C0/C1 基础变化
 
 - vcontext/control-policy.json 是唯一原因语义及兼容默认值来源；Node protocol 和 Python control_policy 共同读取，Python wheel 显式包含 JSON。
 - adapter/control/planner.mjs 合并整页与正文的公共保护；仍保留不同结构边界、大小约束和当前资格规则。原 reason 值、排序和 recent/min-resident/cold-restore 兼容。
@@ -30,7 +30,7 @@
 
 没有改变宿主日志、真实步骤、工具配对、原文恢复、数据库主 schema 或正式配置。没有把 compact 当成自定义页摘要服务；grant.requestId 仍不是宿主幂等保证。
 
-## 验证
+## C0/C1 验证记录
 
 | 命令/检查 | 实际结果 |
 |---|---|
@@ -52,9 +52,26 @@
 
 本地提交节点：8d7205c（共享契约与候选）、716a29e（宿主压缩共享写入口）。设计与 skill 的初始提交为 cff2b00，连接层合并为 dc7f959。
 
-下一节点为 C2。先建立已知工具契约提取与 effects ledger，观察游标不足时把当前适用性标 unknown/pending；不要复用裁剪后的导航 paths 当完整写集。详见 refactor-plan.md 和 contract.md。
+下一节点为 C3。使用现有 effects ledger、观察水位和资源/摘要依赖建设统一目录，不复用裁剪后的导航 paths 当完整写集。详见 refactor-plan.md 和 contract.md。
 
-此后再进入 C3 统一目录，避免在没有失效来源时先做“最新索引”。C4 的精细动作能力也须与 compaction 独立，不因已接入 withWrite 就跳过业务持久化协议。
+C4 的精细动作能力仍须与 compaction 独立，不因已接入 withWrite 就跳过业务持久化协议。
 
 新专项可通过 verify.mjs 的 foundation profile 执行；scheduler profile 仍需要未来尚未实现的测试文件，缺失必须失败。
+
+## C2 实施与验证
+
+本地运行时提交：27f517f。
+
+- vfx_schema1 独立扩展，旧 schema9 在首次扩展前自动建立非覆盖备份，未来版本拒绝降级；本轮仅测试临时数据库。
+- Bridge 同一 LiveCut 同步独立变更游标，不修改旧事件哈希。开始/结果关联 native 与 PTC，继承/投影不记新执行；未知范围、失败、取消均保持保守信号。
+- 每切片最多4批、每批32项；未赶上返回 pending，后台让出执行机会后续批，不依赖模型步骤。dispose 与 Agent 释放会取消续批。
+- 已保存资源和摘要保持原样；summary_store 绑定实际来源，summary_read 带 currentness。账本“未见变更”不直接标 fresh，现场读取必须经宿主权限与 CAS。
+- Git 描述限定工作树和路径范围；连续 dirty 编辑由内容指纹区分。生成物、非 Git 和其他文件系统映射为 snapshot。stored_snapshot 有保存 ref，observation_only 不承诺恢复未保存正文。
+- 现场校验沿用 resourceCapture 开关及256KiB限制，默认不读盘；固定 ref 和 pinned path 继续读历史。
+
+最终完整 Node：312通过、0失败、0跳过；完整 Python：235通过、0失败、0跳过。本地 wheel 构建成功，effects.py/core.py/migrations.py 与 wheel 字节一致；doctor、release metadata 与 diff 检查通过。
+
+Node 的临时 Git/junction/localhost 夹具在允许能力的环境执行。未跑远端CI、真实模型费用/质量、浏览器交互或正式宿主重启。发行版本仍为0.17.0，未推送、发版或启用正式插件。
+
+C2 详细契约见 [effects.md](effects.md)。专项用 effects profile；账本仅覆盖本会话观察，跨会话实时推送与任意外部服务适配未提供，现场校验负责发现外部内容变化。
 
