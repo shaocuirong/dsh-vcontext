@@ -20,6 +20,13 @@ export function createSessionAccess(ctx, { diagnostics } = {}) {
     scope.check();
     return consume(readView(ctx, session, id, 'session.deriveMessages', scope));
   }
+  async function observe(scope, current, ...args) {
+    try { return await current.observe(...args); }
+    catch (error) {
+      scope.check();
+      throw accessError(error?.code === 'SESSION_QUERY_SESSION_NOT_FOUND' ? 'NOT_FOUND' : 'HISTORY_READ_FAILED');
+    }
+  }
   return {
     capabilities() {
       const current = hostFaces(ctx);
@@ -28,9 +35,14 @@ export function createSessionAccess(ctx, { diagnostics } = {}) {
     },
     projectOf(agent, { signal } = {}) {
       return lifetime.run(signal, async scope => {
-        const project = await waitFor(resolveProjectRoot(ctx, agent), scope.signal);
-        scope.check();
-        return project;
+        try {
+          const project = await waitFor(resolveProjectRoot(ctx, agent), scope.signal);
+          scope.check();
+          return project;
+        } catch {
+          scope.check();
+          throw accessError('UNAVAILABLE');
+        }
       });
     },
     withRead(id, { signal } = {}, consume) {
@@ -38,14 +50,14 @@ export function createSessionAccess(ctx, { diagnostics } = {}) {
         if (!validId(id) || typeof consume !== 'function') throw accessError('INVALID_INPUT');
         let current = faces(scope), live = getLive(current, id);
         if (live) return consumeLive(scope, live, id, consume);
-        return cold.admit(scope.signal, async () => {
+        return cold.admit(scope.signal, async retain => {
           scope.check();
           current = faces(scope); live = getLive(current, id);
           if (live) return consumeLive(scope, live, id, consume);
           if (!current.observe || !current.prepare) throw accessError('HISTORY_UNAVAILABLE');
           scope.bind('sessionQuery', current.query);
           try {
-            return await withObservation(scope, current.observe, id, release, async observation => {
+            return await withObservation(scope, (...args) => observe(scope, current, ...args), id, release, async observation => {
               const attached = getLive(current, id);
               if (attached) return consumeLive(scope, attached, id, consume);
               validateObservation(observation, id);
@@ -53,7 +65,7 @@ export function createSessionAccess(ctx, { diagnostics } = {}) {
                 meta: structuredClone(observation.header), inheritedEventCount: observation.inheritedEventCount ?? 0,
                 eventState: 'shared-frozen' });
               return consume(readView(ctx, session, id, 'sessionQuery.observeSession', scope, observation));
-            });
+            }, retain);
           } catch (error) {
             scope.check();
             if (error?.code === 'SESSION_QUERY_SESSION_NOT_FOUND') throw accessError('NOT_FOUND');
@@ -71,9 +83,9 @@ export function createSessionAccess(ctx, { diagnostics } = {}) {
         const current = hostFaces(ctx);
         if (!current.observe) throw accessError('HISTORY_UNAVAILABLE');
         scope.bind('sessionQuery', current.query);
-        return withObservation(scope, current.observe, agent.id, release, observation => {
+        return withObservation(scope, (...args) => observe(scope, current, ...args), agent.id, release, observation => {
           const cut = validateObservation(observation, agent.id, agent, consistency);
-          return consume(Object.freeze(cut));
+          return consume(Object.freeze({ ...cut, signal: scope.signal, check: scope.check }));
         });
       });
     },

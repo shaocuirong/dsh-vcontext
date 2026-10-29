@@ -31,11 +31,13 @@ export function observationReleaser(diagnostics) {
 }
 
 // 取消时立即回收当前lease，忽略取消的宿主迟到返回时也走同一幂等释放器。
-export async function withObservation(scope, observe, id, release, consume) {
-  const observation = await waitFor(Promise.resolve().then(() => {
+export async function withObservation(scope, observe, id, release, consume, retain = () => {}) {
+  const request = Promise.resolve().then(() => {
     scope.check();
     return observe(id, { projectionMode: 'none', signal: scope.signal });
-  }), scope.signal, release);
+  });
+  retain(request);
+  const observation = await waitFor(request, scope.signal, release);
   const abort = () => release(observation);
   scope.signal.addEventListener('abort', abort, { once: true });
   try {

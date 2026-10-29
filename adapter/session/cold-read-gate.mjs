@@ -10,7 +10,10 @@ export function createColdReadGate(maxPending = 32) {
     if (!entry) return;
     running = true;
     entry.signal.removeEventListener('abort', entry.abort);
-    Promise.resolve().then(entry.work).then(entry.resolve, entry.reject).finally(() => {
+    const retained = [];
+    Promise.resolve().then(() => entry.work(task => retained.push(task))).then(entry.resolve, entry.reject).finally(async () => {
+      // 外层取消可先返回，但忽略取消的宿主观察完成前不能并发启动第二份冷历史。
+      await Promise.allSettled(retained);
       running = false;
       pump();
     });

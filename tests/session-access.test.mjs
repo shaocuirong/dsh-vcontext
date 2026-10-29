@@ -276,3 +276,36 @@ test('未知宿主读取错误归一化，不向外暴露正文', async t => {
   await assert.rejects(f.access.withRead('cold', {}, () => null), { code: 'NOT_FOUND' });
 });
 
+
+test('运行中的冷观察取消后仍占准入槽，直到忽略取消的宿主真正返回', async t => {
+  const f = fixture(t), host = deferred(), entered = deferred();
+  const original = f.query.observeSession.bind(f.query);
+  let calls = 0;
+  f.query.observeSession = (...args) => {
+    calls++;
+    if (calls === 1) { entered.resolve(); return host.promise; }
+    return original(...args);
+  };
+  const control = new AbortController();
+  const first = f.access.withRead('first', { signal: control.signal }, () => null);
+  const cancelled = assert.rejects(first);
+  await entered.promise;
+  control.abort();
+  await cancelled;
+  const second = f.access.withRead('second', {}, () => 'second');
+  await tick();
+  assert.equal(calls, 1);
+  let released = 0;
+  host.resolve({ header: { id: 'first' }, events: [], [Symbol.dispose]() { released++; } });
+  assert.equal(await second, 'second');
+  assert.equal(calls, 2); assert.equal(released, 1);
+});
+
+test('项目解析及活跃观察的宿主异常只暴露稳定错误码', async t => {
+  const f = fixture(t);
+  const agent = { id: 'cold', session: { header: { cwd: join(tmpdir(), 'SECRET_NONEXISTENT_vctx_access') } } };
+  await assert.rejects(f.access.projectOf(agent), error => error.code === 'UNAVAILABLE' && !error.message.includes('SECRET'));
+  f.query.observeSession = async () => { throw new Error('SECRET_QUERY'); };
+  await assert.rejects(f.access.withLiveCut({ id: 'live', session: { seq: 0 } }, {}, () => null),
+    error => error.code === 'HISTORY_READ_FAILED' && !error.message.includes('SECRET'));
+});

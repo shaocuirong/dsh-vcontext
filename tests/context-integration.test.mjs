@@ -32,7 +32,7 @@ test('native dsh-context 0.74 projection connects, follows replacement and unloa
     assert.equal(replaced.as_of_seq, session.seq - 1);
     await fiber.dispose();
     assert.equal((await live.read(session.id)).dsh_context.status, 'plugin-unavailable');
-  } finally { live.dispose(); await root.fiber.dispose(); }
+  } finally { await live.dispose(); await root.fiber.dispose(); }
 });
 
 test('integration prefers official pressure and keeps disjoint cumulative usage separate', () => {

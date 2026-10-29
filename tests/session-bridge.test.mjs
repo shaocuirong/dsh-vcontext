@@ -9,11 +9,13 @@ import { SystemPrompt } from '@deepseek-ai/dsh-system-prompt';
 import { ToolRuntime, defineTool } from '@deepseek-ai/dsh-tools';
 import { HarnessError } from '@deepseek-ai/dsh-llm';
 import { createSessionBridge } from '../adapter/session-bridge.mjs';
+import { createSessionAccess } from '../adapter/session/access.mjs';
+import { createLiveContext } from '../adapter/live-context.mjs';
 import { Service } from '../adapter/service.mjs';
 
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
-async function fixture(t, { eventCount = 0, cwd = true } = {}) {
+async function fixture(t, { eventCount = 0, cwd = true, sharedAccess = false } = {}) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'vctx-bridge-'));
   const root = new Context();
   const store = new SessionStore(root);
@@ -57,12 +59,13 @@ async function fixture(t, { eventCount = 0, cwd = true } = {}) {
     }
     return { processed_seq: row.processed_seq, counts: { events: row.events.length } };
   } };
-  const bridge = createSessionBridge(root, transport, { record(...args) { diagnostics.push(args); } });
+  const access = sharedAccess ? createSessionAccess(root) : undefined;
+  const bridge = createSessionBridge(root, transport, { record(...args) { diagnostics.push(args); } }, { access });
   t.after(async () => {
-    await bridge.dispose(); await root.fiber.dispose();
+    await bridge.dispose(); await access?.dispose(); await root.fiber.dispose();
     await rm(directory, { recursive: true, force: true });
   });
-  return { root, store, session, agent, agents, query, bridge, transport, rows, calls, diagnostics, directory,
+  return { root, store, session, agent, agents, query, bridge, access, transport, rows, calls, diagnostics, directory,
     get reads() { return reads; }, get released() { return released; } };
 }
 
@@ -511,4 +514,60 @@ test('SQLite associates a native result with its call across batch boundaries an
     assert.ok(batches.flatMap(batch => batch.events).filter(event => event.type === 'tool/result')
       .every(event => !Object.hasOwn(event, 'tool')), 'native results always omit the tool name');
   } finally { await bridge.dispose(); await transport.dispose(); }
+});
+
+test('两个使用方共享Access，关闭消费者不关闭注入的公共实例', async t => {
+  const f = await fixture(t, { eventCount: 1, sharedAccess: true });
+  const live = createLiveContext(f.root, { access: f.access });
+  await live.read(f.agent.id);
+  await live.dispose();
+  assert.equal(f.access.capabilities().disposed, false);
+  assert.equal((await f.bridge.sync(f.agent)).state, 'synced');
+  await f.bridge.dispose();
+  assert.equal(f.access.capabilities().disposed, false);
+  assert.equal(await f.access.withLiveCut(f.agent, {}, cut => cut.events.length), 1);
+});
+
+test('同步卸载不等待忽略取消的观察，迟到lease回收且状态不复活', async t => {
+  const f = await fixture(t, { eventCount: 1 });
+  let resolveObservation, entered;
+  const started = new Promise(resolve => { entered = resolve; });
+  const original = f.query.observeSession.bind(f.query);
+  f.query.observeSession = async (...args) => {
+    const observation = await original(...args);
+    entered();
+    await new Promise(resolve => { resolveObservation = resolve; });
+    return observation;
+  };
+  const syncing = f.bridge.sync(f.agent);
+  await started;
+  await f.bridge.dispose();
+  assert.equal((await syncing).error_code, 'CANCELLED');
+  const calls = f.calls.length;
+  resolveObservation();
+  await tick();
+  assert.equal(f.released, 1);
+  assert.equal(f.calls.length, calls);
+  assert.equal(f.bridge.status(f.agent.id), null);
+});
+
+test('查询能力消失会取消同步RPC，迟到响应不得推进本地游标或新批次', async t => {
+  const f = await fixture(t, { eventCount: 259 });
+  let entered, release;
+  const started = new Promise(resolve => { entered = resolve; });
+  const original = f.transport.call.bind(f.transport);
+  f.transport.call = async (...args) => {
+    if (args[1] !== 'state_sync') return original(...args);
+    entered();
+    await new Promise(resolve => { release = resolve; });
+    return { processed_seq: args[2].through_seq };
+  };
+  const syncing = f.bridge.sync(f.agent);
+  await started;
+  f.root.set('sessionQuery', {});
+  // 服务替换本身不保证立即发出卸载通知；下一次能力检查必须阻止旧切片继续。
+  release();
+  const result = await syncing;
+  assert.equal(result.state, 'failed');
+  assert.equal(result.processed_seq, -1);
 });

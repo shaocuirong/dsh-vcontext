@@ -1,5 +1,4 @@
-// Optional read-only bridge to dsh-context 0.74's public projection contract.
-// No imports of private implementation, raw event logs or detail collections.
+// 可选读取dsh-context 0.74公开投影；不导入私有实现或读取其明细集合。
 const KEYS = ['contextTimeline', 'contextPressure', 'contextBreakdown', 'tokenUsage'];
 const number = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
 function selectNumbers(value, keys) {
@@ -12,7 +11,9 @@ export function readContextIntegration(ctx, session, { enabled = true, diagnosti
   try {
     const registry = ctx.get('sessionProjections');
     if (typeof registry?.snapshot !== 'function') return { status: 'registry-unavailable' };
-    const snapshot = registry.snapshot(session, KEYS);
+    // 只读门面通过绑定方法访问真实Session，复用宿主投影的实例缓存。
+    const snapshot = typeof session.snapshotProjections === 'function'
+      ? session.snapshotProjections(KEYS) : registry.snapshot(session, KEYS);
     const values = snapshot?.values ?? {};
     const timeline = values.contextTimeline;
     if (timeline?.unsupported) return { status: 'unsupported', minimum: String(timeline.unsupported.minimum).slice(0, 80) };
