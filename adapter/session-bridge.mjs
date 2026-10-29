@@ -48,7 +48,7 @@ function metadata(event, inherited) {
  * 队列只保存Agent引用与待同步标记，不复制原始历史。
  * 同时只物化一个观察切片，RPC按有界批次提交。
  */
-export function createSessionBridge(ctx, transport, diagnostics, { access: suppliedAccess } = {}) {
+export function createSessionBridge(ctx, transport, diagnostics, { access: suppliedAccess, effects } = {}) {
   const access = suppliedAccess ?? createSessionAccess(ctx, { diagnostics });
   const sessions = new Map();
   const lifetime = new AbortController();
@@ -76,6 +76,13 @@ export function createSessionBridge(ctx, transport, diagnostics, { access: suppl
       if (!Number.isSafeInteger(cursor) || cursor < -1 || cursor >= events.length && cursor !== -1)
         fail('HISTORY_INVALID');
       entry.state.processed_seq = cursor;
+      // 独立游标读取同一切片，不给既有事件白名单增加字段或改变历史哈希。
+      if (effects) {
+        entry.state.effects = await effects.syncCut(agent,
+          { events, inheritedEventCount: inherited, signal: cutSignal, check }, project);
+        check();
+        if (!entry.state.effects.caught_up) entry.dirty = true;
+      }
       let batch = [];
       // 信任宿主已接受的不可变前缀；重发一个边界事件供数据库核对元数据哈希。
       // 这只能检查边界变化，不能声称检测整个旧前缀的改写；新增序列仍须连续。
@@ -113,12 +120,13 @@ export function createSessionBridge(ctx, transport, diagnostics, { access: suppl
       return Promise.resolve({ state: 'unbound', error_code: 'UNBOUND', processed_seq: -1 });
     let entry = sessions.get(id);
     if (entry?.promise) { entry.dirty = true; return entry.promise; }
+    if (entry?.effectTimer) { clearTimeout(entry.effectTimer); entry.effectTimer = null; }
     if ([...sessions.values()].filter(value => value.promise).length >= MAX_PENDING)
       return Promise.resolve({ state: 'failed', error_code: 'BUSY', processed_seq: entry?.state.processed_seq ?? -1 });
     if (!entry) {
       if (sessions.size >= MAX_SESSIONS) {
         const oldest = [...sessions].find(([, value]) => !value.promise);
-        if (oldest) sessions.delete(oldest[0]);
+        if (oldest) { clearTimeout(oldest[1].effectTimer); sessions.delete(oldest[0]); }
       }
       entry = { state: { state: 'queued', processed_seq: -1, counts: {} }, dirty: true, agent };
       sessions.set(id, entry);
@@ -143,6 +151,15 @@ export function createSessionBridge(ctx, transport, diagnostics, { access: suppl
         record('session.bridge.failed', 'warn', { error_code: code,
           session_hash: createHash('sha256').update(id).digest('hex').slice(0, 12) });
       } finally { entry.promise = null; }
+      // 历史回填在批次间让出执行机会，不依赖用户继续运行模型步骤。
+      // 失败不自动重试，只有已推进且仍落后的观察才续批。
+      if (!disposed && effects && entry.agent && entry.state.state === 'pending' && !entry.state.effects?.caught_up) {
+        entry.effectTimer = setTimeout(() => {
+          entry.effectTimer = null;
+          if (!disposed && entry.agent) void sync(entry.agent);
+        }, 20);
+        entry.effectTimer.unref?.();
+      }
       return snapshot(entry);
     };
     entry.promise = queue.then(execute);
@@ -157,6 +174,7 @@ export function createSessionBridge(ctx, transport, diagnostics, { access: suppl
   }));
   disposers.push(ctx.on('agent/disposed', ({ agent }) => {
     const entry = sessions.get(agent?.id);
+    clearTimeout(entry?.effectTimer);
     if (entry && !entry.promise) sessions.delete(agent.id);
     else if (entry) entry.agent = null;
   }));
@@ -167,6 +185,7 @@ export function createSessionBridge(ctx, transport, diagnostics, { access: suppl
       if (disposal) return disposal;
       disposed = true;
       lifetime.abort();
+      for (const entry of sessions.values()) clearTimeout(entry.effectTimer);
       for (const dispose of disposers) if (typeof dispose === 'function') dispose();
       disposal = (async () => {
         await queue;
