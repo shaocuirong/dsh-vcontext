@@ -9,6 +9,7 @@ export const MUTATING_OPERATIONS = new Set([
   'set_policy', 'policy_tick', 'set_session_enabled',
   'record_usage',
   'state_bind', 'state_sync', 'resource_store', 'resource_capture', 'summary_store',
+  'stage_prepare', 'stage_propose', 'stage_review', 'stage_activate',
   'effects_sync', 'effects_observe', 'effects_bind', 'catalog_delivered', 'control_record', 'control_tick', 'source_read',
   'result_store', 'result_mark', 'result_plan', 'result_plan_finish', 'ved_note_store',
   'result_upload_begin', 'result_upload_chunk', 'result_upload_finish', 'result_upload_abort',
@@ -21,6 +22,7 @@ export const MUTATING_OPERATIONS = new Set([
 
 export const READ_OPERATIONS = new Set([
   'history', 'snapshot', 'prefix', 'metrics', 'status', 'quota_status',
+  'stage_read', 'stage_list', 'stage_context',
   'auto_status', 'auto_preview', 'auto_guard',
   'effects_status', 'effects_freshness', 'catalog_resources', 'catalog_baseline', 'control_status', 'control_read', 'source_resolve', 'source_links',
   'checkpoints', 'schedule', 'replacement_policy', 'session_state', 'dashboard', 'usage',

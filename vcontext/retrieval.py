@@ -85,6 +85,12 @@ class RetrievalSources:
             note = EvidenceNotes(self.store.db, self.store.scope).ved_note_read(ref)
             return dict(ref=ref, kind='page', source_type='evidence', form='summary', source_version=note['source_version'],
                         bytes=len(note['summary'].encode()), chars=len(note['summary']), read_operation='source_read')
+        if re.fullmatch(r'vctx://stage/[a-f0-9]{32}', ref):
+            from .stages import StageState
+            value = StageState(self.store).stage_read(ref)
+            text = _json(value['candidate']['capsule'])
+            return dict(ref=ref, kind='page', source_type='stage', form='summary',
+                        source_version=value['source_version'], bytes=len(text.encode()), chars=len(text), read_operation='source_read')
         raise ValueError('unsupported fixed source reference')
 
     def source_read(self, ref=None, page_id=None, version=None, offset=0, limit=16384,
@@ -116,6 +122,11 @@ class RetrievalSources:
                 metadata = {k: v for k, v in value['summary'].items() if k != 'content'}
                 return bounded_text(text, offset, limit, lambda content, page: dict(value,
                     summary=dict(metadata, content=content), **page), max_bytes)
+        elif locator['source_type'] == 'stage':
+            from .stages import StageState
+            value = StageState(self.store).stage_read(ref)
+            text = _json(value['candidate']['capsule'])
+            assessment = dict(assessment='not_tested', semantic_review=value['review'], currentness=value['currentness'])
         else:
             note = EvidenceNotes(self.store.db, self.store.scope).ved_note_read(ref)
             text = note['summary']
@@ -138,6 +149,10 @@ class RetrievalSources:
                 WHERE s.namespace=? AND s.session_id=? AND s.summary_id=? ORDER BY s.position''',
                 (*self.state._scope, ref.split('/')[-1]))
             sources = [dict(ref='vctx://resource/' + row['resource_id'], source_version=row['content_hash']) for row in rows]
+        elif locator['source_type'] == 'stage':
+            from .stages import StageState
+            sources = [dict(ref=s['ref'], source_version=s['source_version'])
+                       for s in StageState(self.store).stage_read(ref)['basis']['sources']]
         else:
             sources = []
         items = sources[offset:offset + limit]

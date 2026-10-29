@@ -7,7 +7,7 @@ const idOK = value => typeof value === 'string' && value.length > 0 && value.len
 const refKind = ref => {
   if (typeof ref !== 'string' || ref.length > 256) fail('INVALID_INPUT');
   if (/^vctx:\/\/history\/[a-f0-9]{16}\/[0-9]+$/u.test(ref)) return 'history';
-  const match = /^vctx:\/\/(resource|summary|evidence|result)\/[a-f0-9]{32}$/u.exec(ref);
+  const match = /^vctx:\/\/(resource|summary|evidence|result|stage)\/[a-f0-9]{32}$/u.exec(ref);
   if (match) return match[1];
   if (/^vctx:\/\/page\/[a-f0-9]{32}\/[1-9][0-9]*$/u.test(ref)) return 'page';
   fail('INVALID_INPUT');
@@ -182,7 +182,7 @@ export function createContextResolver(ctx, getTransport, history, evidence) {
         const locator = await resolve(exec.agent, item.ref, exec.signal); seen.add(item.ref); nodes.push(locator);
         basis ??= scope(exec.agent);
         if (scope(exec.agent) !== basis) fail('CHANGED');
-        if (!['summary', 'evidence'].includes(locator.source_type)) continue;
+        if (!['summary', 'evidence', 'stage'].includes(locator.source_type)) continue;
         if (item.depth >= max_depth) { continuation.push({ ref: item.ref, offset: item.offset }); continue; }
         const links = await getTransport().call(exec.agent.id, 'source_links', { ref: item.ref, offset: item.offset, limit: available < 8192 ? 1 : 8 }, exec.signal);
         if (links.source_version !== locator.source_version) fail('CHANGED');

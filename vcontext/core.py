@@ -24,6 +24,7 @@ from .effects import EffectsState, OPERATIONS as EFFECT_OPERATIONS, install_effe
 from .catalog import CatalogState, OPERATIONS as CATALOG_OPERATIONS, install_catalog_schema
 from .control_commit import ControlCommit, OPERATIONS as COMMIT_OPERATIONS, install_control_schema
 from .retrieval import RetrievalSources, OPERATIONS as RETRIEVAL_OPERATIONS
+from .stages import StageState, OPERATIONS as STAGE_OPERATIONS, install_stage_schema
 
 
 class ContextError(ValueError):
@@ -90,6 +91,7 @@ MUTATING_OPERATIONS = frozenset({
     'set_policy', 'policy_tick', 'set_session_enabled', 'record_usage',
     'state_bind', 'state_sync', 'resource_store', 'summary_store', 'result_store', 'result_mark', 'ved_note_store',
     'effects_sync', 'effects_observe', 'effects_bind', 'catalog_delivered', 'control_record', 'control_tick', 'source_read',
+    'stage_prepare', 'stage_propose', 'stage_review', 'stage_activate',
     'result_plan', 'result_plan_finish', 'result_upload_begin', 'result_upload_chunk', 'result_upload_finish', 'result_upload_abort',
     'snapshot_create', 'snapshot_checkout', 'snapshot_detach', 'snapshot_branch',
     'task_create','task_update','task_select','task_fork','task_attach','task_review',
@@ -245,6 +247,7 @@ class ContextStore:
         install_effect_schema(self.db)
         install_catalog_schema(self.db)
         install_control_schema(self.db)
+        install_stage_schema(self.db)
         self.quota = QuotaLedger(self.db, self.scope, project='default', defaults=self._quota_defaults)
         self.quota.sync(self._resident_units(), enforce=False, operation='initialize', managed_prefix='page:')
         self.automation = Automation(self)
@@ -1168,6 +1171,8 @@ class ContextStore:
 
     @atomic
     def dispatch(self, operation, arguments):
+        if operation in STAGE_OPERATIONS:
+            return getattr(StageState(self), operation)(**arguments)
         if operation in RETRIEVAL_OPERATIONS:
             return getattr(RetrievalSources(self), operation)(**arguments)
         if operation == 'control_tick':
@@ -1197,7 +1202,21 @@ class ContextStore:
         if operation in COMMIT_OPERATIONS:
             return getattr(ControlCommit(self.db, self.scope), operation)(**arguments)
         if operation in CATALOG_OPERATIONS:
-            return getattr(CatalogState(self.db, self.scope), operation)(**arguments)
+            result = getattr(CatalogState(self.db, self.scope), operation)(**arguments)
+            if operation == 'catalog_resources':
+                stage = StageState(self)
+                result['stage'] = stage.stage_context()
+                representations, truncated = stage.representations()
+                result.setdefault('representations', []).extend(representations)
+                result['representations_truncated'] = result.get('representations_truncated', False) or truncated
+                while len(pack(result).encode()) > 126000 and result['representations']:
+                    result['representations'].pop()
+                    result['representations_truncated'] = True
+                while len(pack(result).encode()) > 126000 and result['items']:
+                    result['items'].pop()
+                    result['next_offset'] = arguments.get('offset', 0) + len(result['items'])
+                    result['has_more'] = True
+            return result
         if operation in EFFECT_OPERATIONS:
             return getattr(EffectsState(self.db, self.scope), operation)(**arguments)
         if operation in EVIDENCE_OPERATIONS:
@@ -1220,6 +1239,12 @@ class ContextStore:
             return result
         if operation in STRUCTURED_OPERATIONS or operation in SNAPSHOT_OPERATIONS or operation in TASK_OPERATIONS:
             result = TaskState(self.db, self.scope).dispatch(operation, arguments)
+            if operation in ('task_update', 'task_attach') and not result.get('replayed') and result['task']['status'] == 'completed':
+                # 与完成边界共用事务；候选生成和评审不占用这次事务。
+                stage = StageState(self)
+                count = self.db.execute('SELECT COUNT(*) FROM vsm_bases WHERE namespace=? AND session_id=?', stage._scope).fetchone()[0]
+                if count < 1024:
+                    stage.capture(result['task']['ref'], 'completed_task_boundary')
             if operation == 'summary_store':
                 EffectsState(self.db, self.scope).effects_bind(
                     'vctx://summary/' + result['summary']['summary_id'], arguments['sources'])

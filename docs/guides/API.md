@@ -511,3 +511,13 @@ legacy read/resource_read/summary_read/result_read/history_read/evidence_read �
 恢复结果正文前，用 detached Session 和公开投影检查最近路由容量；超限在append前拒绝。实际主请求在 llm/stream 适配器调用前检查当前路由窗口、消息/工具与投影新鲜度，超限抛 VCTX_REQUEST_CAPACITY 并保留原日志。reason=protected_capacity/request_capacity，返回 used/budget/gap 和估算来源。
 
 计量始终标 estimated_tokens、provider_token_guarantee=false；缺失/过期测量或能力不足时 available=false/enforced=false，继续原宿主流程，不宣称已保证容量。宿主可配置 requestAdmission=false；contextIntegration=false 会使计量不可用。context_status 返回本会话读取额度、缓存计数及最近主请求观测(as_of_seq)。详细范围及限制见[C5实际契约](../../skills/dsh-context-control/references/resolver.md)。
+
+## 开发分支：C6a 显式阶段摘要首批（未发布）
+
+stage_prepare({task_ref}) 返回已完成任务的固定 basis；stage_propose({request_id,basis_ref,capsule}) 保存候选；stage_review({request_id,ref,outcome,checks,explanation}) 记录模型语义评审；stage_activate({request_id,ref,expected_revision}) 重验来源与当前路径后显式激活。stage_context 返回 activation revision 和当前投影，stage_list 有界列出历史候选，stage_read/context_read/expand 均可恢复并受每步读取额度限制。
+
+固定资源和插件历史页在任务完成边界捕获准确版本，原文仍在原存储；原生 history/operation 缺少原始证据证明时返回覆盖缺口，拒绝激活。当前只保证已登记任务来源，不宣称覆盖全部历史。语义评审永远不是测试验证，模型不能自报人工/宿主评审。
+
+current_stage 最多1536字节，位于现有4KiB目录内，保留决定、约束、下一步、未决、精确错误片段和矛盾。超限拒绝激活，不裁掉关键字段；普通目录项先折叠。任务/目标/来源变化、观察落后或新写信号会撤销适用性，固定历史候选仍可查。当前按所有写版本保守失效，尚未排除无关路径写入。
+
+新增 vsm_schema1，首次扩展非覆盖备份；没有后台摘要模型调用。详细字段、调用例子、容量、迁移及剩余范围见 [C6a实际契约](../../skills/dsh-context-control/references/stages.md)。

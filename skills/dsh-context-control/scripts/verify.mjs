@@ -7,6 +7,7 @@ import { spawnSync } from 'node:child_process';
 
 // 显式选择仓库与验证范围；不安装依赖、不读取正式配置、不自动切分支。
 const profiles = {
+  stages: ['context-stages', 'context-catalog', 'context-resolver', 'task-request'],
   resolver: ['context-resolver', 'context-admission', 'result-projection', 'open-result-request',
     'resource-capture', 'snapshot-request', 'quota-transport'],
   coordinator: ['context-control-coordinator', 'context-control-commit', 'session-write', 'automation',
@@ -22,7 +23,7 @@ const profiles = {
     'context-effects', 'context-resolver', 'context-admission', 'context-control-commit'],
 };
 const pythonTests = ['test_automation.py', 'test_quota.py', 'test_core_quota.py', 'test_task_state.py',
-  'test_evidence.py', 'test_session_snapshots.py', 'test_result_store.py', 'test_result_chunks.py', 'test_control_policy.py', 'test_effects.py', 'test_catalog.py', 'test_control_commit.py', 'test_retrieval.py'];
+  'test_evidence.py', 'test_session_snapshots.py', 'test_result_store.py', 'test_result_chunks.py', 'test_control_policy.py', 'test_effects.py', 'test_catalog.py', 'test_control_commit.py', 'test_retrieval.py', 'test_stages.py'];
 const skillRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const fail = message => { console.error('验证前置条件失败：' + message); process.exit(2); };
 let values, root;
@@ -33,7 +34,7 @@ try {
     help: { type: 'boolean', default: false },
   }, allowPositionals: false }));
   if (values.help) {
-    console.log('verify.mjs --repo <绝对路径> --profile package|foundation|effects|catalog|coordinator|resolver|existing|connection|scheduler|python [--list] [--python <解释器>]');
+    console.log('verify.mjs --repo <绝对路径> --profile package|foundation|effects|catalog|coordinator|resolver|stages|existing|connection|scheduler|python [--list] [--python <解释器>]');
     process.exit(0);
   }
   if (!values.repo || !isAbsolute(values.repo)) throw new Error('必须提供 --repo 仓库绝对路径');
@@ -50,7 +51,7 @@ if (values.profile === 'package') {
   // 独立于目标运行时依赖，检查可移植包及内部引用；不宣称验证调度行为。
   const required = ['SKILL.md', 'agents/openai.yaml', 'scripts/verify.mjs',
     'references/contract.md', 'references/scheduling.md', 'references/refactor-plan.md',
-    'references/validation.md', 'references/research.md', 'references/effects.md', 'references/catalog.md', 'references/coordinator.md', 'references/resolver.md'];
+    'references/validation.md', 'references/research.md', 'references/effects.md', 'references/catalog.md', 'references/coordinator.md', 'references/resolver.md', 'references/stages.md'];
   const missing = required.filter(p => !existsSync(join(skillRoot, p)));
   if (missing.length) fail('skill 包缺文件：' + missing.join(', '));
   const files = [];

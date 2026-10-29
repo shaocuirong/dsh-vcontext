@@ -65,11 +65,12 @@ export function adaptCatalog(id, evidence, resources) {
     }
   }
   return { scope: { ...scope, target: { mode: resources.target?.mode ?? 'working', snapshot_ref: resources.target?.snapshot_ref ?? null } },
-    entries, representations: derived, coverage: { scope: 'registered-resources-and-archived-evidence',
+    entries, representations: derived, current_stage: resources.stage?.current_stage ?? null,
+    coverage: { scope: 'registered-resources-and-archived-evidence',
       complete: !evidence.truncated && !resources.has_more && !resources.representations_truncated && unresolvedNotes === 0
         && !entries.some(e => e.representations_truncated), unresolved_notes: unresolvedNotes,
       evidence: evidence.coverage, resources_scanned: resources.items.length, resources_total: resources.total,
-      derived_version: digest(derived.map(r => [r.id, r.revision, r.coverage, r.freshness])),
+      derived_version: digest([derived.map(r => [r.id, r.revision, r.coverage, r.freshness]), resources.stage ?? null]),
       unregistered_workspace: 'unknown', active_host_history: 'not_indexed' } };
 }
 
@@ -104,7 +105,8 @@ export function projectCatalog(catalog, baseline, previous, { maxBytes = 4096, m
     recovery: { operation: 'context_list', input: { kind: 'resource', offset: 0, limit: 32 } } };
   const history = { level: 'history', kind: 'page', title: '历史来源目录',
     recovery: { operation: 'context_list', input: { kind: 'page', offset: 0, limit: 32 } },
-    representations: { operation: 'evidence_list', input: { offset: 0, limit: 32 } } };
+    representations: { operation: 'evidence_list', input: { offset: 0, limit: 32 } },
+    stages: { operation: 'stage_list', input: { offset: 0, limit: 8 } } };
   const entries = [];
   const represented = new Map(catalog.entries.flatMap(e => e.representations.map(r => [r.id, r])));
   const coveredRepresentations = new Set([...represented.values()].flatMap(r => r.exact_source_versions
@@ -126,6 +128,8 @@ export function projectCatalog(catalog, baseline, previous, { maxBytes = 4096, m
     version: baseline.version, coverage: catalog.coverage, roots: [root, history],
     delta: catalogDelta(previous, baseline, catalog, 4), entries: entries.slice(0, maxItems - 2),
     budget: { max_bytes: maxBytes, max_items: maxItems, max_delta_items: 4 }, folded: true };
+  // 当前阶段是有失效条件的 1c 投影；裁减目录叶项时不能顺便丢掉它。
+  if (catalog.current_stage) view.current_stage = catalog.current_stage;
   while (Buffer.byteLength(JSON.stringify(view)) > maxBytes && view.entries.length) view.entries.pop();
   while (Buffer.byteLength(JSON.stringify(view)) > maxBytes && view.delta.changed_objects.length) {
     view.delta.changed_objects.pop(); view.delta.coverage.truncated = true;
