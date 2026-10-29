@@ -3,9 +3,10 @@ import { describeContext } from './live-context.mjs';
 import { automationPressure } from './automation-pressure.mjs';
 import { segmentHistoryPages } from './history-segmenter.mjs';
 import { planOpenResults } from './open-result-planner.mjs';
+import { LIMITS } from './control/protocol.mjs';
 
 const MIN_BYTES = 2048;
-const MAX_BYTES = 8 * 1024 * 1024;
+const MAX_BYTES = LIMITS.result_max_bytes;
 const SMALL_BYTES = 1024 * 1024;
 const READ_TOOLS = new Set(['read', 'read_file', 'readFile', 'file_read', 'file.read', 'fs.read']);
 const ERRORS = {
@@ -215,7 +216,7 @@ export function createResultProjection(ctx, transport, sessionBridge, diagnostic
     let bytes = 0, count = 0;
     const pages = new Set();
     for (const candidate of preview.candidates) {
-      if (count >= 2 || bytes + candidate.bytes > MAX_BYTES || pages.has(candidate.page_id)) continue;
+      if (count >= LIMITS.result_batch_count || bytes + candidate.bytes > MAX_BYTES || pages.has(candidate.page_id)) continue;
       if (await call(agent.id, 'result_find', { source_seq: candidate.source_seq }, signal)) continue;
       const cut = await observe(agent, signal);
       try {

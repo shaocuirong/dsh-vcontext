@@ -1,5 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { automationPressure } from './automation-pressure.mjs';
+import { CONTROL_POLICY, LIMITS, createControlPlan, controlReadSetMatches } from './control/protocol.mjs';
+import { projectHistoryCandidates, selectHistoryCandidate } from './control/planner.mjs';
+import { controlBudgetSnapshot } from './control/snapshot.mjs';
 
 const fail = code => { throw Object.assign(new Error(code), { code }); };
 const validId = id => typeof id === 'string' && id.length > 0 && id.length <= 256;
@@ -35,31 +38,12 @@ export function createAutomation(ctx, transport, sessionBridge, historyArchive, 
     check();
     const saved = await call(agent.id, 'auto_observe', { keys: plan.pages.map(p => 'history:' + p.page_id), readonly: !observe });
     const guards = await call(agent.id, 'auto_guard');
-    const units = new Map((saved?.units ?? []).map(u => [u.key, u]));
-    const recent = new Set(), all = plan.pages;
-    // Recent protection must use full-history positions, including truncated plans.
-    let remainingTokens = 8192;
-    for (let i = all.length - 1; i >= 0; i--) {
-      if (i >= (plan.total_pages ?? all.length) - 6 || remainingTokens > 0) recent.add(all[i].page_id);
-      remainingTokens -= Math.ceil(all[i].bytes / 3);
-    }
-    const sourceProtection = new Set(guards.source_seqs);
-    const completed = new Set(guards.completed_seqs);
-    const pages = all.map((p, i) => {
-      const u = units.get('history:' + p.page_id), reasons = [];
-      if (!p.sealed) reasons.push('OPEN');
-      if (!p.tool_balanced) reasons.push('UNBALANCED');
-      if (p.opaque) reasons.push('OPAQUE');
-      if (p.source_seqs.some(s => sourceProtection.has(s))) reasons.push('TASK_DEPENDENCY');
-      if (recent.has(p.page_id)) reasons.push('RECENT');
-      if (p.bytes > 262144) reasons.push('OVERSIZE');
-      if (!u || guards.step - u.resident_step < 2) reasons.push('MIN_RESIDENT');
-      if (u && guards.step - u.restore_step < 2) reasons.push('COLD_RESTORE');
-      return { ...p, reasons, completed: p.source_seqs.some(s => completed.has(s)),
-        access_step: u?.access_step ?? 0, position: i };
-    });
-    return { config: l2.config, step: guards.step, l1_active: guards.l1_active, l2, l1: { pressure: pressure(agent, l2.quota, l2.config),
+    const pages = projectHistoryCandidates(plan, saved?.units ?? [], guards);
+    const currentPressure = pressure(agent, l2.quota, l2.config);
+    return { config: l2.config, step: guards.step, l1_active: guards.l1_active, l2, l1: { pressure: currentPressure,
       surface_generation: plan.surface_generation, total_pages: plan.total_pages, pages },
+      control: { protocol: CONTROL_POLICY.schema, task_revision: guards.task_revision ?? null,
+        budgets: controlBudgetSnapshot(currentPressure, l2.quota) },
       open_results: resultProjection?.automaticStatus(agent.id) ?? null, runtime: entries.get(agent.id)?.last ?? null };
   }
   async function sync(agent) {
@@ -67,6 +51,11 @@ export function createAutomation(ctx, transport, sessionBridge, historyArchive, 
     check();
     if (state?.state !== 'synced') fail(state?.error_code ?? 'SYNC_UNAVAILABLE');
   }
+  const readSet = (agent, state) => [
+    { domain: 'host_surface', id: agent.id, revision: state.l1.surface_generation },
+    ...(state.control.task_revision === null ? []
+      : [{ domain: 'task_state', id: agent.id, revision: state.control.task_revision }]),
+  ];
   async function run(e) {
     check();
     const agent = e.agent;
@@ -98,17 +87,16 @@ export function createAutomation(ctx, transport, sessionBridge, historyArchive, 
       await call(agent.id, 'auto_latch', { layer: 'l1', active: true });
       batch.outcome = 'protected';
       let bytes = 0;
-      while (batch.pages.length < 8 && bytes < 262144 && !state.l1.pressure.low) {
+      while (batch.pages.length < LIMITS.history_batch_pages && bytes < LIMITS.history_batch_bytes && !state.l1.pressure.low) {
         check();
         if (e.disposed || agent.status !== 'idle') { batch.outcome = 'BUSY'; break; }
         if (!state.config.l1_enabled || !state.l1.pressure.available) break;
-        const candidates = state.l1.pages.filter(p => !p.reasons.length && bytes + p.bytes <= 262144);
-        candidates.sort((a, b) => Number(b.completed) - Number(a.completed) || a.access_step - b.access_step
-          || b.bytes - a.bytes || a.page_id.localeCompare(b.page_id));
-        const page = candidates[0];
+        const page = selectHistoryCandidate(state.l1.pages, bytes);
         if (!page) break;
         const requestId = randomUUID(), detail = { page_id: page.page_id, source_seqs: page.source_seqs,
           surface_generation: state.l1.surface_generation, bytes: page.bytes };
+        detail.plan = createControlPlan({ request_id: requestId, session_id: agent.id, action: 'page_out_history',
+          read_set: readSet(agent, state), budget_before: state.control.budgets });
         await call(agent.id, 'auto_receipt', { request_id: requestId, layer: 'l1', state: 'intent', detail });
         try {
           const receipt = await historyArchive.pageOut(agent.id, page.page_id, {
@@ -118,6 +106,7 @@ export function createAutomation(ctx, transport, sessionBridge, historyArchive, 
             check(); signal.throwIfAborted(); if (e.disposed) fail('DISPOSED');
             await sync(agent);
             const current = await preview(agent, { observe: true });
+            if (!controlReadSetMatches(detail.plan, readSet(agent, current))) fail('CHANGED');
             const candidate = current.l1.pages.find(p => p.page_id === page.page_id);
             if (!current.config.l1_enabled || !current.l1.pressure.available || !candidate || candidate.reasons.length)
               fail('PROTECTED');

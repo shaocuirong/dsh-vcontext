@@ -20,3 +20,6 @@ vcontext-dashboard = "vcontext.dashboard:main"
 
 [tool.setuptools.packages.find]
 include = ["vcontext*"]
+
+[tool.setuptools.package-data]
+vcontext = ["control-policy.json"]

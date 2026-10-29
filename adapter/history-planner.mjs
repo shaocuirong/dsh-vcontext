@@ -1,3 +1,5 @@
+import { pageStructureReasons } from './control/planner.mjs';
+
 const DEFAULT_PROTECT_RECENT_PAGES = 2;
 const MAX_PROTECT_RECENT_PAGES = 32;
 
@@ -22,7 +24,7 @@ export function quotaTrial(plan, options = {}) {
   plan.pages.forEach((page, index) => {
     const bytes = Number.isSafeInteger(page.bytes) && page.bytes >= 0 ? page.bytes : 0;
     totalBytes += bytes;
-    const eligible = page.sealed === true && page.tool_balanced === true && page.opaque !== true;
+    const eligible = pageStructureReasons(page).length === 0;
     const recent = index >= recentStart;
     if (!eligible || recent) {
       protectedBytes += bytes;
@@ -64,7 +66,7 @@ export function planHistoryPageOut(plan, options = {}) {
   if (index < 0) fail('NOT_FOUND', '找不到该历史页面。');
   const page = plan.pages[index];
   const recent = protectRecentPages > 0 && index >= (plan.total_pages ?? plan.pages.length) - protectRecentPages;
-  const eligible = page.sealed === true && page.tool_balanced === true && page.opaque !== true;
+  const eligible = pageStructureReasons(page).length === 0;
   const reason = !eligible
     ? (page.opaque ? 'OPAQUE' : page.sealed ? 'UNBALANCED' : 'OPEN')
     : (recent && !allowRecent ? 'PROTECTED' : null);
