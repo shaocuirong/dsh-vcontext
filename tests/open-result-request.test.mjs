@@ -84,7 +84,7 @@ async function fixture(t, { enabled = true } = {}) {
   const agent = handle.agent;
   await control.call(agent.id, 'auto_configure', { l1_open_results_enabled: enabled });
   const live = createLiveContext(root);
-  t.after(async () => { live.dispose(); await handle.dispose(); await fiber.dispose(); await contextFiber.dispose();
+  t.after(async () => { await live.dispose(); await handle.dispose(); await fiber.dispose(); await contextFiber.dispose();
     await control.dispose(); await root.fiber.dispose(); Service.prototype.call = originalCall;
     await rm(directory, { recursive: true, force: true }); });
   agent.followup({ id: 'goal', role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: 'CURRENT_USER_GOAL: inspect evidence through a long task.' }] });

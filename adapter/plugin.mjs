@@ -2,6 +2,7 @@ import { createTransport } from './transport.mjs';
 import { isMutating } from './operations.mjs';
 import { createDiagnostics } from './diagnostics.mjs';
 import { createSessionBridge } from './session-bridge.mjs';
+import { createSessionAccess } from './session/access.mjs';
 import { captureResource } from './resource-capture.mjs';
 import { createHistoryArchive, unavailableOutline } from './history-archive.mjs';
 import { createEvidenceDirectory } from './evidence-directory.mjs';
@@ -101,10 +102,11 @@ Check the installation's API.md for full argument fields. Avoid storing secrets.
 export function mount(ctx, config, defineTool) {
   const diagnostics = createDiagnostics({ ...config, logger: ctx.logger });
   const transport = createTransport(config, diagnostics);
+  const sessionAccess = createSessionAccess(ctx, { diagnostics });
   const historyArchive = createHistoryArchive(ctx, diagnostics,
     (id, access) => transport.call(id, 'auto_access', access));
   const evidenceDirectory = createEvidenceDirectory(ctx, transport, historyArchive);
-  const sessionBridge = createSessionBridge(ctx, transport, diagnostics);
+  const sessionBridge = createSessionBridge(ctx, transport, diagnostics, { access: sessionAccess });
   const attached = new Map();
   let disposed = false;
   function attach(agent) {
@@ -305,7 +307,8 @@ export function mount(ctx, config, defineTool) {
     }
     attached.clear();
     await sessionBridge.dispose();
+    await sessionAccess.dispose();
     await transport.dispose();
   });
-  return { transport, bridge: transport, sessionBridge, refresh, diagnostics, historyArchive, evidenceDirectory };
+  return { transport, bridge: transport, sessionAccess, sessionBridge, refresh, diagnostics, historyArchive, evidenceDirectory };
 }

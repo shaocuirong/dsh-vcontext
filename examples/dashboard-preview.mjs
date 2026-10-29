@@ -112,7 +112,7 @@ const server = createServer(async (req, res) => {
 server.listen(Number(process.env.PORT ?? 0), '127.0.0.1', () => console.log(`Dashboard preview: http://127.0.0.1:${server.address().port}`));
 async function close() {
   server.closeAllConnections(); server.close(); await automation.dispose(); await jobs.dispose(); await tasks.dispose(); await replacement.dispose();
-  live.dispose(); await evidence.dispose(); await archive.dispose(); await bridge.dispose(); await transport.dispose(); await root.fiber.dispose(); await rm(directory, { recursive: true, force: true });
+  await live.dispose(); await evidence.dispose(); await archive.dispose(); await bridge.dispose(); await transport.dispose(); await root.fiber.dispose(); await rm(directory, { recursive: true, force: true });
 }
 process.once('SIGINT', () => close().finally(() => process.exit()));
 process.once('SIGTERM', () => close().finally(() => process.exit()));

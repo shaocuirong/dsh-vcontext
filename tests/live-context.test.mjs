@@ -21,7 +21,7 @@ test('observed trends are bounded, metadata-only and do not invent repeated refr
     assert.equal((await live.read('other')).observations.length, 0);
     root.waterfall('llm/stream', markAgentLoopRequest({ sessionId: 'a', messages: session.deriveMessages() }), () => null);
     assert.equal((await live.read('a')).observations.at(-1).kind, 'request');
-  } finally { live.dispose(); await root.fiber.dispose(); }
+  } finally { await live.dispose(); await root.fiber.dispose(); }
 });
 
 test('reads current derived history each time and captures each request separately', async () => {
@@ -49,7 +49,7 @@ test('reads current derived history each time and captures each request separate
     assert.equal((await live.read('bob')).current, null);
     assert.equal((await live.read('bob')).last_request, null);
     assert.doesNotMatch(JSON.stringify((await live.read('alice'))), /DO_NOT_EXPOSE/);
-  } finally { live.dispose(); await root.fiber.dispose(); }
+  } finally { await live.dispose(); await root.fiber.dispose(); }
 });
 
 test('auxiliary LLM calls never overwrite the last main AgentLoop request or its trend', async () => {
@@ -65,7 +65,7 @@ test('auxiliary LLM calls never overwrite the last main AgentLoop request or its
     assert.equal(after.observations.filter(p => p.kind === 'request').length, 1);
     assert.equal(after.auxiliary_calls.count, 2);
     assert.doesNotMatch(JSON.stringify(after.auxiliary_calls), /SECRET|preview/);
-  } finally { live.dispose(); await root.fiber.dispose(); }
+  } finally { await live.dispose(); await root.fiber.dispose(); }
 });
 
 test('native SessionStore append and surface compaction are reflected without restarting', async () => {
@@ -86,7 +86,7 @@ test('native SessionStore append and surface compaction are reflected without re
     assert.equal(current.message_count, 1);
     assert.match(current.preview, /compacted summary/);
     assert.doesNotMatch(current.preview, /original|new message/);
-  } finally { live.dispose(); await root.fiber.dispose(); }
+  } finally { await live.dispose(); await root.fiber.dispose(); }
 });
 
 test('previews are bounded and adapter replay data is excluded', () => {

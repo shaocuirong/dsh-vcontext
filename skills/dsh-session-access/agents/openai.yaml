@@ -1,0 +1,4 @@
+interface:
+  display_name: "DSH 会话连接层"
+  short_description: "维护会话只读访问、冷历史观察、同步切片与取消卸载边界，运行专项回归验证"
+  default_prompt: "使用 $dsh-session-access 维护当前仓库的 Session Access，保留连接与同步契约，并验证取消和资源回收。"
