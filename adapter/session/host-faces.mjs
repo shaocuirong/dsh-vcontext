@@ -21,4 +21,3 @@ export const accessError = code => Object.assign(new Error(code), { code });
 export function validId(id) {
   return typeof id === 'string' && id.length > 0 && id.length <= 256 && !/[\u0000-\u001f]/u.test(id);
 }
-

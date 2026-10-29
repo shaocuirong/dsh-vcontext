@@ -41,6 +41,8 @@
 
 ## 规划
 
+- [会话连接分块重构：A1进度与后续边界](planning/SESSION-REFACTOR.md)
+
 - [History Paging Roadmap](planning/ROADMAP-HISTORY-PAGING.md)
 - [0.10 实施计划](planning/superpowers/plans/2026-10-23-history-virtual-context.md)
 - [0.10 设计](planning/superpowers/specs/2026-10-23-history-virtual-context-design.md)

@@ -92,4 +92,3 @@ export function createSessionAccess(ctx, { diagnostics } = {}) {
     dispose() { return lifetime.dispose(); },
   };
 }
-

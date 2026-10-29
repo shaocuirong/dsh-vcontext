@@ -2,6 +2,8 @@
 
 当前版本：**[v0.17.0](https://github.com/shaocuirong/dsh-vcontext/releases/tag/v0.17.0)** · [可视看板](docs/guides/UI.md) · [0.17.0 节点](docs/releases/nodes/NODES-0.17.0.md) · [证据目录设计](docs/architecture/EVIDENCE-0.17.0.md) · [更新日志](CHANGELOG.md) · [验证记录](docs/releases/VALIDATION.md)
 
+开发分支正在进行分块重构：[会话连接 A1 进度与后续边界](docs/planning/SESSION-REFACTOR.md) · [Session Access 维护 skill](skills/dsh-session-access/SKILL.md)。这些改动尚未发布，当前发行版本仍为上方 v0.17.0。
+
 **DeepSeek Harness 客户端虚拟上下文管理器**：结构化操作、可追溯资源版本、有来源的摘要、按需换页与会话内看板。
 
 [![Tests](https://github.com/shaocuirong/dsh-vcontext/actions/workflows/test.yml/badge.svg)](https://github.com/shaocuirong/dsh-vcontext/actions/workflows/test.yml)

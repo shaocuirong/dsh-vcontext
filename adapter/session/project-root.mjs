@@ -13,4 +13,3 @@ export async function resolveProjectRoot(ctx, agent) {
   return { root_path, project_id: createHash('sha256').update(canonical).digest('hex'),
     source: typeof service?.get === 'function' ? 'workingDirectory' : 'session.header.cwd' };
 }
-

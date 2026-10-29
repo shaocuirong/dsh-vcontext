@@ -76,4 +76,3 @@ export function readView(ctx, session, id, source, scope, observation) {
   });
   return Object.freeze(view);
 }
-
