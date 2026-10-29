@@ -57,7 +57,7 @@ domain, scope, revision, observed_at, coverage, reproducibility
 | git commit | 完整 commit + 路径/对象 | 不包含未提交修改 |
 | git worktree | worktree、base commit、工作观察代次、相关内容指纹 | dirty/触碰路径不能区分连续多次修改 |
 | host history | namespace/session + 原始 seq/part + 哈希 | replacement 不是工具重新执行 |
-| plugin ledger | namespace/session + 插件修订/快照 | 与宿主 seq 分开；统一索引 ledger 尚待实施 |
+| plugin ledger | namespace/session + 插件修订/快照 | 与宿主 seq 分开；目录版本为有界来源指纹，交付游标为独立 ledger |
 | snapshot | 哈希或明确快照 ID | 只覆盖已捕获范围，未必能重现环境 |
 | external | 资源 ID + revision/ETag/观察 | 无版本时 freshness=unknown |
 
@@ -67,7 +67,7 @@ changed_paths 溢出、未知 shell 效果和外部编辑要反映 coverage。�
 
 ## 4. 失效信号
 
-C2 的本会话效果、现场版本及 host-only 操作已实现，见[实际契约](effects.md)。以下通用目录契约仍需 C3 消费；effects revision 不等于全局索引版本。
+C2 的本会话效果、现场版本及 host-only 操作已实现，见[实际契约](effects.md)。C3 已通过来源适配与有界投影消费，见[目录实际契约](catalog.md)；effects revision 不等于目录内容版本。
 
 分别记录 freshness(fresh/stale/unknown/pending)、assessment 和 commit_state。源变更撤销当前适用性，不删除历史；先撤销过期声明，再按预算重算。
 

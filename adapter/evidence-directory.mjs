@@ -27,11 +27,7 @@ export function createEvidenceDirectory(ctx, transport, historyArchive) {
   }
   const brief = note => ({ ...note, summary: undefined, excerpt: Array.from(note.summary).slice(0, 200).join(''),
     excerpt_truncated: Array.from(note.summary).length > 200 });
-  async function list(id, input = {}, signal = lifetime.signal) {
-    if (!shape(input, ['query', 'offset', 'limit'])) fail('INVALID_INPUT');
-    const { query = '', offset = 0, limit = 20 } = input;
-    if (typeof query !== 'string' || query.length > 128 || !Number.isSafeInteger(offset) || offset < 0
-      || !Number.isSafeInteger(limit) || limit < 1 || limit > 32) fail('INVALID_INPUT');
+  async function scan(id, signal = lifetime.signal) {
     const [history, results, saved] = await Promise.all([
       historyArchive.catalog(id, { limit: 256 }), call(id, 'result_list', { limit: 100 }, signal),
       call(id, 'ved_note_list', { limit: 100 }, signal),
@@ -40,14 +36,23 @@ export function createEvidenceDirectory(ctx, transport, historyArchive) {
     const originals = [...history.items, ...results.results.map(r => ({ ref: r.ref, kind: 'result', level: 0,
       origin: 'source_index', title: `${r.tool_name} · 原始事件 ${r.source_seq}`, excerpt: '完整工具结果已保存，可按引用分页读取。',
       source_version: r.content_hash, bytes: r.bytes, source_seq: r.source_seq }))];
-    // Search full note text within the explicit bounded scan, then shorten only display output.
-    const all = [...saved.notes, ...originals];
+    return { items: [...saved.notes, ...originals],
+      truncated: history.truncated || results.results.length >= 100 || saved.total > 100,
+      coverage: 'latest-256-archives-100-results-100-notes' };
+  }
+  async function list(id, input = {}, signal = lifetime.signal) {
+    if (!shape(input, ['query', 'offset', 'limit'])) fail('INVALID_INPUT');
+    const { query = '', offset = 0, limit = 20 } = input;
+    if (typeof query !== 'string' || query.length > 128 || !Number.isSafeInteger(offset) || offset < 0
+      || !Number.isSafeInteger(limit) || limit < 1 || limit > 32) fail('INVALID_INPUT');
+    const data = await scan(id, signal), all = data.items;
+    // 在有界扫描内搜索完整笔记，只缩短展示字段。
     const needle = query.trim().toLowerCase();
     const matches = needle ? all.filter(item => JSON.stringify(item).toLowerCase().includes(needle)) : all;
     const items = matches.slice(offset, offset + limit).map(i => i.kind === 'note' ? brief(i) : i);
     const result = { items, offset, next_offset: offset + items.length, has_more: offset + items.length < matches.length,
-      total: matches.length, scanned: all.length, truncated: history.truncated || results.results.length >= 100 || saved.total > 100,
-      coverage: 'latest-256-archives-100-results-100-notes', trust: 'untrusted_navigation' };
+      total: matches.length, scanned: all.length, truncated: data.truncated,
+      coverage: data.coverage, trust: 'untrusted_navigation' };
     while (Buffer.byteLength(JSON.stringify(result)) > 130048 && items.length) {
       items.pop(); result.next_offset = offset + items.length; result.has_more = true;
     }
@@ -89,7 +94,7 @@ export function createEvidenceDirectory(ctx, transport, historyArchive) {
     return call(id, 'result_read', { ref: input.ref, offset: input.offset ?? 0, limit: input.limit ?? 4096,
       expected_content_hash: descriptor.source_version }, signal);
   }
-  return { list, note, read,
+  return { list, note, read, scan,
     async outline(id) {
       const policy = await call(id, 'auto_status');
       if (policy.config.evidence_directory_enabled === false)

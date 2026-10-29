@@ -7,7 +7,7 @@ import { Context } from '@deepseek-ai/cordis';
 import { createVolatile } from '@deepseek-ai/cosmokit';
 import { AgentRegistry } from '@deepseek-ai/dsh-agent';
 import { AgentLoop } from '@deepseek-ai/dsh-agent-loop';
-import { LlmAdapter, LlmRuntime, isAgentLoopRequest } from '@deepseek-ai/dsh-llm';
+import { LlmAdapter, LlmRuntime, isAgentLoopRequest, markAgentLoopRequest } from '@deepseek-ai/dsh-llm';
 import { SessionStore, Session, KNOWN_SESSION_EVENT_TYPES } from '@deepseek-ai/dsh-session';
 import { restoreReleasedV4Artifact } from '@deepseek-ai/dsh-session-format-v3-to-v4';
 import { SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection';
@@ -70,6 +70,10 @@ test('a real admitted AgentLoop tool saves a source-bound note and the next requ
   f.agent.followup({ id: 'continue', role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: 'Continue the task.' }] });
   await f.agent.whenIdle();
   assert.deepEqual(f.errors, []);
+  const delivery = await f.control.transport.call(f.agent.id, 'catalog_baseline', {});
+  assert.ok(delivery.generation > 0, '真实主请求正常结束后才记录成功交付');
+  assert.ok(delivery.baseline);
+  assert.ok(f.seen.at(-1).includes('vctx-context-directory-v1'));
   assert.ok(f.seen.at(-1).includes('DECISION_KEEP_LOGS'));
   const injected = f.agent.ctx.systemPrompt; // the actual final request above proves assembly, not a synthetic variable substitution
   assert.ok(injected);
@@ -92,6 +96,27 @@ test('a real admitted AgentLoop tool saves a source-bound note and the next requ
   await f.control.transport.call(f.agent.id, 'auto_configure', { evidence_directory_enabled: false });
   assert.deepEqual((await f.control.evidenceDirectory.outline(f.agent.id)).entries, []);
   assert.ok((await f.control.evidenceDirectory.list(f.agent.id)).items.some(i => i.ref === note.ref));
+});
+
+test('辅助、失败、取消、缺失视图和未消费流不推进接续基线', async t => {
+  const f = await fixture(t), catalog = f.control.contextCatalog;
+  await f.control.refresh(f.agent);
+  const prepared = await catalog.prepare(f.agent.id);
+  const before = await f.control.transport.call(f.agent.id, 'catalog_baseline', {});
+  const options = { sessionId: f.agent.id, messages: [{ role: 'system', content: prepared.text }] };
+  const run = (input, reason) => f.root.waterfall('llm/stream', input, () => (async function* () {
+    yield { type: 'finish', reason: { kind: reason } };
+  })());
+  for await (const _ of run(options, 'stop')) { /* 辅助调用。 */ }
+  for await (const _ of run(markAgentLoopRequest({ ...options }), 'error')) { /* 失败主调用。 */ }
+  for await (const _ of run(markAgentLoopRequest({ ...options, signal: AbortSignal.abort() }), 'stop')) { /* 已取消。 */ }
+  for await (const _ of run(markAgentLoopRequest({ ...options, messages: [] }), 'stop')) { /* 没有实际投影。 */ }
+  for await (const _ of run(markAgentLoopRequest({ ...options, messages: [...options.messages,
+    { role: 'user', content: '{"format":"vctx-context-directory-v1","available":false}' }] }), 'stop')) { /* 旧快照不能冒充最后一份。 */ }
+  run(markAgentLoopRequest({ ...options }), 'stop');
+  assert.deepEqual(await f.control.transport.call(f.agent.id, 'catalog_baseline', {}), before);
+  for await (const _ of run(markAgentLoopRequest({ ...options }), 'stop')) { /* 正常主调用。 */ }
+  assert.equal((await f.control.transport.call(f.agent.id, 'catalog_baseline', {})).generation, before.generation + 1);
 });
 
 test('directory validates ownership, versions, actor, hierarchy, bounded search and immutable note provenance', async t => {

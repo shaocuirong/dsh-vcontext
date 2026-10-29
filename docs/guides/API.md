@@ -477,3 +477,15 @@ currentness.freshness 为 fresh/stale/pending/unknown；只有本次现场匹配
 version_descriptor 区分 git_worktree/snapshot，记录工作树作用域、commit、路径范围 dirty 与内容指纹；dirty 不代表全仓状态。stored_snapshot 带已保存 ref；observation_only 只记录现场指纹，不承诺能恢复未保存正文。
 
 effects_status/sync/observe/freshness/bind 均为 host-only，模型入口拒绝 effects_ 前缀。独立 vfx_schema1 不改变旧事件哈希；schema9 首次扩展前自动创建非覆盖备份。实际契约见[C2说明](../../skills/dsh-context-control/references/effects.md)。
+
+## 开发分支：C3 统一目录与接续增量（未发布）
+
+新增模型只读 `context_list`，参数 `{kind?:"page"|"resource",offset?:0,limit?:20}`，limit为1–32。来源共用 id、scope、source_ref、source_type、version_descriptor、freshness、recovery、representations、dependencies、protection_basis 与权限字段。工具结果作为页成员，笔记和资源摘要为派生表示，不增加来源 kind。旧 evidence_list/read/note 和证据看板保持兼容。
+
+kind=resource 按完整登记目录分页，可读取注入扫描范围之外的叶条目；不代表磁盘全集。page 和混合视图沿用256归档/100结果/100笔记扫描上限，最多取128当前资源。响应明确 coverage、截断与恢复入口，退出扫描窗口不能推断删除。
+
+vctx_evidence 变量注入 `vctx-context-directory-v1`：默认4KiB、8条目录项（含资源/历史两个恢复根）、4项增量，层级折叠不删正文。1b task state 仍独立装配。来源与摘要适用性消费 effects 游标，固定版本不冒充当前工作树。
+
+catalog_resources/baseline/delivered 为宿主内部 RPC，模型拒绝 catalog_ 前缀。vcd_schema1 保存按 namespace/session/consumer 分区的上次正常主请求基线，用 CAS 防止陈旧确认覆盖；刷新、辅助调用、失败和取消不推进。只有最后一份实际投影匹配、主请求 stop/tool-calls/max-tokens 正常结束时才确认，不代表模型理解。相同内容版本保留原投影字节及 delta 基线。
+
+独立扩展首次迁移做非覆盖备份，不改主schema9。来源覆盖与更详细的限制见[C3实际契约](../../skills/dsh-context-control/references/catalog.md)。
