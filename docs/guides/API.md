@@ -489,3 +489,13 @@ vctx_evidence 变量注入 `vctx-context-directory-v1`：默认4KiB、8条目录
 catalog_resources/baseline/delivered 为宿主内部 RPC，模型拒绝 catalog_ 前缀。vcd_schema1 保存按 namespace/session/consumer 分区的上次正常主请求基线，用 CAS 防止陈旧确认覆盖；刷新、辅助调用、失败和取消不推进。只有最后一份实际投影匹配、主请求 stop/tool-calls/max-tokens 正常结束时才确认，不代表模型理解。相同内容版本保留原投影字节及 delta 基线。
 
 独立扩展首次迁移做非覆盖备份，不改主schema9。来源覆盖与更详细的限制见[C3实际契约](../../skills/dsh-context-control/references/catalog.md)。
+
+## 开发分支：C4 协调与提交恢复（未发布）
+
+生产挂载共用一个协调器，仲裁历史换出、结果投影、原生压缩与驻留/配额操作。封口页继续经 idle runMaintenance；结果继续只在 admitted pre-step 应用，不能嵌套维护。自动路径不激活冷会话。
+
+control_status/read/record/tick 为宿主内部 RPC，模型拒绝 control_ 前缀。操作阶段为 planned/prepared/intent/confirmed/uncertain/not_applied。可能已执行的取消/失败先对账；历史按 request_id marker，结果按固定 ref/替换链确认。原生 compact 没有宿主幂等键，未知时不重跑。
+
+新增本机同源 `GET /vctx/control?session=<id>` 查询未决和近期回执；`POST /vctx/control` 接受 `{session,request_id,state,note}`，人工复核仅处理 intent/uncertain，note非空且最多512码点。state为confirmed/not_applied；confirmed只允许host_compact，精细动作不能凭说明伪造成功结果。入口只更新审计回执，不执行宿主动作或提升验证等级。未核实的操作保持未决。
+
+独立 vcc_schema1 不改主schema9，首次扩展非覆盖备份；32项未决不会按TTL过期，终态重放保留最近128项。control_status 的全部未决身份始终保留，近期详情按128KiB响应预算裁剪。完整契约见[C4说明](../../skills/dsh-context-control/references/coordinator.md)。写屏障不等于模型请求拦截，后者属于C5。

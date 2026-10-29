@@ -9,6 +9,21 @@ import { once } from 'node:events';
 
 const CONFIG = { dbPath: join(tmpdir(), 'vctx-route-test.db'), namespace: 'project' };
 
+test('未决操作查询与人工复核只走本机同源入口，复核不执行宿主动作', async () => {
+  const calls = [];
+  const coordinator = { async status(id) { return { id, pending: [] }; },
+    async review(id, request, input) { calls.push([id, request, input]); return { state: input.state }; } };
+  const handler = createHandler(CONFIG, transport(), undefined, undefined, undefined, undefined, undefined,
+    undefined, undefined, undefined, undefined, undefined, undefined, coordinator);
+  assert.equal((await invoke(handler, 'GET', '/vctx/control?session=s')).body.result.id, 's');
+  assert.equal((await invoke(handler, 'POST', '/vctx/control', JSON.stringify({ session: 's', request_id: 'r', state: 'confirmed', note: '检查日志' }))).status, 200);
+  assert.equal(calls.length, 1);
+  assert.equal((await invoke(handler, 'POST', '/vctx/control', JSON.stringify({ session: 's', force: true }))).status, 400);
+  const req = request('POST', '/vctx/control', '{}'); req.headers = { host: 'localhost', origin: 'https://evil.example' };
+  const res = response(); await handler(req, res);
+  assert.equal(res.captured.status, 403); assert.equal(calls.length, 1);
+});
+
 test('dashboard activity tolerates unavailable supplements without dropping confirmed context', async () => {
   const stub = transport({ dashboard: { residency: [] } });
   const live = { async read() { return { current: { bytes: 1234 } }; } };

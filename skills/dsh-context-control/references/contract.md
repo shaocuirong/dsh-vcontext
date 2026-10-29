@@ -114,5 +114,5 @@ protection_basis, decision_reasons, retry_class
 - metadata/residency：Python 原子操作。
 - summary_generate：后续独立能力；compact 不接受自定义页集合/摘要。
 
-当前 withWrite 依赖 compaction 且只在同一 Access 内互斥。迁移精细动作时扩展独立能力，不能让换页新增 compaction 强依赖。自动 grant 来自已启用策略，不赋予模型无限制写权。
+withWrite 默认的 host_compact 能力仍依赖 compaction；精细动作已通过 session_mutation 独立能力接入，不新增 compaction 强依赖。同挂载协调器与共享 Access 共同仲裁，自动 grant 来自已启用策略，不赋予模型无限制写权。
 

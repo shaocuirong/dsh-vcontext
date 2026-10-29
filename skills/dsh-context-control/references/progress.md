@@ -1,4 +1,4 @@
-# 上下文控制层：C0–C3 实施记录
+# 上下文控制层：C0–C4 实施记录
 
 日期：2026-10-29。分支 codex/context-control。设计与发行基线 v0.17.0 / 2dcb2b7，已合并本地连接层 4afb083，未推送、发版或启用正式插件。
 
@@ -10,12 +10,12 @@
 | C1 | 首批落地：历史整页与开放 turn 正文共用候选投影，手动/自动换页共用结构检查，事务内守卫保留 |
 | C2 | 已落地：本会话工具变更账本、工作树/快照版本、资源/摘要依赖、现场哈希核验与后台回填 |
 | C3 | 已落地：page/resource 来源适配、有界 1c 投影、成功主请求基线及接续 delta |
-| C4 | 先行接入 host_compact 的共享 withWrite；统一协调器、跨执行器仲裁和持久对账仍未完成 |
+| C4 | 已落地：统一仲裁与后台轮转、持久阶段账本、历史/结果对账、L2原子 tick 及原生压缩未决屏障 |
 | C5 | 未实施：解析缓存、恢复准入与真实请求阻断能力 |
 | C6 | 未实施：阶段摘要生成/评审/激活 |
 | C7 | 未实施：测量驱动的策略优化 |
 
-当前推进至 C3；统一协调器、恢复准入与自动阶段摘要仍待后续节点，不能称完整方案三。
+当前推进至 C4；恢复准入、自动阶段摘要和测量优化仍待后续节点，不能称完整方案三。
 
 ## C0/C1 基础变化
 
@@ -52,7 +52,7 @@
 
 本地提交节点：8d7205c（共享契约与候选）、716a29e（宿主压缩共享写入口）。设计与 skill 的初始提交为 cff2b00，连接层合并为 dc7f959。
 
-下一节点为 C4。统一目录已消费 effects ledger 与观察水位；继续建设统一协调器和提交恢复，保持 idle 换整页与 admitted pre-step 换正文的边界。详见 refactor-plan.md 和 contract.md。
+下一节点为 C5。统一协调器已保留 idle 换整页与 admitted pre-step 换正文的边界；继续实现有界恢复与可证明的请求准入。详见 refactor-plan.md 和 contract.md。
 
 C4 的精细动作能力仍须与 compaction 独立，不因已接入 withWrite 就跳过业务持久化协议。
 
@@ -86,4 +86,19 @@ C2 详细契约见 [effects.md](effects.md)。专项用 effects profile；账本
 完整 Node：318通过、0失败、0跳过；完整 Python：240通过、0失败、0跳过。目录专项11项通过，含成功/失败真实离线请求、资源固定快照和任务回归。wheel 构建成功，catalog/core/migrations/共享策略与源码字节一致；doctor、release metadata、skill 校验与 diff 检查通过。新增实际契约见 [catalog.md](catalog.md)。本地 skill 包采用新的 dsh-context-control-c3.skill，不覆盖 C0/C1 和 C2 交付包。
 
 发行版本仍为0.17.0，未推送或发版。未执行远端CI、真实模型质量/费用、浏览器交互或正式宿主重启。下一节点 C4 统一协调器与提交恢复。
+
+## C4 实施与验证
+
+- 同一挂载共用 coordinator；idle/status/step 需求、退避及跨会话后台轮转集中维护。结果 pre-step 在同一协调器注册，专属执行器保留合法提交边界。
+- 历史、结果、压缩与驻留/配额入口共享会话仲裁；精细 Access 写不依赖 compaction。短后台内核事务允许前台等待，宿主冲突仍 BUSY；新边界/配置需求不会被旧 promise 吞掉。
+- vcc_schema1 保存 planned/prepared/intent/confirmed/uncertain/not_applied；32个未决不按TTL清理，近期终态最多128项，完整响应受限。control_tick 与 L2 回执同事务，保护展开只在预览返回，256保护页不使回执溢出。
+- 历史按 owned marker、结果按固定 ref/替换链重启对账；append 后 flush/mark/确认丢 ACK 不盲目重写。原生 compact 未知保持持久屏障，回执只保存计量，不复制宿主摘要正文或大来源数组。
+- /vctx/control 提供本机同源查询与显式人工复核；人工 confirmed 只用于原生压缩，不伪造精细动作回执或测试证据。模型入口拒绝 control_ 前缀。
+- 旧 auto_receipt 保留兼容审计/旧未决恢复，原自动整理和结果控制器不再重复订阅生产调度事件。首次 schema9 扩展前做非覆盖 pre-control1 备份，未来版本拒绝，仅用临时库验证。
+
+最终完整 Node：330通过、0失败、0跳过；完整 Python：247通过、0失败、0跳过。coordinator profile 实际运行通过；本地 wheel 中 control_commit/core/migrations/共享策略与源码字节一致。doctor、release metadata、skill frontmatter/内部链接和 diff 检查通过。交付新的 dsh-context-control-c4.skill，不覆盖旧包。
+
+首轮 Node 暴露卸载夹具不返回取消函数及前台与后台事务竞争，修复后全套通过；最终未跳过用例。源码版本仍0.17.0，未推送/发版/正式激活。未执行真实模型费用或质量、远端CI、浏览器操作与正式宿主重启。
+
+下一节点 C5：有界引用解析、恢复容量与真正的请求准入。当前写屏障不等于模型请求拦截。实际范围与恢复限制见 [coordinator.md](coordinator.md)。
 

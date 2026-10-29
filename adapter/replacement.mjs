@@ -21,10 +21,10 @@ function metrics(session) {
 }
 
 const ACCESS_ERRORS = new Map([['BUSY', 'busy'], ['NOT_FOUND', 'inactive'], ['UNAVAILABLE', 'unavailable'],
-  ['CANCELLED', 'cancelled'], ['DISPOSED', 'cancelled']]);
+  ['CANCELLED', 'cancelled'], ['DISPOSED', 'cancelled'], ['RECONCILE_REQUIRED', 'commit']]);
 
 /** 每会话一个可观察任务，写能力由共享连接层提供。 */
-export function createReplacement(ctx, diagnostics, { access: suppliedAccess } = {}) {
+export function createReplacement(ctx, diagnostics, { access: suppliedAccess, coordinator } = {}) {
   const access = suppliedAccess ?? createSessionAccess(ctx, { diagnostics });
   const jobs = new Map();
   const lifetime = new AbortController();
@@ -35,19 +35,29 @@ export function createReplacement(ctx, diagnostics, { access: suppliedAccess } =
       session_hash: createHash('sha256').update(sessionId).digest('hex').slice(0, 12) };
     diagnostics?.record('context.replace.started', 'info', fields);
     try {
-      const result = await access.withWrite(sessionId, {
+      const compact = transaction => access.withWrite(sessionId, {
         signal: lifetime.signal, grant: { requestId: job.state.id, purpose: 'host_compact' },
       }, async handle => {
         handle.check();
         job.state.before = metrics(handle.agent.session);
-        const result = await handle.compact();
+        await transaction?.intent({ before: job.state.before });
+        transaction?.check();
+        handle.check();
+        const operation = handle.compact();
+        transaction?.retain(operation);
+        const result = await operation;
         handle.check();
         job.state.after = metrics(handle.agent.session);
-        return result;
+        // 宿主可能返回摘要正文或很长的来源数组；回执只保留业务所需计量。
+        return result === null ? null : { shadowed_items: result?.shadowedSeqs?.length ?? 0,
+          shadowedTokenCount: result?.shadowedTokenCount ?? null };
       });
+      const result = coordinator ? await coordinator.execute(sessionId, { request_id: job.state.id,
+        action: 'host_compact', descriptor: {}, boundary: 'host_compaction', signal: lifetime.signal }, compact)
+        : await compact();
       job.state.status = 'completed';
       job.state.outcome = result === null ? 'noop' : 'replaced';
-      job.state.shadowed_items = result?.shadowedSeqs?.length ?? 0;
+      job.state.shadowed_items = result?.shadowed_items ?? 0;
       job.state.shadowed_tokens = result?.shadowedTokenCount ?? null;
       job.state.message = result === null ? '没有宿主允许压缩的历史，本次未替换。'
         : `已压缩 ${job.state.shadowed_items} 条历史；消息 ${job.state.before.messages} → ${job.state.after.messages}，字节 ${job.state.before.bytes} → ${job.state.after.bytes}。`;

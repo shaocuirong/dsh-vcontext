@@ -62,6 +62,11 @@
     }
   },
   "actions": {
+    "archive_history": {
+      "boundary": "idle",
+      "budget": "request_input",
+      "authority": "host"
+    },
     "page_out_history": {
       "boundary": "idle",
       "budget": "request_input",

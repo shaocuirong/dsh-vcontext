@@ -251,7 +251,7 @@ function paginateHistoryRead(content, offset, limit, wrap) {
 }
 
 /** Native log is authoritative; archiving changes only the model-visible Surface. */
-export function createHistoryArchive(ctx, diagnostics, onAccess) {
+export function createHistoryArchive(ctx, diagnostics, onAccess, { coordinator } = {}) {
   const pending = new Map();
   const lifetime = new AbortController();
   let disposed = false;
@@ -289,7 +289,7 @@ export function createHistoryArchive(ctx, diagnostics, onAccess) {
     pending.set(id, operation);
     try { return await operation; } finally { pending.delete(id); }
   }
-  return {
+  const api = {
     async catalog(id, { ref, offset = 0, limit = 100 } = {}) {
       if (!validId(id) || !Number.isSafeInteger(offset) || offset < 0
         || !Number.isSafeInteger(limit) || limit < 1 || limit > 256) fail('INVALID_INPUT');
@@ -315,7 +315,7 @@ export function createHistoryArchive(ctx, diagnostics, onAccess) {
       return { ...span, count: span.nodes.length, nodes: undefined,
         before: metrics(agent.session), surface_seq: agent.session.seq };
     },
-    async archive(id, keepTurns = 2, options = {}) {
+    async archive(id, keepTurns = 2, options = {}, transaction, replayOnly = false) {
       if (!validId(id) || !Number.isSafeInteger(keepTurns) || keepTurns < 1 || keepTurns > 20) fail('INVALID_INPUT');
       if (!options || typeof options !== 'object' || Array.isArray(options)) fail('INVALID_INPUT');
       const requestId = options.request_id;
@@ -351,6 +351,7 @@ export function createHistoryArchive(ctx, diagnostics, onAccess) {
                   surface_seq_before: existing.event.seq, surface_seq_after: session.seq, request_id: requestId };
               }
             }
+            if (replayOnly) fail('NOT_FOUND');
             // The preview's CAS token is the Surface seq observed by inspect(); a
             // mismatch fails before anything is appended.
             if (expectedSurfaceSeq !== undefined && session.seq !== expectedSurfaceSeq) fail('CHANGED');
@@ -399,8 +400,12 @@ export function createHistoryArchive(ctx, diagnostics, onAccess) {
               if (projected === afterBytes) break;
               afterBytes = projected;
             }
+            await transaction?.intent({ kind: 'archive', keep_turns: keepTurns,
+              source_seqs: span.nodes, before_seq: beforeSeq });
+            transaction?.check();
             let event;
             check(signal);
+            if (session.seq !== beforeSeq) fail('CHANGED');
             try {
               event = session.append('user/message', data, {
                 surfaceOp: { op: 'replace', startSeq: span.nodes[0], endSeq: span.nodes.at(-1) },
@@ -452,7 +457,7 @@ export function createHistoryArchive(ctx, diagnostics, onAccess) {
         });
       return { pages: pages.slice(0, limit), total: pages.length };
     },
-    async pageOut(id, pageId, options = {}, beforeCommit, replayOnly = false) {
+    async pageOut(id, pageId, options = {}, beforeCommit, replayOnly = false, transaction) {
       if (!validId(id) || !options || typeof options !== 'object' || Array.isArray(options)) fail('INVALID_INPUT');
       const requestId = options.request_id;
       const expectedGeneration = options.expected_surface_generation;
@@ -550,8 +555,12 @@ export function createHistoryArchive(ctx, diagnostics, onAccess) {
               if (projected === afterBytes) break;
               afterBytes = projected;
             }
+            await transaction?.intent({ kind: 'page', page_id: pageId,
+              source_seqs: page.source_seqs, before_seq: beforeSeq });
+            transaction?.check();
             let event;
             check(signal);
+            if (session.seq !== beforeSeq) fail('CHANGED');
             try {
               event = session.append('user/message', data, {
                 surfaceOp: { op: 'replace', startSeq: page.source_seqs[0],
@@ -740,6 +749,40 @@ export function createHistoryArchive(ctx, diagnostics, onAccess) {
       lifetime.abort();
       // Host flushes cannot be cancelled: drain accepted work before teardown.
       await Promise.allSettled([...pending.values()]);
+      recoveries.forEach(off => off());
     },
   };
+  const recoveries = [];
+  if (coordinator) {
+    const pageOut = api.pageOut.bind(api), archive = api.archive.bind(api);
+    api.pageOut = (id, pageId, options = {}, beforeCommit, replayOnly = false) => replayOnly
+      ? pageOut(id, pageId, options, beforeCommit, true)
+      : coordinator.execute(id, { action: 'page_out_history', descriptor: { page_id: pageId },
+        request_id: options.request_id, boundary: 'idle', activate: !beforeCommit,
+        agent: beforeCommit ? ctx.get('agents')?.get(id) : undefined }, transaction =>
+        pageOut(id, pageId, { ...options, request_id: transaction.request_id }, beforeCommit, false, transaction));
+    api.archive = (id, keepTurns = 2, options = {}) => coordinator.execute(id, {
+      action: 'archive_history', descriptor: { keep_turns: keepTurns }, request_id: options.request_id, boundary: 'idle',
+    }, transaction => archive(id, keepTurns, { ...options, request_id: transaction.request_id }, transaction));
+    const recover = async (id, row, { agent, boundary, signal }) => {
+      if (!['idle', 'host_compaction'].includes(boundary)) return null;
+      const active = agent ?? ctx.get('agents')?.get(id);
+      if (!active || active.status !== 'idle') return null;
+      signal?.throwIfAborted();
+      try {
+        const result = row.action === 'page_out_history'
+          ? await pageOut(id, row.descriptor.page_id, { request_id: row.request_id }, undefined, true)
+          : await archive(id, row.descriptor.keep_turns, { request_id: row.request_id }, undefined, true);
+        return { state: 'confirmed', result };
+      } catch (error) {
+        if (!['NOT_FOUND', 'CHANGED'].includes(error?.code)) throw error;
+        const seqs = row.detail.source_seqs;
+        if (Array.isArray(seqs) && seqs.length && seqs.every(seq => active.session.surface.nodes.includes(seq)))
+          return { state: 'not_applied', result: { reason: 'ORIGINALS_STILL_VISIBLE_NO_MARKER' } };
+        return null;
+      }
+    };
+    recoveries.push(coordinator.registerRecovery('page_out_history', recover), coordinator.registerRecovery('archive_history', recover));
+  }
+  return api;
 }

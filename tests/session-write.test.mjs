@@ -128,3 +128,18 @@ test('写名额有上限，超限按 BUSY 拒绝而不是隐式排队', () => {
   assert.equal(gate.admit('b'), true);
   assert.equal(gate.size, 1);
 });
+
+test('精细写能力不依赖压缩服务，自动调用不激活冷会话', async t => {
+  const f = fixture(t, { engine: false, presets: false });
+  let activations = 0;
+  f.ctx.set('sessionController', { async resolveAgent() { activations++; throw new Error('cold activation'); } });
+  const agent = { id: 'live', session: f.session };
+  const result = await f.access.withWrite('live', { grant, capability: 'session_mutation', activate: false, agent }, handle => {
+    assert.equal(handle.source, 'session_mutation');
+    assert.throws(() => handle.compact(), { code: 'UNAVAILABLE' });
+    return 'fine';
+  });
+  assert.equal(result, 'fine'); assert.equal(activations, 0);
+  await assert.rejects(f.access.withWrite('cold', { grant, capability: 'session_mutation', activate: false }, () => assert.fail()), { code: 'NOT_FOUND' });
+  assert.equal(activations, 0);
+});

@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+### 上下文控制重构 C4
+
+- 一个会话协调器接管后台需求合并、跨会话轮转和结果 pre-step；历史、结果、压缩及内核驻留/容量入口共享仲裁，保持原提交边界。
+- 新增 planned/prepared/intent/confirmed/uncertain/not_applied 账本；历史 marker 和结果替换链可重启对账，未知原生压缩停止重跑。
+- 自动 L2 tick 与回执在同一 SQLite 事务；短后台内核事务不再使前台驻留写无故 BUSY。新增同源本机未决查询与人工复核入口。
+- 精细 Access 写不再依赖 compaction；共享动作协议限定边界。独立 control1 扩展先做非覆盖备份，仍保留为本地未发布节点。
+
 ### 上下文控制重构 C3
 
 - 统一 page/resource 来源目录，导航笔记与资源摘要作为有精确来源的派生表示；保留旧证据 API 与不可变正文。

@@ -59,8 +59,10 @@ function localCarrier(request) {
     && (request.method !== 'POST' || Boolean(request.headers?.origin));
 }
 
-export function createHandler(config, transport, liveContext, diagnostics, replacement, sessionBridge, resultProjection, resultJobs, sessionSnapshots, taskController, historyArchive, automation, evidenceDirectory) {
+export function createHandler(config, transport, liveContext, diagnostics, replacement, sessionBridge, resultProjection, resultJobs, sessionSnapshots, taskController, historyArchive, automation, evidenceDirectory, coordinator) {
   const settings = validateConfig(config);
+  const kernelWrite = (id, op, input) => coordinator
+    ? coordinator.local(id, () => transport.call(id, op, input)) : transport.call(id, op, input);
   return async function handle(request, response) {
     let url;
     try {
@@ -77,6 +79,23 @@ export function createHandler(config, transport, liveContext, diagnostics, repla
     }
     if (foreignOrigin || request.headers?.['sec-fetch-site'] === 'cross-site')
       return send(response, 403, { ok: false, error: 'same-origin request required' });
+
+    if (url.pathname === `${ROUTE_PREFIX}control`) {
+      if (!localCarrier(request)) return send(response, 403, { ok: false, error: '仅接受本机同源请求。' });
+      if (!coordinator) return send(response, 503, { ok: false, error: '协调器不可用。' });
+      try {
+        if (request.method === 'GET') {
+          const id = sessionOf(url);
+          if (!id || [...url.searchParams.keys()].some(key => key !== 'session')) throw new Error('invalid session');
+          return send(response, 200, { ok: true, result: await coordinator.status(id) });
+        }
+        if (request.method !== 'POST') return send(response, 405, { ok: false, error: 'GET/POST only' });
+        const input = JSON.parse(await readBody(request));
+        if (!input || Object.keys(input).some(k => !['session', 'request_id', 'state', 'note'].includes(k))) throw new Error('invalid review');
+        const result = await coordinator.review(input.session, input.request_id, { state: input.state, note: input.note });
+        return send(response, 200, { ok: true, result });
+      } catch { return send(response, 400, { ok: false, error: '对账复核参数无效或操作状态已变化。' }); }
+    }
 
     if (url.pathname === `${ROUTE_PREFIX}evidence` || url.pathname === `${ROUTE_PREFIX}evidence/read`) {
       if (!localCarrier(request)) return send(response, 403, { ok: false, error: '仅接受本机同源请求。' });
@@ -388,7 +407,7 @@ export function createHandler(config, transport, liveContext, diagnostics, repla
         const body = JSON.parse(await readBody(request));
         if (typeof body?.session !== 'string' || !body.session || body.session.length > 256 || Object.keys(body).some(key => key !== 'session'))
           throw new Error('session required');
-        return send(response, 200, { ok: true, result: await transport.call(body.session, 'policy_tick', { force: true }) });
+        return send(response, 200, { ok: true, result: await kernelWrite(body.session, 'policy_tick', { force: true }) });
       } catch (error) { return send(response, 400, { ok: false, error: String(error.message ?? error) }); }
     }
 
@@ -447,7 +466,7 @@ export function createHandler(config, transport, liveContext, diagnostics, repla
         const configuration = Object.fromEntries(Object.entries(body).filter(([key]) => key !== 'session'));
         if (Object.keys(configuration).length === 0) throw new Error('at least one quota setting is required');
         return send(response, 200, { ok: true, namespace: settings.namespace, session: body.session,
-          result: await transport.call(body.session, 'quota_configure', configuration) });
+          result: await kernelWrite(body.session, 'quota_configure', configuration) });
       } catch (error) {
         return send(response, 400, { ok: false, error: String(error?.message ?? error) });
       }
@@ -498,7 +517,7 @@ export function createHandler(config, transport, liveContext, diagnostics, repla
   };
 }
 
-export function mountRoutes(ctx, config, transport, liveContext, diagnostics, replacement, sessionBridge, resultProjection, resultJobs, sessionSnapshots, taskController, historyArchive, automation, evidenceDirectory) {
+export function mountRoutes(ctx, config, transport, liveContext, diagnostics, replacement, sessionBridge, resultProjection, resultJobs, sessionSnapshots, taskController, historyArchive, automation, evidenceDirectory, coordinator) {
   const webServer = ctx.get('webServer');
   // The shipped web and desktop profiles always carry the HTTP carrier. A CLI
   // or SDK-only composition has none, and then there is simply no route to
@@ -506,5 +525,5 @@ export function mountRoutes(ctx, config, transport, liveContext, diagnostics, re
   // service-resolution waterfall and can corrupt the value other plugins read,
   // which is exactly what the real-SDK test caught.
   if (!webServer || typeof webServer.register !== 'function') return () => {};
-  return webServer.register({ kind: 'prefix', path: ROUTE_PREFIX.slice(0, -1), handler: createHandler(config, transport, liveContext, diagnostics, replacement, sessionBridge, resultProjection, resultJobs, sessionSnapshots, taskController, historyArchive, automation, evidenceDirectory) });
+  return webServer.register({ kind: 'prefix', path: ROUTE_PREFIX.slice(0, -1), handler: createHandler(config, transport, liveContext, diagnostics, replacement, sessionBridge, resultProjection, resultJobs, sessionSnapshots, taskController, historyArchive, automation, evidenceDirectory, coordinator) });
 }

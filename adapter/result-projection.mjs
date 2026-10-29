@@ -37,7 +37,7 @@ function requireOpenTurn(cut) {
 }
 
 /** Explicit, single-result STORE -> PROJECT / RESTORE using native Surface events. */
-export function createResultProjection(ctx, transport, sessionBridge, diagnostics, config = {}) {
+export function createResultProjection(ctx, transport, sessionBridge, diagnostics, config = {}, { coordinator } = {}) {
   const lifetime = new AbortController();
   const pending = new Map();
   const automatic = new Map();
@@ -245,7 +245,9 @@ export function createResultProjection(ctx, transport, sessionBridge, diagnostic
     try { await call(agent.id, 'result_mark', { ref: record.ref, status, surface_seq: surfaceSeq }, signal); }
     catch (error) { if (signal.aborted) fail('CANCELLED'); fail('RECONCILE_REQUIRED'); }
   }
-  async function mutate(sessionId, work) {
+  async function mutate(sessionId, work, coordinated = false) {
+    if (coordinator && !coordinated)
+      return coordinator.local(sessionId, () => mutate(sessionId, work, true), lifetime.signal);
     if (!identity(sessionId)) fail('INVALID_INPUT');
     if (disposed) fail('DISPOSED');
     if (pending.has(sessionId) || pending.size >= 32) fail('BUSY');
@@ -271,7 +273,7 @@ export function createResultProjection(ctx, transport, sessionBridge, diagnostic
     pending.set(sessionId, promise);
     try { return await promise; } finally { pending.delete(sessionId); }
   }
-  async function perform(agent, record, desired, cut, signal, automaticPlan = false) {
+  async function perform(agent, record, desired, cut, signal, automaticPlan = false, transaction) {
     requireOpenTurn(cut);
     const original = validateStored(record, cut);
     const visible = current(agent, cut, record, original);
@@ -302,6 +304,10 @@ export function createResultProjection(ctx, transport, sessionBridge, diagnostic
     };
     // Storage and reconciliation are awaited even for a no-op retry. The old
     // cut cannot authorize success after another writer changes the Surface.
+    assertVisible();
+    await transaction?.intent({ ref: record.ref, desired, source_seq: record.source_seq,
+      surface_seq_before: surfaceSeq, original_state: visible.status });
+    transaction?.check();
     assertVisible();
     if (!noop) {
       const data = desired === 'projected' ? projectedData(original, record) : original;
@@ -338,19 +344,28 @@ export function createResultProjection(ctx, transport, sessionBridge, diagnostic
       const plans = await call(agent.id, 'result_plan_list', {}, control);
       const outcome = { applied: [], failed: [] };
       for (const plan of plans.plans ?? []) {
+        const request_id = `result:${plan.ref}:${plan.revision}`;
         try {
           if (plan.origin === 'automatic') {
             const state = await call(agent.id, 'auto_status', {}, control);
             if (!state.config.l1_enabled || !state.config.l1_open_results_enabled) continue;
           }
-          const metadata = await call(agent.id, 'result_verify', { ref: plan.ref }, control);
-          const cut = await observe(agent, control);
-          let result;
-          try { result = await perform(agent, recordAt(metadata, cut), plan.desired, cut, control, plan.origin === 'automatic'); }
-          finally { cut.release(); }
-          try { await call(agent.id, 'result_plan_finish', { ref: plan.ref,
-            revision: plan.revision, status: 'applied' }, control); }
-          catch { fail('RECONCILE_REQUIRED'); }
+          const apply = async transaction => {
+            const queued = await call(agent.id, 'result_plan_list', {}, control);
+            if (!queued.plans.some(p => p.ref === plan.ref && p.revision === plan.revision && p.desired === plan.desired)) fail('CHANGED');
+            const metadata = await call(agent.id, 'result_verify', { ref: plan.ref }, control);
+            const cut = await observe(agent, control);
+            let result;
+            try { result = await perform(agent, recordAt(metadata, cut), plan.desired, cut, control, plan.origin === 'automatic', transaction); }
+            finally { cut.release(); }
+            try { await call(agent.id, 'result_plan_finish', { ref: plan.ref,
+              revision: plan.revision, status: 'applied' }, control); }
+            catch { fail('RECONCILE_REQUIRED'); }
+            return result;
+          };
+          const result = coordinator ? await coordinator.execute(agent.id, { request_id, action: 'project_result',
+            descriptor: { ref: plan.ref, desired: plan.desired, revision: plan.revision },
+            agent, activate: false, boundary: 'pre_step', signal: control }, apply) : await apply();
           outcome.applied.push(result);
           if (plan.origin === 'automatic') {
             try { await call(agent.id, 'auto_receipt', { request_id: `open-result:${plan.ref}:${plan.revision}`,
@@ -363,8 +378,11 @@ export function createResultProjection(ctx, transport, sessionBridge, diagnostic
           }
         } catch (error) {
           const code = Object.hasOwn(ERRORS, error?.code) ? error.code : 'STORAGE_FAILED';
-          try { await call(agent.id, 'result_plan_finish', { ref: plan.ref,
-            revision: plan.revision, status: 'failed', error_code: code }, control); } catch {}
+          const unresolved = coordinator && (await transport.call(agent.id, 'control_read', { request_id }).catch(() => null));
+          if (!unresolved || ['planned', 'prepared', 'not_applied'].includes(unresolved.state)) {
+            try { await call(agent.id, 'result_plan_finish', { ref: plan.ref,
+              revision: plan.revision, status: 'failed', error_code: code }, control); } catch {}
+          }
           log('context.result.apply.failed', agent.id, { error_code: code });
           outcome.failed.push({ ref: plan.ref, error_code: code });
         }
@@ -374,15 +392,49 @@ export function createResultProjection(ctx, transport, sessionBridge, diagnostic
     pending.set(agent.id, work);
     try { return await work; } finally { pending.delete(agent.id); }
   }
-  const detachStep = ctx.on('agent/pre-step', async ({ agent, signal }, next) => {
+  const step = async (agent, signal) => {
+    try { await applyPending(agent, signal); }
+    catch (error) { log('context.result.apply.failed', agent.id, {
+      error_code: Object.hasOwn(ERRORS, error?.code) ? error.code : 'STORAGE_FAILED' }); }
+  };
+  const detachStep = coordinator ? coordinator.registerStep(step) : ctx.on('agent/pre-step', async ({ agent, signal }, next) => {
     const decision = await next();
     if (decision.kind !== 'reject' && !signal.aborted) {
-      try { await applyPending(agent, signal); }
-      catch (error) { log('context.result.apply.failed', agent.id, {
-        error_code: Object.hasOwn(ERRORS, error?.code) ? error.code : 'STORAGE_FAILED' }); }
+      await step(agent, signal);
     }
     return decision;
   }, { prepend: true });
+  const detachRecovery = coordinator?.registerRecovery('project_result', async (id, row, context) => {
+    const agent = context.agent ?? ctx.get('agents')?.get(id);
+    if (!agent) return null;
+    const recover = async signal => {
+      const metadata = await call(id, 'result_verify', { ref: row.descriptor.ref }, signal);
+      const cut = await observe(agent, signal);
+      try {
+        const record = recordAt(metadata, cut), original = validateStored(record, cut);
+        const visible = current(agent, cut, record, original);
+        if (!visible) return null;
+        await flush(agent, signal);
+        if (agent.session.seq !== cut.cursor) fail('CHANGED');
+        if (visible.status === row.descriptor.desired || row.descriptor.desired === 'restored' && visible.status === 'stored') {
+          if (visible.status !== 'stored') await mark(agent, record, row.descriptor.desired, visible.event.seq, signal);
+          const listed = await call(id, 'result_plan_list', {}, signal);
+          if (listed.plans.some(p => p.ref === record.ref && p.revision === row.descriptor.revision))
+            await call(id, 'result_plan_finish', { ref: record.ref, revision: row.descriptor.revision, status: 'applied' }, signal);
+          return { state: 'confirmed', result: { ref: record.ref, source_seq: record.source_seq,
+            surface_seq: visible.event.seq, status: row.descriptor.desired, bytes: record.bytes,
+            noop: true, reconciled: true, before_bytes: null, after_bytes: null } };
+        }
+        if (visible.event.seq === row.detail.surface_seq_before && visible.status === row.detail.original_state)
+          return { state: 'not_applied', result: { reason: 'ORIGINAL_VISIBLE_NO_PROJECTION' } };
+        return null;
+      } finally { cut.release(); }
+    };
+    if (context.boundary === 'pre_step') return recover(context.signal ?? lifetime.signal);
+    if (context.boundary === 'idle' && agent.status === 'idle')
+      return agent.runMaintenance(signal => recover(AbortSignal.any([lifetime.signal, signal])));
+    return null;
+  });
   return {
     applyPending,
     automaticStatus(id) { return automatic.has(id) ? structuredClone(automatic.get(id)) : null; },
@@ -473,6 +525,7 @@ export function createResultProjection(ctx, transport, sessionBridge, diagnostic
       disposed = true;
       lifetime.abort();
       detachStep();
+      detachRecovery?.();
       await Promise.allSettled([...pending.values()]);
       pending.clear();
       automatic.clear();

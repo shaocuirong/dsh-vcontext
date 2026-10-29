@@ -7,7 +7,7 @@ description: 设计、分步重构和维护 dsh-vcontext 的上下文控制与�
 
 采用方案三：程序保证来源、权限、预算、依赖与提交；模型在明确阶段边界提出有来源的摘要。同一来源可以有多种表示，当前请求选择适用版本。
 
-这是重构与维护协议，不包含另一份运行时代码。C0/C1 首批、手动压缩写接口、C2 变更账本及 C3 统一目录已落地，完整方案三仍在推进；规划中的模块、表和 API 不能当成已有能力。实施前先读[节点进度](references/progress.md)。
+这是重构与维护协议，不包含另一份运行时代码。C0/C1 首批、手动压缩写接口、C2 变更账本、C3 统一目录及 C4 协调与提交恢复已落地，完整方案三仍在推进；规划中的模块、表和 API 不能当成已有能力。实施前先读[节点进度](references/progress.md)。
 
 ## 开始工作
 
@@ -17,7 +17,7 @@ description: 设计、分步重构和维护 dsh-vcontext 的上下文控制与�
 - 修改条目、权限、保护或版本：读[数据与接口契约](references/contract.md)。
 - 修改工具效果、版本描述或现场核验：读[C2 实际契约](references/effects.md)。
 - 修改统一目录、表示预算或交付基线：读[C3 实际契约](references/catalog.md)。
-- 修改触发、写入口、锁或对账：读[调度与提交](references/scheduling.md)。
+- 修改触发、写入口、锁或对账：读[调度与提交](references/scheduling.md)和[C4实际契约](references/coordinator.md)。
 - 选择回归与打包：读[验证说明](references/validation.md)。
 - 调整研究映射与优化策略：按需读[研究依据](references/research.md)。
 

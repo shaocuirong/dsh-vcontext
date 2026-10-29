@@ -10,6 +10,8 @@ import { createEffectsObserver } from './control/effects.mjs';
 import { readResourceWithVersion } from './control/versions.mjs';
 import { createContextCatalog } from './control/catalog.mjs';
 import { isAgentLoopRequest } from '@deepseek-ai/dsh-llm';
+import { createControlCoordinator } from './control/coordinator.mjs';
+import { RESIDENCY_OPERATIONS } from './operations.mjs';
 
 // One byte-stable fallback shared by the initial attach and every failure path.
 const UNAVAILABLE_HISTORY = JSON.stringify(unavailableOutline());
@@ -120,8 +122,9 @@ export function mount(ctx, config, defineTool) {
   const diagnostics = createDiagnostics({ ...config, logger: ctx.logger });
   const transport = createTransport(config, diagnostics);
   const sessionAccess = createSessionAccess(ctx, { diagnostics });
+  const coordinator = createControlCoordinator(ctx, transport, { access: sessionAccess });
   const historyArchive = createHistoryArchive(ctx, diagnostics,
-    (id, access) => transport.call(id, 'auto_access', access));
+    (id, access) => transport.call(id, 'auto_access', access), { coordinator });
   const evidenceDirectory = createEvidenceDirectory(ctx, transport, historyArchive);
   const contextCatalog = createContextCatalog(transport, evidenceDirectory);
   const sessionBridge = createSessionBridge(ctx, transport, diagnostics,
@@ -275,7 +278,7 @@ export function mount(ctx, config, defineTool) {
       if (!exec.agent) throw new Error('vctx requires a calling agent');
       const input = JSON.parse(args.input);
       if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('input must encode an object');
-      if (args.operation.startsWith('catalog_') || args.operation.startsWith('effects_') || args.operation.startsWith('ved_') || args.operation.startsWith('auto_') || args.operation.startsWith('result_upload_') || ['state_bind', 'state_sync', 'result_store', 'result_get', 'result_verify', 'result_find', 'result_mark', 'result_plan', 'result_plan_list', 'result_plan_finish', 'task_review'].includes(args.operation)) throw new Error('host-only structured state operation');
+      if (args.operation.startsWith('control_') || args.operation.startsWith('catalog_') || args.operation.startsWith('effects_') || args.operation.startsWith('ved_') || args.operation.startsWith('auto_') || args.operation.startsWith('result_upload_') || ['state_bind', 'state_sync', 'result_store', 'result_get', 'result_verify', 'result_find', 'result_mark', 'result_plan', 'result_plan_list', 'result_plan_finish', 'task_review'].includes(args.operation)) throw new Error('host-only structured state operation');
       if (args.operation === 'context_list') return contextCatalog.list(exec.agent.id, input, exec.signal);
       if (args.operation === 'evidence_list') return evidenceDirectory.list(exec.agent.id, input, exec.signal);
       if (args.operation === 'evidence_read') return evidenceDirectory.read(exec.agent.id, input, exec.signal);
@@ -309,7 +312,10 @@ export function mount(ctx, config, defineTool) {
         const state = await sessionBridge.sync(exec.agent, exec.signal);
         if (state.state !== 'synced') throw new Error(`session bridge unavailable: ${state.error_code ?? state.state}`);
       }
-      const result = await transport.call(exec.agent.id, args.operation, input, exec.signal);
+      const mutateResidency = RESIDENCY_OPERATIONS.has(args.operation);
+      const result = mutateResidency
+        ? await coordinator.local(exec.agent.id, () => transport.call(exec.agent.id, args.operation, input, exec.signal), exec.signal)
+        : await transport.call(exec.agent.id, args.operation, input, exec.signal);
       // Tools return their requested result; a separate bounded snapshot carries residency.
       await refresh(exec.agent, exec.signal, { force: isMutating(args.operation) });
       return result;
@@ -328,7 +334,7 @@ export function mount(ctx, config, defineTool) {
       const bridgeState = await sessionBridge.sync(agent, signal);
       try {
         await transport.call(agent.id, 'policy_tick', {}, signal);
-        await transport.call(agent.id, 'auto_tick', {}, signal);
+        await coordinator.tick(agent.id, signal);
         await refresh(agent, signal, { executionAvailable: bridgeState.state === 'synced' });
       } catch (error) {
         if (signal.aborted) throw error;
@@ -352,6 +358,7 @@ export function mount(ctx, config, defineTool) {
   });
   ctx.effect(() => async () => {
     disposed = true;
+    await coordinator.dispose();
     contextCatalog.dispose();
     await evidenceDirectory.dispose();
     await historyArchive.dispose();
@@ -369,5 +376,5 @@ export function mount(ctx, config, defineTool) {
     await sessionAccess.dispose();
     await transport.dispose();
   });
-  return { transport, bridge: transport, sessionAccess, sessionBridge, refresh, diagnostics, historyArchive, evidenceDirectory, contextCatalog };
+  return { transport, bridge: transport, sessionAccess, coordinator, sessionBridge, refresh, diagnostics, historyArchive, evidenceDirectory, contextCatalog };
 }

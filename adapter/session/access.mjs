@@ -115,19 +115,22 @@ export function createSessionAccess(ctx, { diagnostics } = {}) {
       });
     },
     // 写入口只开「获取与生命周期」，不认识宿主的事件形状与事务语义。
-    withWrite(id, { signal, grant } = {}, use) {
+    withWrite(id, { signal, grant, capability = 'host_compact', activate = true, agent: suppliedAgent } = {}, use) {
       return lifetime.run(signal, async scope => {
-        if (!validId(id) || typeof use !== 'function' || !validGrant(grant)) throw accessError('INVALID_INPUT');
+        if (!validId(id) || typeof use !== 'function' || !validGrant(grant)
+          || !['host_compact', 'session_mutation'].includes(capability)) throw accessError('INVALID_INPUT');
         const current = faces(scope);
         if (!current.resolveAgent && !current.agent) throw accessError('UNAVAILABLE');
         if (!write.admit(id)) throw accessError('BUSY');
         let held = true;
         const releaseWrite = () => { if (held) { held = false; write.release(id); } };
         try {
-          const resolved = await writeAgent(scope, current, id);
+          const resolved = capability === 'session_mutation' && (!activate || suppliedAgent)
+            ? { agent: suppliedAgent ?? current.agent?.(id), via: 'agents' } : await writeAgent(scope, current, id);
+          if (!resolved.agent?.session || resolved.agent.id !== undefined && resolved.agent.id !== id) throw accessError('NOT_FOUND');
           if (resolved.via === 'sessionController') scope.bind('sessionController', current.controller);
-          const found = engineFor(current, resolved.agent);
-          if (!found.engine) throw accessError('UNAVAILABLE');
+          const found = capability === 'host_compact' ? engineFor(current, resolved.agent) : { engine: null, source: 'session_mutation' };
+          if (capability === 'host_compact' && !found.engine) throw accessError('UNAVAILABLE');
           if (found.source === 'agentPresets') scope.bind('agentPresets', current.presets);
           if (found.source === 'context') scope.bind('compaction', current.compaction);
           const handle = Object.freeze({
@@ -136,6 +139,7 @@ export function createSessionAccess(ctx, { diagnostics } = {}) {
             check() { scope.check(); },
             compact(observerSignal) {
               scope.check();
+              if (!found.engine) throw accessError('UNAVAILABLE');
               return found.engine.compactNow(resolved.agent,
                 observerSignal ? AbortSignal.any([scope.signal, observerSignal]) : scope.signal);
             },
