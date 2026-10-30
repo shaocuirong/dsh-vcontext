@@ -141,10 +141,14 @@ export function projectCatalog(catalog, baseline, previous, { maxBytes = 4096, m
   return view;
 }
 
-export function createContextCatalog(transport, evidence, { guardStage = async (_id, stage) => stage } = {}) {
+export function createContextCatalog(transport, evidence, { guardStage = async (_id, stage) => stage, signals, stageEnabled = true } = {}) {
   const call = (id, op, input, signal) => transport.call(id, op, input, signal);
   const resourcesFor = async (id, input, signal) => {
     const resources = await call(id, 'catalog_resources', input, signal);
+    if (!stageEnabled) {
+      resources.representations = (resources.representations ?? []).filter(r => !r.id.startsWith('vctx://stage/'));
+      if (resources.stage) resources.stage = { ...resources.stage, current_stage: null };
+    }
     if (resources.stage) {
       const previous = resources.stage.current_stage?.ref;
       resources.stage = await guardStage(id, resources.stage, signal);
@@ -182,18 +186,35 @@ export function createContextCatalog(transport, evidence, { guardStage = async (
       }
       return result;
     },
-    async prepare(id, signal) {
+    async prepare(id, signal, { adaptive = true } = {}) {
       const catalog = await this.read(id, signal), delivered = await call(id, 'catalog_baseline', {}, signal);
-      const baseline = catalogBaseline(catalog), previous = views.get(id);
+      const previous = views.get(id), policy = signals?.policy(id, adaptive);
       // 交付回执本身不改变内容；相同内容版本保留表示字节，避免空 delta 制造宿主快照。
-      const text = previous?.version === baseline.version ? previous.text
-        : JSON.stringify(projectCatalog(catalog, baseline, delivered.baseline));
+      const make = options => {
+        if (options) catalog.coverage.view_policy = options.tier;
+        const baseline = catalogBaseline(catalog);
+        const view = previous?.version === baseline.version ? JSON.parse(previous.text)
+          : projectCatalog(catalog, baseline, delivered.baseline, options);
+        return { baseline, text: JSON.stringify(view), refs: [view.current_stage?.ref, ...view.entries.map(e => e.ref)].filter(Boolean) };
+      };
+      let result;
+      try { result = make(policy); }
+      catch (error) {
+        if (policy?.tier !== 'compact' || !String(error.message).includes('roots exceed budget')) throw error;
+        // 当前阶段和恢复根优先；低收益目录不能以挤掉 1c 为代价缩小。
+        result = make({ tier: 'compact_protected', maxBytes: 4096, maxItems: 4 });
+      }
+      const { text, baseline, refs } = result;
+      signals?.prepared(id, { bytes: Buffer.byteLength(text), latch_hit: previous?.version === baseline.version,
+        stage_bytes: catalog.current_stage ? Buffer.byteLength(JSON.stringify(catalog.current_stage)) : 0 });
       views.delete(id); views.set(id, { version: baseline.version, text });
       if (views.size > 128) views.delete(views.keys().next().value);
-      return { text, baseline, generation: delivered.generation };
+      return { text, baseline, generation: delivered.generation, refs };
     },
-    delivered(id, prepared, signal) {
-      return call(id, 'catalog_delivered', { expected_generation: prepared.generation, baseline: prepared.baseline }, signal);
+    async delivered(id, prepared, signal) {
+      const result = await call(id, 'catalog_delivered', { expected_generation: prepared.generation, baseline: prepared.baseline }, signal);
+      if (result.committed) signals?.delivered(id, prepared.refs ?? []);
+      return result;
     },
     forget(id) { views.delete(id); },
     dispose() { views.clear(); },

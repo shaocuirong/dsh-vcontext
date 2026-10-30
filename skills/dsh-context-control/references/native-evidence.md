@@ -1,6 +1,6 @@
 # C6a 原生历史与工具来源证明
 
-本节点补齐 C6a 的宿主原生来源：已登记的 user/assistant 消息、native 与 PTC 调用/结果，继续作为历史页成员处理。没有新来源种类或另一套原文目录；`vctx://event/<会话owner>/<seq>` 是原始页成员定位符，kind 仍为 page。C6b 独立后台生成器未启用，C7 测量优化尚未实施。
+本节点补齐 C6a 的宿主原生来源：已登记的 user/assistant 消息、native 与 PTC 调用/结果，继续作为历史页成员处理。没有新来源种类或另一套原文目录；`vctx://event/<会话owner>/<seq>` 是原始页成员定位符，kind 仍为 page。C6b 独立后台生成器未启用，C7 必要程序优化已接入，详见 [tuning.md](tuning.md)。
 
 ## 权威读取与固定版本
 

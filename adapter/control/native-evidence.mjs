@@ -64,7 +64,7 @@ const slice = (text, offset, limit) => {
 };
 
 // 原文只借用同一 LiveCut；证明只留下定位/版本，不留正文、参数或宿主对象。
-export function createNativeEvidence(access) {
+export function createNativeEvidence(access, { enabled = true } = {}) {
   function record(cut, id, ref, budget = MAX_SCAN) {
     const seq = seqOf(id, ref), event = cut.events[seq];
     if (!event || event.seq !== seq || !TYPES.has(event.type) || event.surfaceOp?.op === 'replace') fail('EVENT_NOT_ORIGINAL');
@@ -78,9 +78,12 @@ export function createNativeEvidence(access) {
       source_seq: seq, event_type: event.type, inherited: seq < cut.inheritedEventCount,
       source_version: 'sha256:' + hash(body), bytes, chars: count(body), read_operation: 'context_read' } };
   }
-  const withCut = (agent, signal, use) => access.withLiveCut(agent, { signal }, cut => {
+  const withCut = (agent, signal, use) => {
+    if (!enabled) return Promise.reject(Object.assign(new Error('NATIVE_EVIDENCE_DISABLED'), { code: 'NATIVE_EVIDENCE_DISABLED' }));
+    return access.withLiveCut(agent, { signal }, cut => {
     cut.check(); const value = use(cut); cut.check(); return value;
-  });
+    });
+  };
   return {
     resolve(agent, ref, signal) { return withCut(agent, signal, cut => record(cut, agent.id, ref).locator); },
     prove(agent, requirements, signal) {

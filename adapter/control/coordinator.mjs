@@ -7,7 +7,7 @@ const valid = value => typeof value === 'string' && value.length > 0 && value.le
 const TERMINAL = new Set(['confirmed', 'not_applied']);
 
 // 一个挂载内共用仲裁、后台轮转与持久提交协议；执行器仍拥有宿主合法提交边界。
-export function createControlCoordinator(ctx, transport, { access } = {}) {
+export function createControlCoordinator(ctx, transport, { access, signals } = {}) {
   const lifetime = new AbortController(), writes = new Map(), lockKinds = new Map(), entries = new Map(), queue = [];
   const recoverers = new Map(), steps = new Set();
   let disposed = false, background = false, idleWorker;
@@ -16,11 +16,13 @@ export function createControlCoordinator(ctx, transport, { access } = {}) {
   function exclusive(id, work, kind = 'host') {
     if (!valid(id)) return Promise.reject(Object.assign(new Error('INVALID_INPUT'), { code: 'INVALID_INPUT' }));
     if (writes.has(id) || writes.size >= 64) return Promise.reject(Object.assign(new Error('BUSY'), { code: 'BUSY' }));
+    const started = performance.now();
     const task = Promise.resolve().then(work);
     writes.set(id, task);
     lockKinds.set(id, kind);
     const release = () => { if (writes.get(id) === task) { writes.delete(id); lockKinds.delete(id); } };
-    task.then(release, release);
+    task.then(() => { release(); if (kind === 'host') signals?.duration(id, 'host', performance.now() - started); },
+      () => { release(); if (kind === 'host') signals?.duration(id, 'host', performance.now() - started, false); });
     return task;
   }
   async function record(id, row, state, detail = row.detail ?? {}, result = null) {
@@ -124,16 +126,19 @@ export function createControlCoordinator(ctx, transport, { access } = {}) {
     if (!next) return;
     background = true;
     const { state, resolve } = next;
+    const started = performance.now();
     Promise.resolve().then(async () => {
       check(lifetime.signal);
       if (state.disposed || state.agent.status !== 'idle') return { outcome: 'BUSY' };
       return idleWorker?.(state);
     }).then(result => {
+      signals?.duration(state.agent.id, 'background_cycle', performance.now() - started, result?.outcome !== 'failed' && result?.outcome !== 'BUSY');
       state.failures = 0; state.last = result;
       if (!disposed && !state.disposed && ((result?.l1?.pages?.length > 0 && !result.l1.after?.low && result.l1.outcome !== 'NO_GAIN')
         || (result?.l2?.evicted?.length === 8 && !result.l2.target_reached))) retry(state, 30000);
       return result;
     }, error => {
+      signals?.duration(state.agent.id, 'background_cycle', performance.now() - started, false);
       state.last = { outcome: 'failed', error_code: /^[A-Z_]{1,48}$/u.test(error?.code) ? error.code : 'FAILED',
         retry_at: Date.now() + Math.min(300000, 30000 * 2 ** Math.min(4, state.failures++)) };
       if (!disposed && !state.disposed && error?.code !== 'RECONCILE_REQUIRED') retry(state, state.last.retry_at - Date.now());
@@ -209,10 +214,14 @@ export function createControlCoordinator(ctx, transport, { access } = {}) {
     },
     recover(id, context = {}) { return exclusive(id, () => reconcile(id, context)); },
     async local(id, work, signal, { background: isBackground = false } = {}) {
-      // 仅等待已经开始的短内核事务；宿主写冲突仍明确 BUSY，不积压旧宿主计划。
-      if (!isBackground && lockKinds.get(id) === 'background') await writes.get(id)?.catch(() => {});
-      return exclusive(id, async () => { check(signal ?? lifetime.signal); await reconcile(id, { boundary: 'transaction', signal });
-        const result = await work(); check(signal ?? lifetime.signal); return result; }, isBackground ? 'background' : 'foreground');
+      const started = performance.now(); let successful = false;
+      try {
+        // 仅等待已经开始的短内核事务；宿主写冲突仍明确 BUSY，不积压旧宿主计划。
+        if (!isBackground && lockKinds.get(id) === 'background') await writes.get(id)?.catch(() => {});
+        const result = await exclusive(id, async () => { check(signal ?? lifetime.signal); await reconcile(id, { boundary: 'transaction', signal });
+          const result = await work(); check(signal ?? lifetime.signal); return result; }, isBackground ? 'background' : 'foreground');
+        successful = true; return result;
+      } finally { signals?.duration(id, isBackground ? 'background' : 'foreground', performance.now() - started, successful); }
     },
     tick(id, signal) { return this.local(id, () => call(id, 'control_tick', { request_id: randomUUID() }, signal), signal, { background: true }); },
     async dispose() {

@@ -529,3 +529,11 @@ stage_prepare 现可从共享 LiveCut 为已登记原生历史和 native/PTC 调
 模型不能调用 stage_requirements/stage_attest，也不能传 anchor_proofs/native_check。新候选绑定 proof_ref，旧候选不随补证明改变；激活和注入前重验宿主来源，不可用/失配即撤销当前投影。一次证明扫描最多8MiB，来源合计最多64项；pending/继承执行/容量等缺口不会被语义评审消除。
 
 独立 vsp_schema1 首次扩展先备份。旧版没有冻结原生 required seq 的 basis 须明确 task_update/attach 形成新版本再准备，不能补猜完成当时的事件。详见[原生证据契约](../../skills/dsh-context-control/references/native-evidence.md)。C6b 独立后台生成未启用，C7 测量优化待实施。
+
+## 开发分支：C7 有界调优与收尾（未发布）
+
+context_status 新增 control 字段，提供目录/索引字节、插件运行快照占比、恢复成功/缺额/失败、成功交付及前后台时延 p95。计量有界且不进入注入指纹；恢复校验读与显式目录收益分开，失败/缺额不混入成功时延。它不是模型采用率或供应商费用观测。
+
+纯资源摘要按路径/现场观察水位失效；未确认写、未知依赖继续保守。陈旧现场观察不能被 task_update 洗掉，同 hash 宿主复核可以复用旧候选。有限反馈窗口可收缩普通目录并恢复粒度，当前1c和恢复根始终保留；冷恢复保留窗口会自然释放。
+
+POST /vctx/automation 新增独立布尔 adaptive_policy_enabled（默认 true，足量样本后才调整），关闭时恢复固定规则。挂载配置 stageSummaries=false 停止阶段生成/评审/激活及注入、nativeEvidence=false 停止原生 event 恢复并撤下依赖投影；已有历史不删除。开关不绕过来源、权限或写仲裁。完整边界、参数及离线对照命令见[C7实际契约](../../skills/dsh-context-control/references/tuning.md)。

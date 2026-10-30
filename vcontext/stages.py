@@ -155,9 +155,25 @@ class StageState(TaskState):
         effect_status = effects.effects_status()
         if effect_status['processed_seq'] < binding['processed_seq']:
             reasons.append('OBSERVATION_BEHIND')
-        # 首批采用保守的写版本失效：不把普通 host seq 增长当成写入。
-        if effect_status['revision'] != basis['effects']['revision'] or effect_status['pending']:
-            reasons.append('WRITE_BASIS_CHANGED')
+        paths = [s['path'] for s in basis['sources'] if s['ref'].startswith('vctx://resource/')]
+        unknown_dependencies = len(paths) != len(basis['sources'])
+        # 固定目标的纯资源摘要只依赖选定快照；页/原生事件没有完整路径依赖，仍保守失效。
+        if basis['target']['mode'] != 'pinned' or unknown_dependencies:
+            groups = {}
+            if unknown_dependencies:
+                groups[basis['effects']['processed_seq']] = paths
+            else:
+                for source in basis['sources']:
+                    observed = self._one('''SELECT basis_seq,source_hash,observed_hash FROM vfx_observations
+                        WHERE namespace=? AND session_id=? AND ref=?''', (*self._scope, source['ref']))
+                    watermark = basis['effects']['processed_seq']
+                    if observed and observed['source_hash'] == observed['observed_hash'] == source['source_version']:
+                        watermark = max(watermark, observed['basis_seq'])
+                    groups.setdefault(watermark, []).append(source['path'])
+            for watermark, dependency_paths in groups.items():
+                if effects.writes_since(dependency_paths, watermark, unknown_dependencies)['observed_freshness'] != 'fresh':
+                    reasons.append('WRITE_BASIS_CHANGED')
+                    break
         from .retrieval import RetrievalSources
         retrieval = RetrievalSources(self.store)
         selected = ({e['path']: e['ref'] for e in self._snapshot(basis['target']['snapshot_ref'])[1]}
@@ -178,6 +194,10 @@ class StageState(TaskState):
                                     (*self._scope, source['path']))
                 if not current or 'vctx://resource/' + current['resource_id'] != source['ref']:
                     reasons.append('RESOURCE_ADVANCED')
+                observation = self._one('SELECT 1 FROM vfx_observations WHERE namespace=? AND session_id=? AND ref=?',
+                                        (*self._scope, source['ref']))
+                if observation and effects._source_state(source['ref'])['observed_freshness'] != 'fresh':
+                    reasons.append('SOURCE_RECHECK_REQUIRED')
             elif selected.get(source['path']) != source['ref']:
                 reasons.append('SOURCE_OUTSIDE_TARGET')
         if require_focus:

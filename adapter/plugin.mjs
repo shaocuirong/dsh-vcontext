@@ -16,6 +16,7 @@ import { createContextResolver } from './control/resolver.mjs';
 import { createRequestAdmission } from './control/admission.mjs';
 import { createNativeEvidence } from './control/native-evidence.mjs';
 import { createStageController } from './control/stages.mjs';
+import { createControlSignals } from './control/signals.mjs';
 
 // One byte-stable fallback shared by the initial attach and every failure path.
 const UNAVAILABLE_HISTORY = JSON.stringify(unavailableOutline());
@@ -147,25 +148,28 @@ export function mount(ctx, config, defineTool) {
   const diagnostics = createDiagnostics({ ...config, logger: ctx.logger });
   const transport = createTransport(config, diagnostics);
   const sessionAccess = createSessionAccess(ctx, { diagnostics });
-  const coordinator = createControlCoordinator(ctx, transport, { access: sessionAccess });
+  const signals = createControlSignals();
+  const coordinator = createControlCoordinator(ctx, transport, { access: sessionAccess, signals });
   const historyArchive = createHistoryArchive(ctx, diagnostics,
     (id, access) => transport.call(id, 'auto_access', access), { coordinator });
   const evidenceDirectory = createEvidenceDirectory(ctx, transport, historyArchive);
-  const nativeEvidence = createNativeEvidence(sessionAccess);
-  const resolver = createContextResolver(ctx, () => transport, historyArchive, evidenceDirectory, nativeEvidence);
+  const nativeEvidence = createNativeEvidence(sessionAccess, { enabled: config.nativeEvidence !== false });
+  const resolver = createContextResolver(ctx, () => transport, historyArchive, evidenceDirectory, nativeEvidence, signals);
   const requestAdmission = createRequestAdmission(ctx, { enabled: config.requestAdmission !== false,
     integration: config.contextIntegration !== false, diagnostics });
   const sessionBridge = createSessionBridge(ctx, transport, diagnostics,
     { access: sessionAccess, effects: createEffectsObserver(transport) });
   const attached = new Map();
   const stageController = createStageController({ transport, bridge: sessionBridge, coordinator, native: nativeEvidence, resolver,
-    getAgent: id => [...attached.keys()].findLast(agent => agent.id === id) });
-  const contextCatalog = createContextCatalog(transport, evidenceDirectory, { guardStage: stageController.guard });
+    getAgent: id => [...attached.keys()].findLast(agent => agent.id === id), enabled: config.stageSummaries !== false });
+  const contextCatalog = createContextCatalog(transport, evidenceDirectory, { guardStage: stageController.guard, signals,
+    stageEnabled: config.stageSummaries !== false });
   let disposed = false;
   function attach(agent) {
     if (disposed) throw new Error('plugin disposed');
     let state = attached.get(agent);
     if (state) return state;
+    signals.open(agent.id);
     state = { text: '', generation: undefined,
       targetText: '{"format":"vctx-session-target-v1","available":false}',
       taskText: '{"format":"vctx-execution-state-v1","available":false}',
@@ -256,7 +260,7 @@ export function mount(ctx, config, defineTool) {
     try {
       const policy = await transport.call(agent.id, 'auto_status', {}, signal);
       const prepared = policy.config.evidence_directory_enabled === false ? null
-        : await contextCatalog.prepare(agent.id, signal);
+        : await contextCatalog.prepare(agent.id, signal, { adaptive: policy.config.adaptive_policy_enabled !== false });
       const text = prepared?.text ?? '{"format":"vctx-context-directory-v1","available":true,"enabled":false,"entries":[]}';
       if (Buffer.byteLength(text) > 4096) throw new Error('invalid evidence directory');
       if (!disposed && attached.get(agent) === state) {
@@ -267,6 +271,8 @@ export function mount(ctx, config, defineTool) {
       if (!disposed && attached.get(agent) === state) state.evidenceText = '{"format":"vctx-evidence-v1","available":false}';
       diagnostics.record('context.evidence.outline.failed', 'warn');
     }
+    signals.injection(agent.id, [state.text, state.targetText, state.taskText, state.historyText, state.evidenceText]
+      .reduce((total, text) => total + Buffer.byteLength(text ?? ''), 4));
     return result;
   }
   ctx.systemPrompt.section({ name: 'virtual-context:guide', order: 3200,
@@ -309,6 +315,7 @@ export function mount(ctx, config, defineTool) {
       if (!exec.agent) throw new Error('vctx requires a calling agent');
       const input = JSON.parse(args.input);
       if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('input must encode an object');
+      if (args.operation === 'stage_review' && config.stageSummaries === false) throw new Error('STAGE_SUMMARIES_DISABLED');
       if (['stage_requirements', 'stage_attest'].includes(args.operation)) throw new Error('host-only stage proof operation');
       if (['stage_prepare', 'stage_propose', 'stage_activate'].includes(args.operation)) {
         const method = { stage_prepare: 'prepare', stage_propose: 'propose', stage_activate: 'activate' }[args.operation];
@@ -334,7 +341,8 @@ export function mount(ctx, config, defineTool) {
       if (args.operation === 'context_find') return resolver.find(exec.agent, input, exec.signal);
       if (args.operation === 'context_status') {
         if (Object.keys(input).length) throw new Error('invalid context_status input');
-        return { resolver: resolver.stats(exec.agent.id), admission: requestAdmission.status(exec.agent.id) };
+        return { resolver: resolver.stats(exec.agent.id), admission: requestAdmission.status(exec.agent.id),
+          control: signals.status(exec.agent.id) };
       }
       if (args.operation === 'read') return resolver.legacy(exec, 'read', input, (safe, max) =>
         transport.call(exec.agent.id, 'source_read', { ...safe, mode: 'page', max_bytes: max }, exec.signal));
@@ -419,6 +427,7 @@ export function mount(ctx, config, defineTool) {
   ctx.on('agent/disposed', ({ agent }) => {
     resolver.forget(agent.id); requestAdmission.forget(agent.id);
     contextCatalog.forget(agent.id);
+    signals.forget(agent.id);
     attached.get(agent)?.detach();
     attached.get(agent)?.detachVariable?.();
     attached.get(agent)?.detachTarget?.();
@@ -433,6 +442,7 @@ export function mount(ctx, config, defineTool) {
     resolver.dispose(); requestAdmission.dispose();
     await coordinator.dispose();
     contextCatalog.dispose();
+    signals.dispose();
     await evidenceDirectory.dispose();
     await historyArchive.dispose();
     for (const state of attached.values()) {
@@ -449,6 +459,6 @@ export function mount(ctx, config, defineTool) {
     await sessionAccess.dispose();
     await transport.dispose();
   });
-  return { transport, bridge: transport, sessionAccess, coordinator, resolver, requestAdmission,
+  return { transport, bridge: transport, sessionAccess, coordinator, resolver, requestAdmission, signals,
     sessionBridge, refresh, diagnostics, historyArchive, evidenceDirectory, contextCatalog };
 }

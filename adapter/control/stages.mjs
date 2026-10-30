@@ -4,7 +4,7 @@ const only = (input, keys) => {
 };
 
 // 生成在工具调用之间进行；此控制器只负责短事务和宿主原生来源的复核。
-export function createStageController({ transport, bridge, coordinator, native, resolver, getAgent }) {
+export function createStageController({ transport, bridge, coordinator, native, resolver, getAgent, enabled = true }) {
   const call = (agent, op, input, signal) => transport.call(agent.id, op, input, signal);
   const local = (agent, op, input, signal) => coordinator.local(agent.id, () => call(agent, op, input, signal), signal);
   const sync = async exec => {
@@ -26,6 +26,7 @@ export function createStageController({ transport, bridge, coordinator, native, 
       return this.guard(exec.agent.id, await call(exec.agent, 'stage_context', {}, exec.signal), exec.signal);
     },
     async prepare(exec, input) {
+      if (!enabled) fail('STAGE_SUMMARIES_DISABLED');
       only(input, ['task_ref']); await sync(exec);
       const request = await local(exec.agent, 'stage_requirements', input, exec.signal);
       if (request.legacy_native_basis) fail('LEGACY_NATIVE_BASIS_REQUIRES_TASK_UPDATE');
@@ -38,6 +39,7 @@ export function createStageController({ transport, bridge, coordinator, native, 
       return result;
     },
     async propose(exec, input) {
+      if (!enabled) fail('STAGE_SUMMARIES_DISABLED');
       only(input, ['request_id', 'basis_ref', 'capsule']); await sync(exec);
       const { basis } = await call(exec.agent, 'stage_requirements', { basis_ref: input.basis_ref }, exec.signal);
       await check(exec.agent, basis, exec.signal);
@@ -49,7 +51,7 @@ export function createStageController({ transport, bridge, coordinator, native, 
         if (source?.source_type !== 'event') continue;
         if (!Number.isSafeInteger(anchor.offset) || anchor.offset < 0 || typeof anchor.text !== 'string'
           || !anchor.text.length || Array.from(anchor.text).length > 160) fail('INVALID_STAGE_ANCHORS');
-        const result = await resolver.read(exec, { ref: source.ref, offset: anchor.offset,
+        const result = await resolver.read({ ...exec, recoveryOrigin: 'host_verification' }, { ref: source.ref, offset: anchor.offset,
           limit: Array.from(anchor.text).length, expected_source_version: source.source_version });
         if (result.incomplete) fail('NATIVE_ANCHOR_BUDGET');
         if (result.content !== anchor.text) fail('NATIVE_ANCHOR_MISMATCH');
@@ -58,6 +60,7 @@ export function createStageController({ transport, bridge, coordinator, native, 
       return local(exec.agent, 'stage_propose', proofs.length ? { ...input, anchor_proofs: proofs } : input, exec.signal);
     },
     async activate(exec, input) {
+      if (!enabled) fail('STAGE_SUMMARIES_DISABLED');
       only(input, ['request_id', 'ref', 'expected_revision']); await sync(exec);
       const { basis } = await call(exec.agent, 'stage_requirements', { candidate_ref: input.ref }, exec.signal);
       const nativeCheck = await check(exec.agent, basis, exec.signal);
@@ -65,6 +68,7 @@ export function createStageController({ transport, bridge, coordinator, native, 
     },
     async guard(id, stage, signal) {
       if (!stage?.current_stage) return stage;
+      if (!enabled) return { ...stage, current_stage: null, currentness: { applicable: false, reasons: ['STAGE_SUMMARIES_DISABLED'] } };
       try {
         const agent = getAgent(id);
         if (!agent) fail('NATIVE_EVIDENCE_UNAVAILABLE');

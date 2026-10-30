@@ -15,6 +15,8 @@ export function resolveConfig(config = {}) {
     transport: 'service',
     timeoutMs: 30000,
     resourceCapture: false,
+    stageSummaries: true,
+    nativeEvidence: true,
     virtualContext: {
       mode: 'enforce',
       sessionMaxOnlineTokens: 1000000,

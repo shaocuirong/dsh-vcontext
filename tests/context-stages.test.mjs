@@ -186,4 +186,11 @@ test('真实工具与 AgentLoop 请求：候选评审激活、跨会话隔离、
   assert.equal(requests.length, 4, '证明、摘要和评审不启动辅助模型调用');
   assert.equal(directoryIn(requests.at(-1)).current_stage.brief, 'NATIVE_STAGE_ACTIVE');
   assert.deepEqual(directoryIn(requests.at(-1)).current_stage.anchors, ['ERR_NATIVE_42']);
+  const observed = (await execute('context_status')).control;
+  assert.ok(observed.successful_reads > 0);
+  assert.ok(observed.incomplete_reads > 0);
+  assert.ok(observed.directory_bytes <= 4096);
+  assert.ok(observed.restored_bytes <= observed.response_bytes);
+  assert.ok(observed.latency.foreground.samples > 0);
+  assert.equal(observed.provider_savings_measured, false);
 });

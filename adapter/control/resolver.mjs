@@ -16,7 +16,7 @@ const refKind = ref => {
 const bytes = value => Buffer.byteLength(JSON.stringify(value), 'utf8');
 
 // 只缓存固定引用的定位描述；路径、新鲜度、正文及宿主 lease 不进入 TLB。
-export function createContextResolver(ctx, getTransport, history, evidence, native) {
+export function createContextResolver(ctx, getTransport, history, evidence, native, signals) {
   const cache = new Map(), objectIds = new WeakMap(), budgets = new Map();
   const counters = { hits: 0, misses: 0, evictions: 0, invalidations: 0, bytes: 0 };
   let nextId = 0, disposed = false;
@@ -112,13 +112,22 @@ export function createContextResolver(ctx, getTransport, history, evidence, nati
     return { incomplete: true, reason, continuation, residency_changed: false };
   };
   async function bounded(exec, operation, input, read) {
+    const started = performance.now();
+    const observed = (result, outcome) => {
+      const content = result.content ?? result.summary?.content
+        ?? (result.candidate?.capsule ? JSON.stringify(result.candidate.capsule) : '');
+      signals?.read(exec.agent.id, { ref: input.ref, bytes: bytes(result),
+        body_bytes: typeof content === 'string' ? Buffer.byteLength(content) : 0,
+        duration_ms: performance.now() - started, outcome, origin: exec.recoveryOrigin });
+      return result;
+    };
     input = structuredClone(input);
     if (input.offset !== undefined && (!Number.isSafeInteger(input.offset) || input.offset < 0)
       || input.limit !== undefined && (!Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > 262144)) fail('INVALID_INPUT');
     const budget = budgetFor(exec.agent);
     const available = Math.min(LIMITS.retrieval_response_bytes, LIMITS.retrieval_step_bytes - budget.used - budget.reserved);
     const notice = reason => {
-      const result = incomplete(operation, input, reason); budget.overhead += bytes(result); return result;
+      const result = incomplete(operation, input, reason); budget.overhead += bytes(result); return observed(result, 'incomplete');
     };
     if (available < 2048) return notice('retrieval_budget');
     budget.reserved += available;
@@ -132,12 +141,15 @@ export function createContextResolver(ctx, getTransport, history, evidence, nati
         const fixed = result.source_ref ?? result.resource?.ref ?? (result.summary?.summary_id ? 'vctx://summary/' + result.summary.summary_id : result.ref);
         if (typeof fixed === 'string' && fixed.length <= 256) {
           const answer = incomplete('context_read', { ref: fixed, offset: input.offset ?? 0 }, 'response_budget');
-          budget.overhead += bytes(answer); return answer;
+          budget.overhead += bytes(answer); return observed(answer, 'incomplete');
         }
         return notice('response_budget');
       }
       budget.used += cost;
-      return result;
+      return observed(result, result.incomplete ? 'incomplete' : 'success');
+    } catch (error) {
+      signals?.read(exec.agent.id, { ref: input.ref, outcome: 'failed', duration_ms: performance.now() - started });
+      throw error;
     } finally { budget.reserved -= available; }
   }
   async function readFixed(exec, input, maxBytes) {
@@ -203,6 +215,7 @@ export function createContextResolver(ctx, getTransport, history, evidence, nati
       const versions = new Map(nodes.map(n => [n.ref, n.source_version]));
       for (const edge of edges) edge.version_match = versions.has(edge.to) ? versions.get(edge.to) === edge.source_version : null;
       if (scope(exec.agent) !== basis) fail('CHANGED');
+      for (const edge of edges) if (edge.version_match) signals?.follow(exec.agent.id, edge.from, edge.to);
       return { nodes, edges, continuation, incomplete: continuation.length > 0 || edges.some(e => e.version_match !== true),
         trust: 'untrusted_navigation', residency_changed: false };
       });

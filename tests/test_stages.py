@@ -125,6 +125,53 @@ class StageTests(unittest.TestCase):
         self.assertIsNone(self.call('stage_context')['current_stage'])
         self.assertIn('WRITE_BASIS_CHANGED', self.call('stage_read', ref=candidate['ref'])['currentness']['reasons'])
 
+    def test_unrelated_path_write_preserves_stage_and_relevant_write_revokes(self):
+        candidate = self.propose()
+        self.review(candidate)
+        self.activate(candidate)
+        self.call('effects_sync', through_seq=1, events=[dict(seq=0, phase='call', kind='native', call_id='other', coverage='paths', paths=['other.py']),
+            dict(seq=1, phase='result', kind='native', call_id='other', status='succeeded')])
+        self.assertIsNotNone(self.call('stage_context')['current_stage'])
+        self.call('effects_sync', through_seq=2, events=[dict(seq=2, phase='call', kind='native', call_id='same', coverage='paths', paths=['A.PY'])])
+        self.assertIsNone(self.call('stage_context')['current_stage'], 'Windows 大小写不同仍是相关写入')
+
+    def test_pinned_resource_stage_ignores_current_worktree_writes(self):
+        revision = self.call('snapshot_status')['target']['revision']
+        snapshot = self.call('snapshot_create', request_id='pin-snapshot', expected_revision=revision)['snapshot']
+        revision = self.call('snapshot_status')['target']['revision']
+        self.call('snapshot_checkout', ref=snapshot['ref'], request_id='pin', expected_revision=revision)
+        self.child = self.task_mutate('task_update', ref=self.child['ref'], expected_version=self.child['version'], summary='pinned phase')['task']
+        self.basis = self.call('stage_prepare', task_ref=self.child['ref'])['basis']
+        candidate = self.propose()
+        self.review(candidate)
+        self.activate(candidate)
+        self.call('effects_sync', through_seq=0, events=[dict(seq=0, phase='call', kind='native', call_id='working-write', coverage='paths', paths=['a.py'])])
+        self.assertIsNotNone(self.call('stage_context')['current_stage'])
+
+    def test_new_task_basis_cannot_launder_stale_live_resource_observation(self):
+        ref, content_hash = self.resource['ref'], self.resource['content_hash']
+        self.store.db.execute('INSERT INTO vfx_observations VALUES(?,?,?,?,?,?,?,?)',
+                              ('ns', 'a', ref, 'a.py', content_hash, content_hash, -1, '{}',))
+        self.call('effects_sync', through_seq=1, events=[dict(seq=0, phase='call', kind='native', call_id='touch', coverage='paths', paths=['a.py']),
+            dict(seq=1, phase='result', kind='native', call_id='touch', status='succeeded')])
+        self.child = self.task_mutate('task_update', ref=self.child['ref'], expected_version=self.child['version'], summary='new phase')['task']
+        value = self.call('stage_prepare', task_ref=self.child['ref'])
+        self.assertIn('SOURCE_RECHECK_REQUIRED', value['currentness']['reasons'])
+
+    def test_same_hash_live_recheck_covers_write_without_rewriting_summary(self):
+        ref, content_hash = self.resource['ref'], self.resource['content_hash']
+        self.store.db.execute('INSERT INTO vfx_observations VALUES(?,?,?,?,?,?,?,?)',
+                              ('ns', 'a', ref, 'a.py', content_hash, content_hash, -1, '{}'))
+        candidate = self.propose()
+        self.review(candidate)
+        self.activate(candidate)
+        self.call('effects_sync', through_seq=1, events=[dict(seq=0, phase='call', kind='native', call_id='touch', coverage='paths', paths=['a.py']),
+            dict(seq=1, phase='result', kind='native', call_id='touch', status='succeeded')])
+        self.assertIsNone(self.call('stage_context')['current_stage'])
+        # 临时夹具模拟已通过 effects_observe 的同 hash 现场复核水位。
+        self.store.db.execute('UPDATE vfx_observations SET basis_seq=1 WHERE ref=?', (ref,))
+        self.assertEqual(self.call('stage_context')['current_stage']['ref'], candidate['ref'])
+
     def test_semantic_review_is_not_host_review_and_new_review_requires_activation(self):
         candidate = self.propose()
         review = self.review(candidate)['review']

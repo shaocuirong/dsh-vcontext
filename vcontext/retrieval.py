@@ -2,6 +2,7 @@
 import hashlib
 import json
 import re
+import time
 
 from .state import _integer, _json, _resource_id
 from .task_state import TaskState
@@ -95,6 +96,7 @@ class RetrievalSources:
 
     def source_read(self, ref=None, page_id=None, version=None, offset=0, limit=16384,
                     max_bytes=MAX_BYTES, expected_source_version=None, mode='normalized'):
+        started = time.perf_counter()
         locator = self.source_resolve(ref, page_id, version)
         if expected_source_version is not None and expected_source_version != locator['source_version']:
             raise ValueError('source version changed')
@@ -133,9 +135,15 @@ class RetrievalSources:
             assessment = dict(assessment='not_tested', applicability='historical_evidence')
         if mode != 'normalized':
             raise ValueError('source read mode does not match source')
-        return bounded_text(text, offset, limit, lambda content, page: dict(ref=ref, kind=locator['kind'],
+        result = bounded_text(text, offset, limit, lambda content, page: dict(ref=ref, kind=locator['kind'],
             source_type=locator['source_type'], form=locator['form'], source_version=locator['source_version'], content=content, **page, **assessment,
             trust='untrusted_evidence', fixed_source=True), max_bytes)
+        if locator['source_type'] == 'page':
+            page_id = ref.split('/')[3]
+            self.store.automation.auto_access('page:' + page_id, kind='original',
+                source='cold' if self.store._head(page_id)['tier'] == 'archive' else 'online',
+                bytes=len(result['content'].encode()), duration_ms=min(600000, (time.perf_counter() - started) * 1000))
+        return result
 
     def source_links(self, ref, offset=0, limit=8):
         _integer(offset, 'offset')

@@ -196,14 +196,21 @@ class EffectsState(StructuredState):
             return dict(observed_freshness='unknown', reason='NO_LIVE_OBSERVATION')
         if observation['source_hash'] != observation['observed_hash']:
             return dict(observed_freshness='stale', reason='CONTENT_CHANGED')
-        calls = self._all('SELECT * FROM vfx_calls WHERE namespace=? AND session_id=? AND (result_seq IS NULL OR result_seq>?)',
-                          (*self._scope, observation['basis_seq']))
+        return self.writes_since([resource['path']], observation['basis_seq'])
+
+    def writes_since(self, paths, basis_seq, unknown_dependencies=False):
+        """按真实写集判定依赖；无完整依赖时扩大范围，超限绝不假报无变更。"""
+        calls = self._all('''SELECT * FROM vfx_calls WHERE namespace=? AND session_id=? AND coverage!='none'
+            AND (status='pending' OR COALESCE(result_seq,call_seq)>?) LIMIT 513''', (*self._scope, basis_seq))
+        if len(calls) > 512:
+            return dict(observed_freshness='unknown', reason='WRITE_SCAN_LIMIT')
         matched, unknown = False, False
-        insensitive = bool(re.match(r'^[A-Za-z]:', self._binding()['root_path']))
+        root = self._binding()['root_path']
+        insensitive = bool(re.match(r'^[A-Za-z]:', root) or root.startswith('\\\\'))
+        keys = {p.casefold() if insensitive else p for p in paths}
         for call in calls:
-            key = resource['path'].casefold() if insensitive else resource['path']
             paths = [path.casefold() if insensitive else path for path in json.loads(call['paths'])]
-            affects = call['coverage'] == 'unknown' or key in paths
+            affects = unknown_dependencies or call['coverage'] == 'unknown' or bool(keys.intersection(paths))
             if not affects:
                 continue
             if call['status'] == 'pending':
