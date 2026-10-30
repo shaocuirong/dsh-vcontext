@@ -15,11 +15,11 @@ export const name = 'virtual-context';
 export const inject = ['tools', 'agents', 'systemPrompt'];
 export function apply(ctx, config = {}) {
   const settings = resolveConfig(config);
-  const { transport, diagnostics, sessionBridge, historyArchive, evidenceDirectory, refresh } = mount(ctx, settings, defineTool);
-  const liveContext = createLiveContext(ctx, { diagnostics, contextIntegration: settings.contextIntegration });
-  const replacement = createReplacement(ctx, diagnostics);
-  const resultProjection = createResultProjection(ctx, transport, sessionBridge, diagnostics, settings);
-  const automation = createAutomation(ctx, transport, sessionBridge, historyArchive, refresh, settings, resultProjection);
+  const { transport, diagnostics, sessionAccess, coordinator, requestAdmission, sessionBridge, historyArchive, evidenceDirectory, contextCatalog, refresh } = mount(ctx, settings, defineTool);
+  const liveContext = createLiveContext(ctx, { diagnostics, contextIntegration: settings.contextIntegration, access: sessionAccess, admission: requestAdmission });
+  const replacement = createReplacement(ctx, diagnostics, { access: sessionAccess, coordinator });
+  const resultProjection = createResultProjection(ctx, transport, sessionBridge, diagnostics, settings, { coordinator, requestAdmission });
+  const automation = createAutomation(ctx, transport, sessionBridge, historyArchive, refresh, settings, resultProjection, { coordinator });
   const resultJobs = createResultJobs(resultProjection);
   const sessionSnapshots = createSessionSnapshots(ctx, transport, sessionBridge, diagnostics);
   const taskController = createTaskController(ctx, transport, sessionBridge, diagnostics);
@@ -29,10 +29,9 @@ export function apply(ctx, config = {}) {
   ctx.effect(() => () => replacement.dispose(), 'virtual-context: replacement jobs');
   ctx.effect(() => () => liveContext.dispose(), 'virtual-context: live request observer');
   ctx.effect(() => () => automation.dispose(), 'virtual-context: automatic residency');
-  // The client half reads the dashboard through this route, and
-  // /virtual-context flips the per-session switch the route reports.
+  // 客户端通过路由读取看板，命令控制路由所报告的会话显示开关。
   ctx.inject(['webServer'], carrier => {
-    carrier.effect(() => mountRoutes(carrier, settings, transport, liveContext, diagnostics, replacement, sessionBridge, resultProjection, resultJobs, sessionSnapshots, taskController, historyArchive, automation, evidenceDirectory), 'virtual-context: dashboard routes');
+    carrier.effect(() => mountRoutes(carrier, settings, transport, liveContext, diagnostics, replacement, sessionBridge, resultProjection, resultJobs, sessionSnapshots, taskController, historyArchive, automation, evidenceDirectory, coordinator, contextCatalog), 'virtual-context: dashboard routes');
   });
   ctx.inject(['commands'], carrier => {
     carrier.effect(() => mountCommand(carrier, settings, transport), 'virtual-context: command');

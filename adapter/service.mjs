@@ -21,6 +21,7 @@ export class Service {
   #stderr = '';
   #disposed = false;
   #stopping = null;
+  #generation = 0;
 
   constructor(config, { spawnProcess = spawn } = {}) {
     this.config = validateConfig(config);
@@ -32,7 +33,7 @@ export class Service {
   }
 
   get health() {
-    return { running: this.running, pending: this.#pending.size, disposed: this.#disposed };
+    return { running: this.running, pending: this.#pending.size, disposed: this.#disposed, generation: this.#generation };
   }
 
   #start() {
@@ -54,6 +55,7 @@ export class Service {
     child.on('close', code => this.#fail(child,
       new Error(`virtual-context service exited with code ${code}`)));
     this.#child = child;
+    this.#generation++;
     this.#buffer = '';
     this.#stderr = '';
     return child;

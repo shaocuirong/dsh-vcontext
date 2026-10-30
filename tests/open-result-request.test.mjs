@@ -84,13 +84,13 @@ async function fixture(t, { enabled = true } = {}) {
   const agent = handle.agent;
   await control.call(agent.id, 'auto_configure', { l1_open_results_enabled: enabled });
   const live = createLiveContext(root);
-  t.after(async () => { live.dispose(); await handle.dispose(); await fiber.dispose(); await contextFiber.dispose();
+  t.after(async () => { await live.dispose(); await handle.dispose(); await fiber.dispose(); await contextFiber.dispose();
     await control.dispose(); await root.fiber.dispose(); Service.prototype.call = originalCall;
     await rm(directory, { recursive: true, force: true }); });
   agent.followup({ id: 'goal', role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: 'CURRENT_USER_GOAL: inspect evidence through a long task.' }] });
   await agent.whenIdle();
   assert.deepEqual(errors, []);
-  return { root, agent, seen, frames, control, body, live };
+  return { root, agent, seen, frames, control, body, live, errors };
 }
 
 test('a 3 MiB result leaves the next request inside the same real turn and restores exactly on explicit intent', { timeout: 60000 }, async t => {
@@ -114,7 +114,11 @@ test('a 3 MiB result leaves the next request inside the same real turn and resto
   await f.control.call(f.agent.id, 'result_plan', { ref: large.ref, desired: 'restored' });
   f.agent.followup({ id: 'restore', role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: 'Explicitly restore evidence.' }] });
   await f.agent.whenIdle();
-  assert.equal(f.seen.at(-1).has_body, true);
+  assert.equal(f.seen.at(-1).has_body, true, JSON.stringify({
+    seen: f.seen, errors: f.errors.map(e => ({ code: e.code, message: e.message })),
+    result: await f.control.call(f.agent.id, 'result_verify', { ref: large.ref }),
+    coordination: await f.control.call(f.agent.id, 'control_status'),
+  }));
   const artifact = restoreReleasedV4Artifact({ header: structuredClone(f.agent.session.header),
     events: structuredClone(f.agent.session.snapshotEvents()), inheritedEventCount: 0 }, KNOWN_SESSION_EVENT_TYPES);
   assert.deepEqual(Session.create(f.agent.id, artifact.events, artifact.header, 0).deriveMessages(), f.agent.session.deriveMessages());

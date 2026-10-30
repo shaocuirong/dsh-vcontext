@@ -1,13 +1,16 @@
 """Deterministic, scoped automatic residency policy. No host history bodies live here."""
 import json
 import time
+import math
 
 from .state import _integer, _text
 from .task_state import TaskState
+from .control_policy import LIMITS, REASONS, protection_basis
 
 OPERATIONS = frozenset({'auto_status', 'auto_configure', 'auto_step', 'auto_preview',
     'auto_tick', 'auto_access', 'auto_observe', 'auto_guard', 'auto_receipt', 'auto_latch'})
-DEFAULTS = dict(l1_enabled=True, l2_enabled=True, l1_input_budget=131072, l1_open_results_enabled=True, evidence_directory_enabled=True)
+DEFAULTS = dict(l1_enabled=True, l2_enabled=True, l1_input_budget=131072, l1_open_results_enabled=True,
+                evidence_directory_enabled=True, adaptive_policy_enabled=True)
 
 
 def install_automation_schema(db):
@@ -59,7 +62,7 @@ class Automation:
         return state
 
     def auto_configure(self, **changes):
-        if set(changes) - set(DEFAULTS) or any(type(changes[k]) is not bool for k in ('l1_enabled', 'l2_enabled', 'l1_open_results_enabled', 'evidence_directory_enabled') if k in changes):
+        if set(changes) - set(DEFAULTS) or any(type(changes[k]) is not bool for k in DEFAULTS if k != 'l1_input_budget' and k in changes):
             raise ValueError('invalid automatic settings')
         if 'l1_input_budget' in changes:
             _integer(changes['l1_input_budget'], 'l1_input_budget', 0, 9000000000000)
@@ -144,7 +147,7 @@ class Automation:
                     if resource['operation_id']:
                         op = tasks._operation(resource['operation_id'])
                         ss.update(s for s in (op['call_seq'], op['result_seq']) if s is not None)
-        return dict(pages=sorted(pages), source_seqs=sorted(seqs),
+        return dict(task_revision=tasks._execution()['revision'], pages=sorted(pages), source_seqs=sorted(seqs),
                     completed_pages=sorted(completed_pages-pages), completed_seqs=sorted(completed_seqs-seqs))
 
     def auto_guard(self):
@@ -152,11 +155,21 @@ class Automation:
 
     def page_reasons(self, rows, extra_protect=(), observe=True):
         deps = self.dependencies()
+        state = self.state()
+        restores = {}
+        if state['config']['adaptive_policy_enabled']:
+            # 一次批量读取最近窗口，不为每页各扫一遍访问账本；稳定后自然释放保护。
+            for access in self.db.execute('''SELECT key,duration_ms,step FROM va_accesses WHERE scope=?
+                AND source='cold' AND kind='original' AND step>=? ORDER BY id DESC LIMIT 256''',
+                (self.scope, max(0, state['step'] - 32))):
+                samples = restores.setdefault(access['key'], [])
+                if len(samples) < 8:
+                    samples.append(dict(access))
         recent = sorted(rows, key=lambda r: (-r['touched'], -r['seq'], r['id']))
-        protected = {r['id'] for r in recent[:6]}
+        protected = {r['id'] for r in recent[:LIMITS['recent_pages']]}
         tokens = 0
         for row in recent:
-            if tokens >= 8192:
+            if tokens >= LIMITS['recent_tokens']:
                 break
             protected.add(row['id'])
             tokens += self.store.quota.page_unit(row['id'], row['version'], self.store._row_text(row))['tokens']
@@ -169,20 +182,34 @@ class Automation:
                 step = self.state()['step']
                 unit = dict(resident_step=step, restore_step=-100, move_step=-100, moves=0, access_step=step)
             age = self.state()['step'] - unit['resident_step']
+            samples = restores.get(key, [])
+            window = LIMITS['min_resident_steps']
+            if len({s['step'] for s in samples}) >= 2:
+                durations = sorted(s['duration_ms'] for s in samples)
+                window = min(16, max(window, len({s['step'] for s in samples}) * 2,
+                                     math.ceil(durations[math.ceil(len(durations) * .95) - 1] / 100)))
+            restore_window = max(LIMITS['cold_restore_steps'], window)
             reasons = []
             if row['tier'] == 'core' or row['outline']:
-                reasons.append('PINNED')
+                reasons.append(REASONS['PINNED'])
             if row['id'] in deps['pages'] or row['id'] in extra_protect:
-                reasons.append('TASK_DEPENDENCY' if row['id'] in deps['pages'] else 'ADMISSION')
+                reasons.append(REASONS['TASK_DEPENDENCY'] if row['id'] in deps['pages'] else REASONS['ADMISSION'])
             if row['id'] in protected:
-                reasons.append('RECENT')
-            if age < 2:
-                reasons.append('MIN_RESIDENT')
-            if self.state()['step'] - unit['restore_step'] < 2:
-                reasons.append('COLD_RESTORE')
+                reasons.append(REASONS['RECENT'])
+            if age < window:
+                reasons.append(REASONS['MIN_RESIDENT'])
+            if self.state()['step'] - unit['restore_step'] < restore_window:
+                reasons.append(REASONS['COLD_RESTORE'])
             if self.state()['step'] - unit['move_step'] < min(32, 2 ** min(5, unit['moves'])):
-                reasons.append('MIGRATION_BACKOFF')
+                reasons.append(REASONS['MIGRATION_BACKOFF'])
+            context = dict(task_revision=deps['task_revision'],
+                           page_policy=dict(tier=row['tier'], outline=bool(row['outline'])),
+                           transaction=list(extra_protect), history_position=dict(step=self.state()['step']),
+                           resident_step=dict(observed=self.state()['step'], since=unit['resident_step'], window=window),
+                           restore_step=dict(observed=self.state()['step'], since=unit['restore_step'], window=restore_window),
+                           move_step=dict(observed=self.state()['step'], since=unit['move_step'], moves=unit['moves']))
             result.append(dict(page_id=row['id'], version=row['version'], key=key, reasons=reasons,
+                protection_basis=[protection_basis(reason, context) for reason in reasons],
                 tokens=self.store.quota.page_unit(row['id'], row['version'], self.store._row_text(row))['tokens'],
                 access_step=unit['access_step'], completed=row['id'] in deps['completed_pages']))
         return result
@@ -226,7 +253,7 @@ class Automation:
                        <= status[n]['max_tokens'] * config['low_watermark'] for n in deltas)
         result['pages'] = candidates[:256]
         for page in candidates:
-            if reached(result['after']) or len(result['evicted']) >= 8:
+            if reached(result['after']) or len(result['evicted']) >= LIMITS['online_batch_pages']:
                 break
             if page['reasons']:
                 continue
@@ -237,7 +264,12 @@ class Automation:
         if result['target_reached']:
             self.auto_latch('l2', False)
         result['outcome'] = 'organized' if result['evicted'] else 'protected_or_shared'
-        self.auto_receipt('l2-' + str(time.time_ns()), 'l2', 'confirmed', result)
+        # 回执保留紧凑原因与策略/任务版本；完整派生解释只在当前预览返回，
+        # 避免 256 个受保护页重复展开规则后突破原有 128 KiB 回执上限。
+        audit = dict(result, policy_schema=1, task_revision=self.dependencies()['task_revision'],
+                     pages=[{key: value for key, value in page.items() if key != 'protection_basis'}
+                            for page in result.get('pages', [])])
+        self.auto_receipt('l2-' + str(time.time_ns()), 'l2', 'confirmed', audit)
         return result
 
     def mark_move(self, key, restored=False):

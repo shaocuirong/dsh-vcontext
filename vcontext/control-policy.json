@@ -1,0 +1,110 @@
+{
+  "schema": 1,
+  "limits": {
+    "recent_pages": 6,
+    "recent_tokens": 8192,
+    "min_resident_steps": 2,
+    "cold_restore_steps": 2,
+    "history_batch_pages": 8,
+    "online_batch_pages": 8,
+    "history_batch_bytes": 262144,
+    "result_batch_count": 2,
+    "result_max_bytes": 8388608,
+    "resolver_entries": 256,
+    "resolver_bytes": 131072,
+    "resolver_entry_bytes": 4096,
+    "retrieval_response_bytes": 65536,
+    "retrieval_step_bytes": 131072,
+    "retrieval_expand_nodes": 16,
+    "retrieval_expand_depth": 3
+  },
+  "reasons": {
+    "OPEN": {
+      "basis": "page",
+      "release": "page_sealed"
+    },
+    "UNBALANCED": {
+      "basis": "source_events",
+      "release": "tool_group_complete"
+    },
+    "OPAQUE": {
+      "basis": "source_events",
+      "release": "source_structure_supported"
+    },
+    "OPEN_STEP": {
+      "basis": "source_events",
+      "release": "step_ended"
+    },
+    "TASK_DEPENDENCY": {
+      "basis": "task_revision",
+      "release": "dependency_recomputed"
+    },
+    "RECENT": {
+      "basis": "history_position",
+      "release": "recent_window_advanced"
+    },
+    "OVERSIZE": {
+      "basis": "source_bytes",
+      "release": "supported_representation"
+    },
+    "MIN_RESIDENT": {
+      "basis": "resident_step",
+      "release": "minimum_steps_elapsed"
+    },
+    "COLD_RESTORE": {
+      "basis": "restore_step",
+      "release": "minimum_steps_elapsed"
+    },
+    "PINNED": {
+      "basis": "page_policy",
+      "release": "explicit_unpin_or_outline_change"
+    },
+    "ADMISSION": {
+      "basis": "transaction",
+      "release": "admission_finished"
+    },
+    "MIGRATION_BACKOFF": {
+      "basis": "move_step",
+      "release": "backoff_elapsed"
+    }
+  },
+  "actions": {
+    "archive_history": {
+      "boundary": "idle",
+      "budget": "request_input",
+      "authority": "host"
+    },
+    "page_out_history": {
+      "boundary": "idle",
+      "budget": "request_input",
+      "authority": "host"
+    },
+    "project_result": {
+      "boundary": "pre_step",
+      "budget": "request_input",
+      "authority": "host"
+    },
+    "change_residency": {
+      "boundary": "transaction",
+      "budget": "online",
+      "authority": "kernel"
+    },
+    "host_compact": {
+      "boundary": "host_compaction",
+      "budget": "request_input",
+      "authority": "host"
+    }
+  },
+  "stop_states": [
+    "below_high",
+    "reached_target",
+    "deferred_boundary",
+    "stale_plan",
+    "pressure_unavailable",
+    "protected_capacity",
+    "no_gain",
+    "reconcile_required",
+    "capability_unavailable"
+  ]
+}
+

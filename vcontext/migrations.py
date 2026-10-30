@@ -13,6 +13,21 @@ def backup_legacy(connection):
         return None
     if version[0] in ('1', '2', '3', '4', '5', '6', '7', '8'):
         upgrade = 'schema9'
+    elif version[0] == '9' and not connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='vfx_schema'").fetchone():
+        upgrade = 'effects1'
+    elif version[0] == '9' and not connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='vcd_schema'").fetchone():
+        upgrade = 'catalog1'
+    elif version[0] == '9' and not connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='vcc_schema'").fetchone():
+        upgrade = 'control1'
+    elif version[0] == '9' and not connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='vsm_schema'").fetchone():
+        upgrade = 'stages1'
+    elif version[0] == '9' and not connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='vsp_schema'").fetchone():
+        upgrade = 'stage-proofs1'
     else:
         return None
     filename = next((row[2] for row in connection.execute('PRAGMA database_list') if row[1] == 'main'), '')

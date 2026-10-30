@@ -20,6 +20,12 @@ from .quota import (OPERATIONS as QUOTA_OPERATIONS, QuotaExceeded, QuotaLedger,
                    install_quota_schema)
 from .automation import Automation, OPERATIONS as AUTO_OPERATIONS, install_automation_schema
 from .evidence import EvidenceNotes, OPERATIONS as EVIDENCE_OPERATIONS, install_evidence_schema
+from .effects import EffectsState, OPERATIONS as EFFECT_OPERATIONS, install_effect_schema
+from .catalog import CatalogState, OPERATIONS as CATALOG_OPERATIONS, install_catalog_schema
+from .control_commit import ControlCommit, OPERATIONS as COMMIT_OPERATIONS, install_control_schema
+from .retrieval import RetrievalSources, OPERATIONS as RETRIEVAL_OPERATIONS
+from .stages import StageState, OPERATIONS as STAGE_OPERATIONS, install_stage_schema
+from .stage_proofs import StageProofs, OPERATIONS as PROOF_OPERATIONS, install_proof_schema
 
 
 class ContextError(ValueError):
@@ -85,6 +91,9 @@ MUTATING_OPERATIONS = frozenset({
     'compact', 'organize', 'prepare_task', 'render', 'checkpoint', 'fold',
     'set_policy', 'policy_tick', 'set_session_enabled', 'record_usage',
     'state_bind', 'state_sync', 'resource_store', 'summary_store', 'result_store', 'result_mark', 'ved_note_store',
+    'effects_sync', 'effects_observe', 'effects_bind', 'catalog_delivered', 'control_record', 'control_tick', 'source_read',
+    'stage_prepare', 'stage_propose', 'stage_review', 'stage_activate',
+    'stage_attest', 'stage_requirements',
     'result_plan', 'result_plan_finish', 'result_upload_begin', 'result_upload_chunk', 'result_upload_finish', 'result_upload_abort',
     'snapshot_create', 'snapshot_checkout', 'snapshot_detach', 'snapshot_branch',
     'task_create','task_update','task_select','task_fork','task_attach','task_review',
@@ -237,6 +246,11 @@ class ContextStore:
         install_quota_schema(self.db)
         install_automation_schema(self.db)
         install_evidence_schema(self.db)
+        install_effect_schema(self.db)
+        install_catalog_schema(self.db)
+        install_control_schema(self.db)
+        install_stage_schema(self.db)
+        install_proof_schema(self.db)
         self.quota = QuotaLedger(self.db, self.scope, project='default', defaults=self._quota_defaults)
         self.quota.sync(self._resident_units(), enforce=False, operation='initialize', managed_prefix='page:')
         self.automation = Automation(self)
@@ -582,8 +596,13 @@ class ContextStore:
         return dict(id=page_id, version=version, **json.loads(row[0]))
 
     @atomic
-    def history(self, page_id):
+    def history(self, page_id, limit=None):
         self._head(page_id)
+        if limit is not None:
+            if type(limit) is not int or not 1 <= limit <= 32:
+                raise ContextError('history limit must be 1..32')
+            return [dict(version=r[0], created=r[1]) for r in reversed(self.db.execute(
+                'SELECT version,created FROM revisions WHERE id=? ORDER BY version DESC LIMIT ?', (page_id, limit)).fetchall())]
         return [dict(version=r[0], created=r[1]) for r in self.db.execute(
             'SELECT version,created FROM revisions WHERE id=? ORDER BY version', (page_id,))]
 
@@ -972,6 +991,8 @@ class ContextStore:
             view = self._view(row)
             pages.append(dict(id=row['id'], title=view.get('title', ''), tier=row['tier'],
                               version=row['version'], bytes=self._page_bytes(row),
+                              content_hash=hashlib.sha256(view['content'].encode('utf-8')).hexdigest(),
+                              content_bytes=len(view['content'].encode('utf-8')),
                               importance=view.get('importance', 0.5), hits=row['hits'],
                               seq=row['seq'], mode='index' if row['outline'] else 'full',
                               summary=view.get('summary', ''),
@@ -1160,6 +1181,56 @@ class ContextStore:
 
     @atomic
     def dispatch(self, operation, arguments):
+        if operation in PROOF_OPERATIONS:
+            return getattr(StageProofs(StageState(self)), operation)(**arguments)
+        if operation in STAGE_OPERATIONS:
+            return getattr(StageState(self), operation)(**arguments)
+        if operation in RETRIEVAL_OPERATIONS:
+            return getattr(RetrievalSources(self), operation)(**arguments)
+        if operation == 'control_tick':
+            ledger = ControlCommit(self.db, self.scope)
+            request_id = arguments.get('request_id')
+            descriptor = {'operation': 'auto_tick'}
+            old = ledger.control_read(request_id)
+            if old:
+                if old['action'] != 'change_residency' or old['state'] != 'confirmed' or old['descriptor'] != descriptor:
+                    raise ValueError('control tick conflict')
+                return old['result']
+            for state in ('planned', 'prepared', 'intent'):
+                ledger.control_record(request_id, 'change_residency', state, descriptor)
+            result = self.automation.auto_tick()
+            # 当前保护解释仍由 preview 返回；持久重放只保存有界的紧凑审计结果。
+            result = dict(result, policy_schema=1, task_revision=self.automation.dependencies()['task_revision'])
+            if 'pages' in result:
+                result['pages'] = [{key: value for key, value in page.items() if key != 'protection_basis'}
+                                   for page in result['pages']]
+                result['pages_total'] = len(result['pages'])
+                result['pages_truncated'] = False
+                while len(pack(result).encode('utf-8')) > 115000 and result['pages']:
+                    result['pages'].pop()
+                    result['pages_truncated'] = True
+            ledger.control_record(request_id, 'change_residency', 'confirmed', descriptor, result=result)
+            return result
+        if operation in COMMIT_OPERATIONS:
+            return getattr(ControlCommit(self.db, self.scope), operation)(**arguments)
+        if operation in CATALOG_OPERATIONS:
+            result = getattr(CatalogState(self.db, self.scope), operation)(**arguments)
+            if operation == 'catalog_resources':
+                stage = StageState(self)
+                result['stage'] = stage.stage_context()
+                representations, truncated = stage.representations()
+                result.setdefault('representations', []).extend(representations)
+                result['representations_truncated'] = result.get('representations_truncated', False) or truncated
+                while len(pack(result).encode()) > 126000 and result['representations']:
+                    result['representations'].pop()
+                    result['representations_truncated'] = True
+                while len(pack(result).encode()) > 126000 and result['items']:
+                    result['items'].pop()
+                    result['next_offset'] = arguments.get('offset', 0) + len(result['items'])
+                    result['has_more'] = True
+            return result
+        if operation in EFFECT_OPERATIONS:
+            return getattr(EffectsState(self.db, self.scope), operation)(**arguments)
         if operation in EVIDENCE_OPERATIONS:
             return getattr(EvidenceNotes(self.db, self.scope), operation)(**arguments)
         if operation in AUTO_OPERATIONS:
@@ -1179,7 +1250,20 @@ class ContextStore:
                     duration_ms=min(600000, (time.perf_counter() - started) * 1000))
             return result
         if operation in STRUCTURED_OPERATIONS or operation in SNAPSHOT_OPERATIONS or operation in TASK_OPERATIONS:
-            return TaskState(self.db, self.scope).dispatch(operation, arguments)
+            result = TaskState(self.db, self.scope).dispatch(operation, arguments)
+            if operation in ('task_update', 'task_attach') and not result.get('replayed') and result['task']['status'] == 'completed':
+                # 与完成边界共用事务；候选生成和评审不占用这次事务。
+                stage = StageState(self)
+                count = self.db.execute('SELECT COUNT(*) FROM vsm_bases WHERE namespace=? AND session_id=?', stage._scope).fetchone()[0]
+                if count < 1024:
+                    stage.capture(result['task']['ref'], 'completed_task_boundary')
+            if operation == 'summary_store':
+                EffectsState(self.db, self.scope).effects_bind(
+                    'vctx://summary/' + result['summary']['summary_id'], arguments['sources'])
+            if operation in ('summary_store', 'summary_read'):
+                result['currentness'] = EffectsState(self.db, self.scope).effects_freshness(
+                    'vctx://summary/' + result['summary']['summary_id'])
+            return result
         allowed = {'write','ingest','read','history','search','page_in','page_out','unpin',
                    'recall','render','snapshot','prefix','metrics','dashboard','usage','record_usage',
                     'session_state','set_session_enabled','replacement_policy','set_policy','policy_tick','status','checkpoint',

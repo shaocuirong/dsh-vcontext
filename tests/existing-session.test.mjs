@@ -36,7 +36,7 @@ function fixture(t) {
   } };
   root.set('sessionQuery', query);
   const live = createLiveContext(root);
-  t.after(async () => { live.dispose(); await root.fiber.dispose(); });
+  t.after(async () => { await live.dispose(); await root.fiber.dispose(); });
   return { root, sessions, stored, live, query, user, first,
     get reads() { return reads; }, get released() { return released; } };
 }
@@ -133,4 +133,27 @@ test('failed historical reads release leases, report a useful state and recover 
   const missing = await f.live.read('missing');
   assert.equal(missing.read_error, 'HISTORY_NOT_FOUND');
   assert.doesNotMatch(JSON.stringify(missing), /PRIVATE_ERROR/);
+});
+
+test('卸载及时结束冷读取，迟到观察释放且不会恢复已清空的请求与趋势', async t => {
+  const f = fixture(t), original = f.query.observeSession.bind(f.query);
+  let entered, release;
+  const started = new Promise(resolve => { entered = resolve; });
+  f.query.observeSession = async (...args) => {
+    const observation = await original(...args);
+    entered();
+    await new Promise(resolve => { release = resolve; });
+    return observation;
+  };
+  const reading = f.live.read('existing');
+  await started;
+  await f.live.dispose();
+  assert.equal((await reading).current, null);
+  release();
+  await new Promise(resolve => setImmediate(resolve));
+  const after = await f.live.read('existing');
+  assert.equal(f.released, 1);
+  assert.equal(after.current, null);
+  assert.equal(after.last_request, null);
+  assert.deepEqual(after.observations, []);
 });

@@ -9,6 +9,33 @@ import { once } from 'node:events';
 
 const CONFIG = { dbPath: join(tmpdir(), 'vctx-route-test.db'), namespace: 'project' };
 
+test('页面预览只接受固定版本和本机只读请求', async () => {
+  const calls = [], handler = createHandler(CONFIG, { async call(...args) { calls.push(args); return { content: '正文' }; } });
+  const id = 'a'.repeat(32);
+  const good = await invoke(handler, 'GET', `/vctx/page-preview?session=s&page_id=${id}&version=2&offset=12`);
+  assert.equal(good.body.result.content, '正文');
+  assert.deepEqual(calls[0], ['s', 'page_preview', { page_id: id, version: 2, offset: 12, limit: 4096 }]);
+  for (const query of [`page_id=${id}&version=0`, `page_id=${id}&version=1&offset=-1`, `page_id=${id}&version=1&extra=1`])
+    assert.equal((await invoke(handler, 'GET', `/vctx/page-preview?session=s&${query}`)).status, 400);
+  assert.equal((await invoke(handler, 'POST', '/vctx/page-preview')).status, 405);
+  assert.equal(calls.length, 1);
+});
+
+test('未决操作查询与人工复核只走本机同源入口，复核不执行宿主动作', async () => {
+  const calls = [];
+  const coordinator = { async status(id) { return { id, pending: [] }; },
+    async review(id, request, input) { calls.push([id, request, input]); return { state: input.state }; } };
+  const handler = createHandler(CONFIG, transport(), undefined, undefined, undefined, undefined, undefined,
+    undefined, undefined, undefined, undefined, undefined, undefined, coordinator);
+  assert.equal((await invoke(handler, 'GET', '/vctx/control?session=s')).body.result.id, 's');
+  assert.equal((await invoke(handler, 'POST', '/vctx/control', JSON.stringify({ session: 's', request_id: 'r', state: 'confirmed', note: '检查日志' }))).status, 200);
+  assert.equal(calls.length, 1);
+  assert.equal((await invoke(handler, 'POST', '/vctx/control', JSON.stringify({ session: 's', force: true }))).status, 400);
+  const req = request('POST', '/vctx/control', '{}'); req.headers = { host: 'localhost', origin: 'https://evil.example' };
+  const res = response(); await handler(req, res);
+  assert.equal(res.captured.status, 403); assert.equal(calls.length, 1);
+});
+
 test('dashboard activity tolerates unavailable supplements without dropping confirmed context', async () => {
   const stub = transport({ dashboard: { residency: [] } });
   const live = { async read() { return { current: { bytes: 1234 } }; } };
@@ -36,6 +63,8 @@ test('automatic settings are independently writable only by the local same-origi
   assert.equal(config.l1_input_budget, 65536);
   assert.equal((await invoke(handler, 'POST', '/vctx/automation', JSON.stringify({ session: 's', l1_open_results_enabled: false }))).status, 200);
   assert.equal(config.l1_open_results_enabled, false);
+    assert.equal((await invoke(handler, 'POST', '/vctx/automation', JSON.stringify({ session: 's', adaptive_policy_enabled: false }))).status, 200);
+    assert.equal(config.adaptive_policy_enabled, false);
   for (const body of [{ session: 's', l1_enabled: 1 }, { session: 's', protect_recent_pages: 0 }, { session: 's' },
     { session: 's', l1_open_results_enabled: 1 }, ...[-1, true, 0.5, '65536', 9000000000001].map(l1_input_budget => ({ session: 's', l1_input_budget }))]) {
     assert.equal((await invoke(handler, 'POST', '/vctx/automation', JSON.stringify(body))).status, 400);

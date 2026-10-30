@@ -1,7 +1,7 @@
-import { createHash } from 'node:crypto';
+import { readWorkspaceSource } from './control/resource-source.mjs';
+import { describeWorkspaceVersion, recordWorkspaceObservation } from './control/versions.mjs';
 import { resolveProjectRoot } from './session-bridge.mjs';
 
-const MAX_BYTES = 256 * 1024;
 
 /** Explicit local UTF-8 capture; never scans, edits files, or follows project HEAD. */
 export async function captureResource(ctx, transport, bridge, exec, input, { enabled = false } = {}) {
@@ -33,37 +33,16 @@ export async function captureResource(ctx, transport, bridge, exec, input, { ena
   const binding = state.binding;
   if (!binding || !project || binding.project_id !== project.project_id || binding.target_commit !== null)
     throw new Error('session project does not match a live working-tree binding');
-  const fs = ctx.get('agentPresets')?.serviceFor?.(exec.agent, 'fs')
-    ?? exec.agent.ctx?.get?.('fs') ?? ctx.get('fs');
-  if (!fs || ['resolve', 'contains', 'stat', 'readBytes', 'processPath', 'processPathFromHostPath']
-    .some(method => typeof fs[method] !== 'function'))
-    throw new Error('host filesystem does not support bounded version capture');
-  const mapped = fs.processPathFromHostPath(binding.root_path);
-  if (typeof mapped !== 'string' || !mapped) throw new Error('host project is unavailable in this filesystem world');
-  const root = await fs.resolve(mapped, { signal: exec.signal });
-  const cwd = fs.processPath(root);
-  const target = await fs.resolve(input.path, { cwd, signal: exec.signal });
-  if (!fs.contains(root, target) || fs.processPath(target) === cwd)
-    throw new Error('resource_capture target escapes the bound project');
-  const before = await fs.stat(target, exec.signal);
-  if (before?.type !== 'file' || typeof before.version !== 'string' || before.size > MAX_BYTES)
-    throw new Error('capture requires a regular UTF-8 file at most 256 KiB');
-  // Use the configured backend: direct Node reads would bypass custom access
-  // policies and could capture a different file than a remote fs provider.
-  const bytes = await fs.readBytes(target, exec.signal, MAX_BYTES);
-  if (!(bytes instanceof Uint8Array) || bytes.byteLength > MAX_BYTES) throw new Error('capture exceeds 256 KiB');
-  const after = await fs.stat(target, exec.signal);
-  const resolved = await fs.resolve(input.path, { cwd, signal: exec.signal });
-  if (before.version !== after?.version || !fs.contains(root, resolved)
-    || fs.processPath(resolved) !== fs.processPath(target))
-    throw new Error('file changed during capture; inspect current state before retrying');
-  const content = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
-  if (content.includes('\0')) throw new Error('binary content is not supported');
-  const hash = createHash('sha256').update(content, 'utf8').digest('hex');
+  const basis = await transport.call(exec.agent.id, 'effects_status', {}, exec.signal);
+  const source = await readWorkspaceSource(ctx, exec.agent, binding, input.path, exec.signal);
+  const descriptor = await describeWorkspaceVersion(project, exec.agent, input.path, source, basis, exec.signal);
   const result = await transport.call(exec.agent.id, 'resource_store', {
-    ...input, path: input.path.replaceAll('\\', '/'), content, source_revision: `working-tree:sha256:${hash}`,
+    ...input, path: input.path.replaceAll('\\', '/'), content: source.content, source_revision: `working-tree:${source.content_hash}`,
   }, exec.signal);
-  // This is an observation, not proof that the linked invocation was the only
-  // writer, nor a transaction spanning the filesystem, SQLite and the host log.
-  return { ...result, observation: 'working-tree-at-capture', verification: 'not_tested' };
+  descriptor.reproducibility = 'stored_snapshot';
+  descriptor.revision.snapshot_ref = result.resource.ref;
+  // 现场观察不证明关联调用是唯一写者，也不是跨文件系统、SQLite 和宿主的事务。
+  const currentness = await recordWorkspaceObservation(transport, exec, result.resource, source, basis, descriptor);
+  return { ...result, observation: 'working-tree-at-capture', verification: 'not_tested',
+    currentness, version_descriptor: descriptor };
 }

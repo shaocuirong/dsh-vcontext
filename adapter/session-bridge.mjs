@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
-import { realpath } from 'node:fs/promises';
-import path from 'node:path';
+import { createSessionAccess } from './session/access.mjs';
+
+export { resolveProjectRoot } from './session/project-root.mjs';
 
 const BATCH_SIZE = 128;
 const MAX_SESSIONS = 128;
@@ -8,18 +9,6 @@ const MAX_PENDING = 32;
 const SAFE_CODES = new Set(['HISTORY_UNAVAILABLE', 'HISTORY_INVALID', 'SEQUENCE_GAP',
   'ROOT_CHANGED', 'BINDING_CONFLICT', 'SYNC_FAILED', 'CANCELLED', 'UNBOUND', 'BUSY', 'DISPOSED']);
 const fail = code => { throw Object.assign(new Error(code), { code }); };
-
-/** Resolve only a host-owned directory; process.cwd() is never a session root. */
-export async function resolveProjectRoot(ctx, agent) {
-  const service = ctx.get('agentPresets')?.serviceFor?.(agent, 'workingDirectory')
-    ?? agent.ctx?.get?.('workingDirectory') ?? ctx.get('workingDirectory');
-  const directory = typeof service?.get === 'function' ? service.get(agent.session) : agent.session?.header?.cwd;
-  if (typeof directory !== 'string' || !path.isAbsolute(directory)) return null;
-  const root_path = path.normalize(await realpath(directory));
-  const canonical = process.platform === 'win32' ? root_path.toLowerCase() : root_path;
-  return { root_path, project_id: createHash('sha256').update(canonical).digest('hex'),
-    source: typeof service?.get === 'function' ? 'workingDirectory' : 'session.header.cwd' };
-}
 
 function identifier(value, limit) {
   if (typeof value !== 'string' || !value.length || value.length > limit || /[\u0000-\u001f]/u.test(value))
@@ -29,12 +18,10 @@ function identifier(value, limit) {
 
 function metadata(event, inherited) {
   const record = { seq: event.seq, type: identifier(event.type, 128), inherited };
-  // Native pruning/compaction appends Surface replacements. In particular a
-  // rewritten tool/result retains its call id: this is evidence projection,
-  // never another tool execution or another verification result.
+  // 宿主修剪与压缩通过Surface替换追加事件；保留调用ID的结果是投影证据，
+  // 不能登记为工具重新执行，也不能提升验证状态。
   if (event.surfaceOp?.op === 'replace') return { ...record, projection: true };
-  // A fork's stitched prefix remains evidence under its current-session seq;
-  // inherited invocations must not become new child-session operations.
+  // Fork继承的前缀保留为历史证据，不成为子会话自己的工具操作。
   if (inherited) return record;
   const ptc = event.type === 'tool/ptc-dispatch-start' || event.type === 'tool/ptc-dispatch';
   if (event.type === 'tool/call' || event.type === 'tool/ptc-dispatch-start') {
@@ -45,9 +32,8 @@ function metadata(event, inherited) {
   } else if (event.type === 'tool/result' || event.type === 'tool/ptc-dispatch') {
     record.call_id = identifier(ptc ? event.data?.subCallId : event.data?.message?.toolCallId, 256);
     if (ptc) record.tool = identifier(event.data?.name, 256);
-    // Native results carry no tool name. The database owns the association
-    // recorded at tool/call; omitting it deterministically keeps replay stable
-    // across batch boundaries and plugin restarts without scanning old calls.
+    // 原生结果没有工具名，关联由数据库中的调用记录决定；
+    // 不补猜名称，保证跨批次与重启重放稳定，也不回扫旧调用。
     const error = event.data?.error;
     record.status = (ptc ? event.data?.isError : event.data?.message?.isError) === true
       ? ['ABORTED', 'ABORTED_BEFORE_DISPATCH'].includes(error?.code) ? 'cancelled' : 'failed'
@@ -58,15 +44,16 @@ function metadata(event, inherited) {
 }
 
 /**
- * Read-only Session observer with a durable, contiguous SQLite metadata cursor.
- * Queues contain Agent references and dirty bits, never copies of raw history.
- * One observation lease is materialized at a time, with bounded RPC batches.
+ * 将宿主会话白名单元数据同步到连续的SQLite游标。
+ * 队列只保存Agent引用与待同步标记，不复制原始历史。
+ * 同时只物化一个观察切片，RPC按有界批次提交。
  */
-export function createSessionBridge(ctx, transport, diagnostics) {
+export function createSessionBridge(ctx, transport, diagnostics, { access: suppliedAccess, effects } = {}) {
+  const access = suppliedAccess ?? createSessionAccess(ctx, { diagnostics });
   const sessions = new Map();
   const lifetime = new AbortController();
   let queue = Promise.resolve();
-  let disposed = false;
+  let disposed = false, disposal;
   const disposers = [];
   const record = (...args) => { try { diagnostics?.record(...args); } catch {} };
   const snapshot = entry => entry ? structuredClone(entry.state) : null;
@@ -75,7 +62,7 @@ export function createSessionBridge(ctx, transport, diagnostics) {
 
   async function replay(agent, entry, signal) {
     signal.throwIfAborted();
-    const project = await resolveProjectRoot(ctx, agent);
+    const project = await access.projectOf(agent, { signal });
     if (!project) fail('UNBOUND');
     if (entry.project && entry.project !== project.project_id) fail('ROOT_CHANGED');
     const previous = await transport.call(agent.id, 'state_status', {}, signal);
@@ -84,39 +71,32 @@ export function createSessionBridge(ctx, transport, diagnostics) {
       root_path: project.root_path, target_commit: null }, signal);
     entry.project = project.project_id;
     entry.state.root_source = project.source;
-    const query = ctx.get('sessionQuery');
-    if (typeof query?.observeSession !== 'function') fail('HISTORY_UNAVAILABLE');
-    let observation;
-    try {
-      observation = await query.observeSession(agent.id, { projectionMode: 'none', signal });
-      signal.throwIfAborted();
-      const events = observation?.events;
-      // Cold observations may include synthetic crash-recovery closers. This
-      // Agent-only entry point accepts an exact live cut, never those closers.
-      if (observation?.source !== 'live' || observation.header?.id !== agent.id
-        || !Array.isArray(events) || observation.cursor !== events.length - 1
-        || !Number.isSafeInteger(agent.session?.seq) || events.length > agent.session.seq)
-        fail('HISTORY_INVALID');
-      const inherited = observation.inheritedEventCount ?? 0;
-      if (!Number.isSafeInteger(inherited) || inherited < 0 || inherited > events.length) fail('HISTORY_INVALID');
+    return access.withLiveCut(agent, { signal, consistency: 'prefix' }, async ({ events, inheritedEventCount: inherited, signal: cutSignal, check }) => {
       let cursor = previous.processed_seq;
       if (!Number.isSafeInteger(cursor) || cursor < -1 || cursor >= events.length && cursor !== -1)
         fail('HISTORY_INVALID');
       entry.state.processed_seq = cursor;
+      // 独立游标读取同一切片，不给既有事件白名单增加字段或改变历史哈希。
+      if (effects) {
+        entry.state.effects = await effects.syncCut(agent,
+          { events, inheritedEventCount: inherited, signal: cutSignal, check }, project);
+        check();
+        if (!entry.state.effects.caught_up) entry.dirty = true;
+      }
       let batch = [];
-      // Trust the host's immutable prefix instead of reparsing it on every
-      // append. Resend one boundary event so SQLite checks its metadata hash;
-      // this detects boundary changes, not arbitrary rewrites earlier in the
-      // already accepted prefix. New records remain strictly contiguous.
+      // 信任宿主已接受的不可变前缀；重发一个边界事件供数据库核对元数据哈希。
+      // 这只能检查边界变化，不能声称检测整个旧前缀的改写；新增序列仍须连续。
       for (let index = Math.max(0, cursor); index < events.length; index++) {
-        signal.throwIfAborted();
+        cutSignal.throwIfAborted();
         const event = events[index];
         if (event?.seq !== index) fail('SEQUENCE_GAP');
         const record = metadata(event, index < inherited);
         batch.push(record);
         if (batch.length === BATCH_SIZE || index === events.length - 1) {
           const through_seq = batch.at(-1).seq;
-          const result = await transport.call(agent.id, 'state_sync', { events: batch, through_seq }, signal);
+          const result = await transport.call(agent.id, 'state_sync', { events: batch, through_seq }, cutSignal);
+          // 异步存储返回后重新核对能力与取消，避免迟到响应继续推进旧切片。
+          check();
           if (result.processed_seq !== through_seq) fail('SYNC_FAILED');
           cursor = through_seq;
           entry.state.processed_seq = cursor;
@@ -124,16 +104,13 @@ export function createSessionBridge(ctx, transport, diagnostics) {
           batch = [];
         }
       }
-      // Event listeners only dirty a job. A changed cut is replayed next;
-      // nothing advances the durable cursor over unobserved appends.
+      // 新追加只标记后续切片待同步，不越过尚未观察的事件推进持久游标。
       if (agent.session.seq > events.length) entry.dirty = true;
-      const current = await transport.call(agent.id, 'state_status', {}, signal);
+      const current = await transport.call(agent.id, 'state_status', {}, cutSignal);
+      check();
       if (current.processed_seq !== cursor) fail('SYNC_FAILED');
       entry.state.counts = counts(current.counts);
-    } finally {
-      try { observation?.[Symbol.dispose]?.(); }
-      catch { record('session.bridge.release.failed', 'warn', { error_code: 'SYNC_FAILED' }); }
-    }
+    });
   }
 
   function sync(agent, signal) {
@@ -143,12 +120,13 @@ export function createSessionBridge(ctx, transport, diagnostics) {
       return Promise.resolve({ state: 'unbound', error_code: 'UNBOUND', processed_seq: -1 });
     let entry = sessions.get(id);
     if (entry?.promise) { entry.dirty = true; return entry.promise; }
+    if (entry?.effectTimer) { clearTimeout(entry.effectTimer); entry.effectTimer = null; }
     if ([...sessions.values()].filter(value => value.promise).length >= MAX_PENDING)
       return Promise.resolve({ state: 'failed', error_code: 'BUSY', processed_seq: entry?.state.processed_seq ?? -1 });
     if (!entry) {
       if (sessions.size >= MAX_SESSIONS) {
         const oldest = [...sessions].find(([, value]) => !value.promise);
-        if (oldest) sessions.delete(oldest[0]);
+        if (oldest) { clearTimeout(oldest[1].effectTimer); sessions.delete(oldest[0]); }
       }
       entry = { state: { state: 'queued', processed_seq: -1, counts: {} }, dirty: true, agent };
       sessions.set(id, entry);
@@ -158,8 +136,7 @@ export function createSessionBridge(ctx, transport, diagnostics) {
     const control = signal ? AbortSignal.any([lifetime.signal, signal]) : lifetime.signal;
     const execute = async () => {
       try {
-        // Limit a continuously growing Session to four cuts per turn. A later
-        // pre-step or event always retries from the last acknowledged cursor.
+        // 持续增长的会话每轮最多追赶四个切片，后续从最后确认游标继续。
         for (let cut = 0; cut < 4 && entry.dirty; cut++) {
           entry.dirty = false;
           entry.state.state = 'syncing';
@@ -174,6 +151,15 @@ export function createSessionBridge(ctx, transport, diagnostics) {
         record('session.bridge.failed', 'warn', { error_code: code,
           session_hash: createHash('sha256').update(id).digest('hex').slice(0, 12) });
       } finally { entry.promise = null; }
+      // 历史回填在批次间让出执行机会，不依赖用户继续运行模型步骤。
+      // 失败不自动重试，只有已推进且仍落后的观察才续批。
+      if (!disposed && effects && entry.agent && entry.state.state === 'pending' && !entry.state.effects?.caught_up) {
+        entry.effectTimer = setTimeout(() => {
+          entry.effectTimer = null;
+          if (!disposed && entry.agent) void sync(entry.agent);
+        }, 20);
+        entry.effectTimer.unref?.();
+      }
       return snapshot(entry);
     };
     entry.promise = queue.then(execute);
@@ -188,18 +174,25 @@ export function createSessionBridge(ctx, transport, diagnostics) {
   }));
   disposers.push(ctx.on('agent/disposed', ({ agent }) => {
     const entry = sessions.get(agent?.id);
+    clearTimeout(entry?.effectTimer);
     if (entry && !entry.promise) sessions.delete(agent.id);
     else if (entry) entry.agent = null;
   }));
   return {
     sync,
     status(sessionId) { return snapshot(sessions.get(sessionId)); },
-    async dispose() {
+    dispose() {
+      if (disposal) return disposal;
       disposed = true;
       lifetime.abort();
+      for (const entry of sessions.values()) clearTimeout(entry.effectTimer);
       for (const dispose of disposers) if (typeof dispose === 'function') dispose();
-      await queue;
-      sessions.clear();
+      disposal = (async () => {
+        await queue;
+        sessions.clear();
+        if (!suppliedAccess) await access.dispose();
+      })();
+      return disposal;
     },
   };
 }

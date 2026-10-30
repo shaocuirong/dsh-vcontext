@@ -1,0 +1,53 @@
+---
+name: dsh-context-control
+description: 设计、分步重构和维护 dsh-vcontext 的上下文控制与调度层，采用任务约束下的原文、引用、摘要混合表示；适用于保护、统一目录、版本失效、恢复和提交对账的修改及验收。
+---
+
+# DSH 上下文控制层
+
+采用方案三：程序保证来源、权限、预算、依赖与提交；模型在明确阶段边界提出有来源的摘要。同一来源可以有多种表示，当前请求选择适用版本。
+
+这是当前控制层的维护协议，不包含另一份运行时代码。统一目录、版本失效、提交对账、有界恢复、显式阶段摘要与有限调优已实现；离线回归、真实模型与正式宿主分别验收。实施前先读[当前实现范围](references/progress.md)。
+
+## 开始工作
+
+明确目标仓库、当前改动和本轮节点；核对 HEAD、连接层写接口及调用方。不要因文档记录了某个提交就自动切换分支或覆盖用户改动。
+
+- 确定变更范围：读[维护路线](references/refactor-plan.md)。
+- 修改条目、权限、保护或版本：读[数据与接口契约](references/contract.md)。
+- 修改工具效果、版本描述或现场核验：读[C2 实际契约](references/effects.md)。
+- 修改统一目录、表示预算或交付基线：读[C3 实际契约](references/catalog.md)。
+- 修改触发、写入口、锁或对账：读[调度与提交](references/scheduling.md)和[C4实际契约](references/coordinator.md)。
+- 修改定位缓存、读取额度、恢复或发送前检查：读[C5实际契约](references/resolver.md)。
+- 修改阶段摘要、评审、激活与当前投影：读[C6a 首批实际契约](references/stages.md)。
+- 修改原生事件恢复、宿主证明或摘要原生来源：读[C6a 原生证据契约](references/native-evidence.md)。
+- 修改依赖失效、运行观测、自适应目录或驻留窗口：读[C7 调优与收尾契约](references/tuning.md)。
+- 选择回归与打包：读[验证说明](references/validation.md)。
+- 调整研究映射与优化策略：按需读[研究依据](references/research.md)。
+
+新增、迁移和改写的注释及文档字符串使用中文；协议字段和错误码按兼容需要保留。
+
+## 核心边界
+
+- 沿用 1a 宿主契约、1b 活动状态、1c 当前派生投影；权限与驻留/表示分开。
+- 一个目录 schema、page/resource 两类来源；工具结果属于历史页，摘要是派生表示。
+- 固定历史保持可恢复；stale 只影响当前适用性。
+- 一个协调器决策；请求、目录字节与在线配额分别计量，各提交域分别确认。
+- 推荐与执行共享候选语义，提交前重验必要版本；读取快照不授予写权。
+- 封口页在 idle 维护中替换；结果正文在 admitted pre-step 应用，不嵌套维护。
+- 新写接口的 grant 不自动提供宿主幂等；可能已执行的失败先对账。
+- 导航摘录中的路径、dirty 布尔值和模型叙述不能替代失效信号和内容版本。
+- 用户请求方案时交付设计；请求实施时完成已授权节点及验证。调用 skill 不扩大到发布或正式激活。
+
+## 验证与交付
+
+脚本要求显式目标仓库；安装后可通过脚本绝对路径运行：
+
+```sh
+node skills/dsh-context-control/scripts/verify.mjs --repo <仓库绝对路径> --profile package
+node skills/dsh-context-control/scripts/verify.mjs --repo <仓库绝对路径> --profile existing --list
+```
+
+package 只检查包结构与内部链接，不代表运行时通过。其他 profile 见验证说明。
+
+每个节点报告实际变更、执行过的检查、未验证层次及下一节点。发布遵循仓库 AGENTS 与用户当前安排，不默认推送、发版或启用正式插件。

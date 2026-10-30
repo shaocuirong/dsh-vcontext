@@ -5,6 +5,28 @@ import { SessionStore } from '@deepseek-ai/dsh-session';
 import { markAgentLoopRequest } from '@deepseek-ai/dsh-llm';
 import { createLiveContext, describeContext } from '../adapter/live-context.mjs';
 
+test('只有正常结束的主请求推进比较基准，失败与辅助调用不推进', async () => {
+  const root = new Context(), live = createLiveContext(root);
+  async function send(text, main, finish) {
+    const options = { sessionId: 's', messages: [{ role: 'user', content: text }] };
+    const stream = root.waterfall('llm/stream', main ? markAgentLoopRequest(options) : options,
+      () => (async function* () { if (finish) yield { type: 'finish', reason: { kind: finish } }; })());
+    for await (const _chunk of stream) { /* 消费回执。 */ }
+  }
+  try {
+    await send('first', true, 'stop');
+    const first = (await live.read('s')).last_successful_request;
+    assert.equal(first.window.delivery, 'confirmed');
+    await send('failed', true, 'error');
+    await send('auxiliary', false, 'stop');
+    assert.equal((await live.read('s')).last_successful_request.fingerprint, first.fingerprint);
+    await send('second', true, 'tool-calls');
+    const after = await live.read('s');
+    assert.equal(after.previous_successful_request.fingerprint, first.fingerprint);
+    assert.notEqual(after.last_successful_request.fingerprint, first.fingerprint);
+  } finally { await live.dispose(); await root.fiber.dispose(); }
+});
+
 test('observed trends are bounded, metadata-only and do not invent repeated refresh points', async () => {
   const root = new Context(); root.provide('sessions');
   let size = 1;
@@ -21,7 +43,7 @@ test('observed trends are bounded, metadata-only and do not invent repeated refr
     assert.equal((await live.read('other')).observations.length, 0);
     root.waterfall('llm/stream', markAgentLoopRequest({ sessionId: 'a', messages: session.deriveMessages() }), () => null);
     assert.equal((await live.read('a')).observations.at(-1).kind, 'request');
-  } finally { live.dispose(); await root.fiber.dispose(); }
+  } finally { await live.dispose(); await root.fiber.dispose(); }
 });
 
 test('reads current derived history each time and captures each request separately', async () => {
@@ -49,7 +71,7 @@ test('reads current derived history each time and captures each request separate
     assert.equal((await live.read('bob')).current, null);
     assert.equal((await live.read('bob')).last_request, null);
     assert.doesNotMatch(JSON.stringify((await live.read('alice'))), /DO_NOT_EXPOSE/);
-  } finally { live.dispose(); await root.fiber.dispose(); }
+  } finally { await live.dispose(); await root.fiber.dispose(); }
 });
 
 test('auxiliary LLM calls never overwrite the last main AgentLoop request or its trend', async () => {
@@ -65,7 +87,7 @@ test('auxiliary LLM calls never overwrite the last main AgentLoop request or its
     assert.equal(after.observations.filter(p => p.kind === 'request').length, 1);
     assert.equal(after.auxiliary_calls.count, 2);
     assert.doesNotMatch(JSON.stringify(after.auxiliary_calls), /SECRET|preview/);
-  } finally { live.dispose(); await root.fiber.dispose(); }
+  } finally { await live.dispose(); await root.fiber.dispose(); }
 });
 
 test('native SessionStore append and surface compaction are reflected without restarting', async () => {
@@ -86,7 +108,7 @@ test('native SessionStore append and surface compaction are reflected without re
     assert.equal(current.message_count, 1);
     assert.match(current.preview, /compacted summary/);
     assert.doesNotMatch(current.preview, /original|new message/);
-  } finally { live.dispose(); await root.fiber.dispose(); }
+  } finally { await live.dispose(); await root.fiber.dispose(); }
 });
 
 test('previews are bounded and adapter replay data is excluded', () => {

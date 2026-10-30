@@ -11,6 +11,7 @@
  */
 import { validateConfig } from './bridge.mjs';
 import { buildDashboardActivity } from './dashboard-activity.mjs';
+import { workbenchModel } from './workbench.mjs';
 
 export const ROUTE_PREFIX = '/vctx/';
 const MAX_BODY_BYTES = 16384;
@@ -59,8 +60,10 @@ function localCarrier(request) {
     && (request.method !== 'POST' || Boolean(request.headers?.origin));
 }
 
-export function createHandler(config, transport, liveContext, diagnostics, replacement, sessionBridge, resultProjection, resultJobs, sessionSnapshots, taskController, historyArchive, automation, evidenceDirectory) {
+export function createHandler(config, transport, liveContext, diagnostics, replacement, sessionBridge, resultProjection, resultJobs, sessionSnapshots, taskController, historyArchive, automation, evidenceDirectory, coordinator, contextCatalog) {
   const settings = validateConfig(config);
+  const kernelWrite = (id, op, input) => coordinator
+    ? coordinator.local(id, () => transport.call(id, op, input)) : transport.call(id, op, input);
   return async function handle(request, response) {
     let url;
     try {
@@ -77,6 +80,76 @@ export function createHandler(config, transport, liveContext, diagnostics, repla
     }
     if (foreignOrigin || request.headers?.['sec-fetch-site'] === 'cross-site')
       return send(response, 403, { ok: false, error: 'same-origin request required' });
+
+    if (url.pathname === `${ROUTE_PREFIX}page-versions`) {
+      if (!localCarrier(request)) return send(response, 403, { ok: false, error: '仅接受本机同源请求。' });
+      if (request.method !== 'GET') return send(response, 405, { ok: false, error: 'GET only' });
+      try {
+        const session = sessionOf(url), page = url.searchParams.get('page_id'), path = url.searchParams.get('path');
+        if (!session || [...url.searchParams.keys()].some(k => !['session', 'page_id', 'path'].includes(k)) || (page === null) === (path === null)) throw new Error('invalid selector');
+        let items;
+        if (page !== null) {
+          if (!/^[a-f0-9]{32}$/u.test(page)) throw new Error('invalid page');
+          const rows = await transport.call(session, 'history', { page_id: page, limit: 32 });
+          items = rows.slice(-32).reverse().map(row => ({ ref: `vctx://page/${page}/${row.version}`, label: `版本 ${row.version}` }));
+        } else {
+          if (!path || path.length > 1024) throw new Error('invalid path');
+          const rows = await transport.call(session, 'resource_history', { path, limit: 32 });
+          items = rows.map(row => ({ ref: row.ref, label: `版本 ${row.version}` }));
+        }
+        return send(response, 200, { ok: true, items });
+      } catch { return send(response, 400, { ok: false, error: '历史版本不可读取。' }); }
+    }
+
+    if (url.pathname === `${ROUTE_PREFIX}page-preview`) {
+      if (!localCarrier(request)) return send(response, 403, { ok: false, error: '仅接受本机同源请求。' });
+      if (request.method !== 'GET') return send(response, 405, { ok: false, error: 'GET only' });
+      try {
+        const session = sessionOf(url), page_id = url.searchParams.get('page_id'), ref = url.searchParams.get('ref');
+        const version = url.searchParams.get('version'), offset = url.searchParams.get('offset') ?? '0';
+        if (ref !== null) {
+          if (!session || page_id !== null || version !== null || !/^\d{1,15}$/u.test(offset)
+            || [...url.searchParams.keys()].some(k => !['session', 'ref', 'offset'].includes(k))) throw new Error('invalid preview');
+          let result;
+          const pageRef = /^vctx:\/\/page\/([a-f0-9]{32})\/([1-9]\d{0,14})$/u.exec(ref);
+          if (pageRef) result = await transport.call(session, 'page_preview', { page_id: pageRef[1], version: Number(pageRef[2]), offset: Number(offset), limit: 4096 });
+          else if (/^vctx:\/\/resource\/[a-f0-9]{32}$/u.test(ref))
+            result = await transport.call(session, 'resource_read', { ref, offset: Number(offset), limit: 4096 });
+          else if (/^vctx:\/\/(history\/[a-f0-9]{16}\/\d+|result\/[a-f0-9]{32})$/u.test(ref) && evidenceDirectory)
+            result = await evidenceDirectory.read(session, { ref, offset: Number(offset), limit: 4096 });
+          else if (/^vctx:\/\/(summary|stage|evidence)\/[a-f0-9]{32}$/u.test(ref))
+            result = await transport.call(session, 'source_read', { ref, offset: Number(offset), limit: 4096, max_bytes: 32768 });
+          else throw new Error('invalid ref');
+          return send(response, 200, { ok: true, result: { ...result,
+            has_more: result.has_more ?? result.truncated ?? false,
+            total_chars: result.total_chars ?? result.total,
+            source_version: result.source_version ?? result.content_hash ?? result.resource?.content_hash } });
+        }
+        if (!session || [...url.searchParams.keys()].some(k => !['session', 'page_id', 'version', 'offset'].includes(k))
+          || !/^[a-f0-9]{32}$/u.test(page_id ?? '') || !/^[1-9]\d{0,14}$/u.test(version ?? '')
+          || !/^\d{1,15}$/u.test(offset) || !Number.isSafeInteger(Number(version)) || !Number.isSafeInteger(Number(offset)))
+          throw new Error('invalid page preview');
+        const result = await transport.call(session, 'page_preview', { page_id, version: Number(version), offset: Number(offset), limit: 4096 });
+        return send(response, 200, { ok: true, result });
+      } catch { return send(response, 400, { ok: false, error: '页面版本不可读取，请刷新目录。' }); }
+    }
+
+    if (url.pathname === `${ROUTE_PREFIX}control`) {
+      if (!localCarrier(request)) return send(response, 403, { ok: false, error: '仅接受本机同源请求。' });
+      if (!coordinator) return send(response, 503, { ok: false, error: '协调器不可用。' });
+      try {
+        if (request.method === 'GET') {
+          const id = sessionOf(url);
+          if (!id || [...url.searchParams.keys()].some(key => key !== 'session')) throw new Error('invalid session');
+          return send(response, 200, { ok: true, result: await coordinator.status(id) });
+        }
+        if (request.method !== 'POST') return send(response, 405, { ok: false, error: 'GET/POST only' });
+        const input = JSON.parse(await readBody(request));
+        if (!input || Object.keys(input).some(k => !['session', 'request_id', 'state', 'note'].includes(k))) throw new Error('invalid review');
+        const result = await coordinator.review(input.session, input.request_id, { state: input.state, note: input.note });
+        return send(response, 200, { ok: true, result });
+      } catch { return send(response, 400, { ok: false, error: '对账复核参数无效或操作状态已变化。' }); }
+    }
 
     if (url.pathname === `${ROUTE_PREFIX}evidence` || url.pathname === `${ROUTE_PREFIX}evidence/read`) {
       if (!localCarrier(request)) return send(response, 403, { ok: false, error: '仅接受本机同源请求。' });
@@ -121,9 +194,9 @@ export function createHandler(config, transport, liveContext, diagnostics, repla
         if (request.method === 'POST') {
           const body = JSON.parse(await readBody(request));
           if (!body || Array.isArray(body) || typeof body.session !== 'string' || !body.session || body.session.length > 256
-            || Object.keys(body).some(key => !['session', 'l1_enabled', 'l2_enabled', 'l1_input_budget', 'l1_open_results_enabled', 'evidence_directory_enabled'].includes(key))
-            || !['l1_enabled', 'l2_enabled', 'l1_input_budget', 'l1_open_results_enabled', 'evidence_directory_enabled'].some(key => Object.hasOwn(body, key))
-            || ['l1_enabled', 'l2_enabled', 'l1_open_results_enabled', 'evidence_directory_enabled'].some(key => Object.hasOwn(body, key) && typeof body[key] !== 'boolean')
+            || Object.keys(body).some(key => !['session', 'l1_enabled', 'l2_enabled', 'l1_input_budget', 'l1_open_results_enabled', 'evidence_directory_enabled', 'adaptive_policy_enabled'].includes(key))
+            || !['l1_enabled', 'l2_enabled', 'l1_input_budget', 'l1_open_results_enabled', 'evidence_directory_enabled', 'adaptive_policy_enabled'].some(key => Object.hasOwn(body, key))
+            || ['l1_enabled', 'l2_enabled', 'l1_open_results_enabled', 'evidence_directory_enabled', 'adaptive_policy_enabled'].some(key => Object.hasOwn(body, key) && typeof body[key] !== 'boolean')
             || Object.hasOwn(body, 'l1_input_budget') && (!Number.isSafeInteger(body.l1_input_budget)
               || body.l1_input_budget < 0 || body.l1_input_budget > 9000000000000)) throw new Error('invalid automatic settings');
           const { session, ...changes } = body;
@@ -388,7 +461,7 @@ export function createHandler(config, transport, liveContext, diagnostics, repla
         const body = JSON.parse(await readBody(request));
         if (typeof body?.session !== 'string' || !body.session || body.session.length > 256 || Object.keys(body).some(key => key !== 'session'))
           throw new Error('session required');
-        return send(response, 200, { ok: true, result: await transport.call(body.session, 'policy_tick', { force: true }) });
+        return send(response, 200, { ok: true, result: await kernelWrite(body.session, 'policy_tick', { force: true }) });
       } catch (error) { return send(response, 400, { ok: false, error: String(error.message ?? error) }); }
     }
 
@@ -447,7 +520,7 @@ export function createHandler(config, transport, liveContext, diagnostics, repla
         const configuration = Object.fromEntries(Object.entries(body).filter(([key]) => key !== 'session'));
         if (Object.keys(configuration).length === 0) throw new Error('at least one quota setting is required');
         return send(response, 200, { ok: true, namespace: settings.namespace, session: body.session,
-          result: await transport.call(body.session, 'quota_configure', configuration) });
+          result: await kernelWrite(body.session, 'quota_configure', configuration) });
       } catch (error) {
         return send(response, 400, { ok: false, error: String(error?.message ?? error) });
       }
@@ -462,6 +535,8 @@ export function createHandler(config, transport, liveContext, diagnostics, repla
         return send(response, 400, { ok: false, error: 'events must be 1..2000' });
       try {
         const dashboard = await transport.call(session, 'dashboard', { events });
+        dashboard.ui_config = Object.fromEntries(['contextIntegration', 'requestAdmission', 'nativeEvidence', 'stageSummaries']
+          .map(key => [key, config[key] !== false]));
         dashboard.live_context = await liveContext?.read(session) ?? { current: null, last_request: null, source: 'unavailable' };
         dashboard.context_replacement = replacement?.read(session) ?? null;
         dashboard.session_bridge = sessionBridge?.status(session) ?? null;
@@ -486,6 +561,7 @@ export function createHandler(config, transport, liveContext, diagnostics, repla
           results: supplement[1].status === 'fulfilled' ? supplement[1].value?.results ?? [] : [],
           residency: dashboard.residency, compaction: dashboard.context_replacement });
         dashboard.activity.unavailable = supplement.flatMap((result, i) => result.status === 'rejected' ? [i ? 'results' : 'automation'] : []);
+        dashboard.workbench = await workbenchModel(session, dashboard, contextCatalog);
         return send(response, 200, { ok: true, namespace: settings.namespace, session, dashboard });
       } catch (error) {
         // A session with no vcontext pages yet is normal, not a route failure.
@@ -498,7 +574,7 @@ export function createHandler(config, transport, liveContext, diagnostics, repla
   };
 }
 
-export function mountRoutes(ctx, config, transport, liveContext, diagnostics, replacement, sessionBridge, resultProjection, resultJobs, sessionSnapshots, taskController, historyArchive, automation, evidenceDirectory) {
+export function mountRoutes(ctx, config, transport, liveContext, diagnostics, replacement, sessionBridge, resultProjection, resultJobs, sessionSnapshots, taskController, historyArchive, automation, evidenceDirectory, coordinator, contextCatalog) {
   const webServer = ctx.get('webServer');
   // The shipped web and desktop profiles always carry the HTTP carrier. A CLI
   // or SDK-only composition has none, and then there is simply no route to
@@ -506,5 +582,5 @@ export function mountRoutes(ctx, config, transport, liveContext, diagnostics, re
   // service-resolution waterfall and can corrupt the value other plugins read,
   // which is exactly what the real-SDK test caught.
   if (!webServer || typeof webServer.register !== 'function') return () => {};
-  return webServer.register({ kind: 'prefix', path: ROUTE_PREFIX.slice(0, -1), handler: createHandler(config, transport, liveContext, diagnostics, replacement, sessionBridge, resultProjection, resultJobs, sessionSnapshots, taskController, historyArchive, automation, evidenceDirectory) });
+  return webServer.register({ kind: 'prefix', path: ROUTE_PREFIX.slice(0, -1), handler: createHandler(config, transport, liveContext, diagnostics, replacement, sessionBridge, resultProjection, resultJobs, sessionSnapshots, taskController, historyArchive, automation, evidenceDirectory, coordinator, contextCatalog) });
 }

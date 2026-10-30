@@ -496,9 +496,10 @@ class StructuredState:
             if not current:
                 raise ValueError('path is not present in this session snapshot')
             row = self._resource(current['resource_id'], binding)
-        content = self._object_text(row['content_hash'])[offset:offset + limit]
-        return {'resource': self._resource_metadata(row), 'content': content, 'offset': offset,
-                'next_offset': offset + len(content), 'has_more': offset + len(content) < row['char_count']}
+        from .retrieval import bounded_text
+        metadata = self._resource_metadata(row)
+        return bounded_text(self._object_text(row['content_hash']), offset, limit,
+                            lambda content, page: dict(resource=metadata, content=content, **page))
 
     def resource_history(self, path, limit=20):
         self._binding()
