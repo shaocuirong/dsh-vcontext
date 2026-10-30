@@ -49,6 +49,9 @@ export function createControlCoordinator(ctx, transport, { access, signals } = {
       boundary = CONTROL_POLICY.actions[action]?.boundary, activate = true } = options;
     if (!CONTROL_POLICY.actions[action] || boundary !== CONTROL_POLICY.actions[action].boundary) fail('INVALID_INPUT');
     const control = AbortSignal.any([lifetime.signal, ...(signal ? [signal] : [])]);
+    // 新步骤可能赶上空闲期启动的短内核事务；等待它结束再重新验证，避免恢复计划被误记为 BUSY 失败。
+    // 宿主写仍直接互斥，不等待整轮后台工作，也不排队旧的宿主计划。
+    if (boundary === 'pre_step' && lockKinds.get(id) === 'background') await writes.get(id)?.catch(() => {});
     return exclusive(id, async () => {
       check(control);
       await reconcile(id, { agent, boundary, signal: control });

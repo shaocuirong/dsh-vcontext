@@ -37,6 +37,32 @@ test('同会话手动与后台写互斥，不排固定旧计划；其他会话�
   assert.equal((await f.coordinator.status('a')).pending.length, 0);
 });
 
+test('步骤边界恢复等待已开始的后台内核事务；取消后不执行恢复', async t => {
+  const f = await fixture(t), entered = deferred(), gate = deferred();
+  const background = f.coordinator.local('s', async () => {
+    entered.resolve(); await gate.promise;
+  }, undefined, { background: true });
+  await entered.promise;
+  let restored = false;
+  const restore = f.coordinator.execute('s', { action: 'project_result' }, async tx => {
+    await tx.intent(); restored = true; return 'restored';
+  });
+  // 先注册拒绝处理，保证旧实现的 BUSY 也由断言报告。
+  const result = restore.then(value => ({ value }), error => ({ error }));
+  await Promise.resolve(); assert.equal(restored, false);
+  gate.resolve(); await background;
+  assert.deepEqual(await result, { value: 'restored' });
+
+  const enteredAgain = deferred(), gateAgain = deferred(), cancellation = new AbortController();
+  const next = f.coordinator.local('s', async () => {
+    enteredAgain.resolve(); await gateAgain.promise;
+  }, undefined, { background: true });
+  await enteredAgain.promise;
+  const cancelled = f.coordinator.execute('s', { action: 'project_result', signal: cancellation.signal }, () => assert.fail());
+  const rejected = assert.rejects(cancelled, { code: 'CANCELLED' });
+  cancellation.abort(); gateAgain.resolve(); await next; await rejected;
+});
+
 test('后台需求合并、跨会话轮转、仅真实 admitted pre-step 执行步骤工作', async t => {
   const f = await fixture(t), order = [], entered = deferred(), gate = deferred();
   let activated = 0;
