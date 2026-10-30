@@ -1,6 +1,6 @@
 {
   "name": "dsh-virtual-context",
-  "version": "0.17.0",
+  "version": "0.18.0",
   "type": "module",
   "private": true,
   "description": "Persistent virtual context, configurable paging and in-session dashboards for DeepSeek Harness",
@@ -31,9 +31,13 @@
     "vcontext",
     "lib",
     "client",
+    "skills",
+    "examples",
     "cordis.patch.yml",
     "README.md",
     "CHANGELOG.md",
+    "CONTRIBUTING.md",
+    "pyproject.toml",
     "docs",
     "scripts",
     "LICENSE"

@@ -10,5 +10,5 @@ const result = await build({ entryPoints: [fileURLToPath(new URL('../client/inde
 const target = new URL('../lib/client.js', import.meta.url);
 const output = result.outputFiles[0].text;
 if (process.argv.includes('--check')) {
-  if (await readFile(target, 'utf8') !== output) throw new Error('客户端产物已过期，请运行 npm run build:client');
+  if ((await readFile(target, 'utf8')).replace(/\r\n/gu, '\n') !== output.replace(/\r\n/gu, '\n')) throw new Error('客户端产物已过期，请运行 npm run build:client');
 } else await writeFile(target, output, 'utf8');

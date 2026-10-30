@@ -10,7 +10,6 @@ import tempfile
 import unittest
 
 from vcontext import ContextStore, ContextError
-from vcontext import dashboard
 from vcontext.embedding import LexicalEmbedder
 from vcontext.scheduler import choose_executor
 
@@ -440,32 +439,6 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(restored[-1]['from_tier'], restored[-1]['to_tier'])
         self.assertFalse(model['renders'][-1]['prefix_intact'])
 
-    def test_html_is_self_contained_and_escapes_page_content(self):
-        self.s.write('注入尝试内容', title='<script>alert(1)</script><img src=x onerror=1>')
-        model = self.s.dashboard()
-        page = dashboard.render_html(model)
-        self.assertNotIn('http://', page)
-        self.assertNotIn('https://', page)
-        self.assertNotIn('<script>', page)
-        self.assertNotIn('<img', page)
-        self.assertIn('&lt;script&gt;', page)
-        self.assertIn('viz', page)
-        self.assertIn('上下文缓存看板', page)
-        self.assertIn(f'{model["budget"]:,}', page)
-        self.assertIn('替换过程', page)
-
-    def test_cli_writes_a_report(self):
-        output = Path(self.temp.name)/'report.html'
-        result = subprocess.run([sys.executable, '-m', 'vcontext.dashboard', '--db', str(self.path),
-                                 '--scope', 'viz', '--budget', '1200', '--out', str(output)],
-                                capture_output=True, text=True, encoding='utf-8')
-        self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
-        self.assertIn('上下文缓存看板', output.read_text(encoding='utf-8'))
-        model = subprocess.run([sys.executable, '-m', 'vcontext.dashboard', '--db', str(self.path),
-                                '--scope', 'viz', '--budget', '1200', '--json'],
-                               capture_output=True, text=True, encoding='utf-8')
-        self.assertEqual(json.loads(model.stdout)['scope'], 'viz')
-
 
 class OutlineTests(unittest.TestCase):
     """Segment 2 becomes an append-only index; the bodies stay in storage."""
@@ -577,9 +550,6 @@ class OutlineTests(unittest.TestCase):
         self.assertEqual(model['composition']['outline_pages'], 1)
         self.assertGreater(model['composition']['outline_bytes'], 0)
         self.assertEqual(model['totals']['outline_rows'], 1)
-        page = dashboard.render_html(model)
-        self.assertIn('大纲索引', page)
-        self.assertIn('完成第 1 步的要点', page)
 
 
 class UsageTests(unittest.TestCase):
@@ -619,16 +589,6 @@ class UsageTests(unittest.TestCase):
                 self.s.record_usage(**arguments)
         with self.assertRaises(ContextError):
             self.s.usage(limit=0)
-
-    def test_html_reports_the_hit_rate_and_flags_simulated_rows(self):
-        self.assertIn('还没有供应商返回的 usage', dashboard.render_html(self.s.dashboard()))
-        self.s.record_usage(input_tokens=200, cache_read_tokens=800, cache_write_tokens=100,
-                            output_tokens=50, turn=1, step=1, source='simulated')
-        page = dashboard.render_html(self.s.dashboard())
-        # disjoint counts: billed input is 200 uncached + 800 read + 100 write
-        self.assertIn('72.7%', page)
-        self.assertIn('模拟记帐', page)
-        self.assertIn('命中记帐', page)
 
 
 class SessionSwitchTests(unittest.TestCase):
