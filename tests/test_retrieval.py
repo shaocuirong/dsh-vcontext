@@ -51,6 +51,21 @@ class RetrievalTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'version changed'):
             self.call('source_read', ref=source['ref'], expected_source_version='sha256:' + '0' * 64)
 
+    def test_page_preview_is_paginated_versioned_and_does_not_change_storage(self):
+        body = '中文🙂' * 3000
+        page = self.store.write(body, tier='archive')['page']
+        item = next(row for row in self.store.dashboard()['pages'] if row['id'] == page['id'])
+        self.assertEqual(item['content_hash'], hashlib.sha256(body.encode()).hexdigest())
+        before = self.store.db.total_changes
+        first = self.call('page_preview', page_id=page['id'], version=page['version'])
+        second = self.call('page_preview', page_id=page['id'], version=page['version'], offset=first['next_offset'])
+        self.assertEqual(first['content'] + second['content'], body[:second['next_offset']])
+        self.assertTrue(first['has_more'])
+        self.assertEqual(self.store.db.total_changes, before)
+        self.assertEqual(self.store._head(page['id'])['tier'], 'archive')
+        with self.assertRaises(ValueError):
+            self.call('page_preview', page_id=page['id'], version=page['version'], limit=4097)
+
     def test_fixed_page_version_survives_new_versions_and_does_not_become_resident(self):
         first = self.store.write('original', tier='archive')['page']
         ref = f"vctx://page/{first['id']}/{first['version']}"

@@ -8,7 +8,7 @@ from .state import _integer, _json, _resource_id
 from .task_state import TaskState
 from .evidence import EvidenceNotes
 
-OPERATIONS = frozenset({'source_resolve', 'source_read', 'source_links'})
+OPERATIONS = frozenset({'source_resolve', 'source_read', 'source_links', 'page_preview'})
 MAX_BYTES = 131072
 MAX_CHARS = 65536
 
@@ -53,6 +53,18 @@ class RetrievalSources:
             raise ValueError('revision not found')
         data = json.loads(row['data'])
         return version, data
+
+    def page_preview(self, page_id, version, offset=0, limit=4096):
+        """只读固定版本正文，不触发访问记录、准入或驻留变化。"""
+        if not isinstance(page_id, str) or not re.fullmatch(r'[a-f0-9]{32}', page_id):
+            raise ValueError('invalid page id')
+        _integer(version, 'version', 1)
+        _integer(limit, 'limit', 1, 4096)
+        actual, data = self._page(page_id, version)
+        content = data['content']
+        digest = 'sha256:' + hashlib.sha256(content.encode('utf-8')).hexdigest()
+        return bounded_text(content, offset, limit, lambda part, page: dict(
+            page_id=page_id, version=actual, source_version=digest, content=part, **page))
 
     def source_resolve(self, ref=None, page_id=None, version=None):
         if page_id is not None:

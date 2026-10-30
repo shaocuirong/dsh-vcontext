@@ -596,8 +596,13 @@ class ContextStore:
         return dict(id=page_id, version=version, **json.loads(row[0]))
 
     @atomic
-    def history(self, page_id):
+    def history(self, page_id, limit=None):
         self._head(page_id)
+        if limit is not None:
+            if type(limit) is not int or not 1 <= limit <= 32:
+                raise ContextError('history limit must be 1..32')
+            return [dict(version=r[0], created=r[1]) for r in reversed(self.db.execute(
+                'SELECT version,created FROM revisions WHERE id=? ORDER BY version DESC LIMIT ?', (page_id, limit)).fetchall())]
         return [dict(version=r[0], created=r[1]) for r in self.db.execute(
             'SELECT version,created FROM revisions WHERE id=? ORDER BY version', (page_id,))]
 
@@ -986,6 +991,8 @@ class ContextStore:
             view = self._view(row)
             pages.append(dict(id=row['id'], title=view.get('title', ''), tier=row['tier'],
                               version=row['version'], bytes=self._page_bytes(row),
+                              content_hash=hashlib.sha256(view['content'].encode('utf-8')).hexdigest(),
+                              content_bytes=len(view['content'].encode('utf-8')),
                               importance=view.get('importance', 0.5), hits=row['hits'],
                               seq=row['seq'], mode='index' if row['outline'] else 'full',
                               summary=view.get('summary', ''),

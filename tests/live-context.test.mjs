@@ -5,6 +5,28 @@ import { SessionStore } from '@deepseek-ai/dsh-session';
 import { markAgentLoopRequest } from '@deepseek-ai/dsh-llm';
 import { createLiveContext, describeContext } from '../adapter/live-context.mjs';
 
+test('只有正常结束的主请求推进比较基准，失败与辅助调用不推进', async () => {
+  const root = new Context(), live = createLiveContext(root);
+  async function send(text, main, finish) {
+    const options = { sessionId: 's', messages: [{ role: 'user', content: text }] };
+    const stream = root.waterfall('llm/stream', main ? markAgentLoopRequest(options) : options,
+      () => (async function* () { if (finish) yield { type: 'finish', reason: { kind: finish } }; })());
+    for await (const _chunk of stream) { /* 消费回执。 */ }
+  }
+  try {
+    await send('first', true, 'stop');
+    const first = (await live.read('s')).last_successful_request;
+    assert.equal(first.window.delivery, 'confirmed');
+    await send('failed', true, 'error');
+    await send('auxiliary', false, 'stop');
+    assert.equal((await live.read('s')).last_successful_request.fingerprint, first.fingerprint);
+    await send('second', true, 'tool-calls');
+    const after = await live.read('s');
+    assert.equal(after.previous_successful_request.fingerprint, first.fingerprint);
+    assert.notEqual(after.last_successful_request.fingerprint, first.fingerprint);
+  } finally { await live.dispose(); await root.fiber.dispose(); }
+});
+
 test('observed trends are bounded, metadata-only and do not invent repeated refresh points', async () => {
   const root = new Context(); root.provide('sessions');
   let size = 1;

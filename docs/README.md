@@ -19,7 +19,7 @@
 - [v0.11 细粒度历史分页设计](architecture/HISTORY-PAGING-0.11.0.md)
 - [v0.12 可配置虚拟配额](architecture/QUOTA-0.12.0.md)
 - [v0.13 默认开启两层自动整理](architecture/AUTOMATION-0.13.0.md)
-- [v0.14 可视上下文看板](guides/UI.md#v014-实时观察台)
+- [上下文工作台与源码开发](guides/UI.md)
 - [v0.15 聊天工作预算与配额易用性](architecture/WORKING-BUDGET-0.15.0.md)
 - [v0.16 大工具结果与长任务](architecture/LONG-TASKS-0.16.0.md)
 - [v0.17 证据目录与三级来源摘要](architecture/EVIDENCE-0.17.0.md)

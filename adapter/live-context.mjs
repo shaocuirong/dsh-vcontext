@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { isAgentLoopRequest } from '@deepseek-ai/dsh-llm';
 import { readContextIntegration } from './context-integration.mjs';
 import { createSessionAccess } from './session/access.mjs';
+import { describeRequestWindow } from './request-window.mjs';
 
 // 只保留可展示的请求数据，排除连接配置、重放封套、取消信号与凭据。
 export function describeContext(messages, tools = [], route = {}) {
@@ -13,6 +14,7 @@ export function describeContext(messages, tools = [], route = {}) {
     message_count: messages.length, tool_count: tools.length, roles,
     bytes: Buffer.byteLength(serialized, 'utf8'),
     fingerprint: createHash('sha256').update(serialized).digest('hex'),
+    window: describeRequestWindow(serialized),
     provider: route.provider, model: route.model,
     preview: serialized.length <= 65536 ? serialized
       : serialized.slice(0, 32768) + '\n… 中间内容已省略 …\n' + serialized.slice(-32768),
@@ -24,6 +26,7 @@ export function createLiveContext(ctx, { diagnostics, contextIntegration = true,
   const access = suppliedAccess ?? createSessionAccess(ctx, { diagnostics });
   let disposed = false, disposal;
   const sent = new Map();
+  const successful = new Map();
   const auxiliary = new Map();
   const observations = new Map();
   let observationId = 0;
@@ -45,10 +48,16 @@ export function createLiveContext(ctx, { diagnostics, contextIntegration = true,
   const lifetime = new AbortController();
   const dispose = ctx.on('llm/stream', (options, next) => {
     if (disposed) return next();
+    let captured;
     try {
       if (typeof options.sessionId === 'string' && Array.isArray(options.messages)) {
         const snapshot = { ...describeContext(options.messages, options.tools, options), captured_at: Date.now() };
+        try {
+          const session = ctx.get('agents')?.get?.(options.sessionId)?.session ?? ctx.get('sessions')?.get?.(options.sessionId);
+          if (session) snapshot.meter = readContextIntegration(ctx, session, { enabled: contextIntegration, diagnostics });
+        } catch { /* 缺少同一时点的宿主计量时保留未知。 */ }
         if (isAgentLoopRequest(options)) {
+          captured = snapshot;
           sent.delete(options.sessionId);
           sent.set(options.sessionId, snapshot);
           remember(options.sessionId, snapshot, 'request');
@@ -64,7 +73,24 @@ export function createLiveContext(ctx, { diagnostics, contextIntegration = true,
     } catch {
       diagnostics?.record('context.capture.failed', 'warn', { error_type: 'Error' });
     }
-    return next();
+    const stream = next();
+    if (!captured || typeof stream?.[Symbol.asyncIterator] !== 'function') return stream;
+    return (async function* () {
+      let finished = false;
+      for await (const chunk of stream) {
+        if (!finished && !disposed && !options.signal?.aborted && chunk.type === 'finish'
+          && ['stop', 'tool-calls', 'max-tokens'].includes(chunk.reason?.kind)) {
+          finished = true;
+          captured.window.delivery = 'confirmed';
+          const previous = successful.get(options.sessionId)?.current ?? null;
+          successful.delete(options.sessionId);
+          successful.set(options.sessionId, { current: { fingerprint: captured.fingerprint, captured_at: captured.captured_at,
+            window: { delivery: 'confirmed', pages: captured.window.pages.map(({ id, content_hash }) => ({ id, content_hash })) } }, previous });
+          if (successful.size > 128) successful.delete(successful.keys().next().value);
+        }
+        yield chunk;
+      }
+    })();
   });
   function describe(sessionId, session, source, readError) {
     let current = null;
@@ -79,6 +105,8 @@ export function createLiveContext(ctx, { diagnostics, contextIntegration = true,
       diagnostics?.record('context.derive.failed', 'warn', { error_type: 'Error' });
     }
     return { current, last_request: sent.get(sessionId) ?? null, checked_at: Date.now(),
+      last_successful_request: successful.get(sessionId)?.current ?? null,
+      previous_successful_request: successful.get(sessionId)?.previous ?? null,
       ...(admission ? { admission: admission.status(sessionId) } : {}),
       auxiliary_calls: auxiliary.get(sessionId) ?? null,
       observations: structuredClone(observations.get(sessionId) ?? []),
@@ -108,7 +136,7 @@ export function createLiveContext(ctx, { diagnostics, contextIntegration = true,
       disposed = true;
       lifetime.abort();
       dispose();
-      sent.clear(); auxiliary.clear(); observations.clear();
+      sent.clear(); successful.clear(); auxiliary.clear(); observations.clear();
       disposal = (async () => {
         await Promise.allSettled([...pending.values()]);
         pending.clear();

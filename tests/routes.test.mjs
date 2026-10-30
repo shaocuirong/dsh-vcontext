@@ -9,6 +9,18 @@ import { once } from 'node:events';
 
 const CONFIG = { dbPath: join(tmpdir(), 'vctx-route-test.db'), namespace: 'project' };
 
+test('页面预览只接受固定版本和本机只读请求', async () => {
+  const calls = [], handler = createHandler(CONFIG, { async call(...args) { calls.push(args); return { content: '正文' }; } });
+  const id = 'a'.repeat(32);
+  const good = await invoke(handler, 'GET', `/vctx/page-preview?session=s&page_id=${id}&version=2&offset=12`);
+  assert.equal(good.body.result.content, '正文');
+  assert.deepEqual(calls[0], ['s', 'page_preview', { page_id: id, version: 2, offset: 12, limit: 4096 }]);
+  for (const query of [`page_id=${id}&version=0`, `page_id=${id}&version=1&offset=-1`, `page_id=${id}&version=1&extra=1`])
+    assert.equal((await invoke(handler, 'GET', `/vctx/page-preview?session=s&${query}`)).status, 400);
+  assert.equal((await invoke(handler, 'POST', '/vctx/page-preview')).status, 405);
+  assert.equal(calls.length, 1);
+});
+
 test('未决操作查询与人工复核只走本机同源入口，复核不执行宿主动作', async () => {
   const calls = [];
   const coordinator = { async status(id) { return { id, pending: [] }; },

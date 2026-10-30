@@ -18,6 +18,8 @@ import { createReplacement } from '../adapter/replacement.mjs';
 import { createTaskController } from '../adapter/task-controller.mjs';
 import { createHandler } from '../adapter/routes.mjs';
 import { createEvidenceDirectory } from '../adapter/evidence-directory.mjs';
+import { createContextCatalog } from '../adapter/control/catalog.mjs';
+import { markAgentLoopRequest } from '@deepseek-ai/dsh-llm';
 
 const directory = await mkdtemp(join(tmpdir(), 'vctx-dashboard-preview-'));
 const root = new Context(), sessions = new SessionStore(root);
@@ -78,12 +80,28 @@ const automation = createAutomation(root, transport, bridge, archive, async () =
 const projection = createResultProjection(root, transport, bridge), jobs = createResultJobs(projection);
 const replacement = createReplacement(root), tasks = createTaskController(root, transport, bridge);
 const evidence = createEvidenceDirectory(root, transport, archive);
-const handler = createHandler(settings, transport, live, undefined, replacement, bridge, projection, jobs, undefined, tasks, archive, automation, evidence);
+const catalog = createContextCatalog(transport, evidence);
+await transport.call(session.id, 'resource_store', { request_id: 'preview-resource', path: 'src/session.js', content: 'export const state = "演示快照";' });
+const prepared = await catalog.prepare(session.id);
+const fixtureStream = root.waterfall('llm/stream', markAgentLoopRequest({ sessionId: session.id,
+  messages: [...session.deriveMessages(), { role: 'user', content: prepared.text }], tools: [{ name: 'read', description: '读取文件' }] }),
+  () => (async function* () { yield { type: 'finish', reason: { kind: 'stop' } }; })());
+for await (const _chunk of fixtureStream) { /* 仅用于隔离预览的合成成功流。 */ }
+await catalog.delivered(session.id, prepared);
+const handler = createHandler(settings, transport, live, undefined, replacement, bridge, projection, jobs, undefined, tasks, archive, automation, evidence, undefined, catalog);
 const bundle = await build({ stdin: { contents: `import React from 'react'; import {createRoot} from 'react-dom/client';
-window.__ModuleLoader__={load(def){const module=def.factory(()=>React);createRoot(document.getElementById('app')).render(React.createElement(module.Dashboard,{sessionId:'dashboard-preview',prefs:{enabled:true,showTab:true,showPanel:true,showUsage:true,showLedger:true,events:200,refreshMs:1500}}));}};
+window.__ModuleLoader__={load(def){const module=def.factory(()=>React);const view=new URLSearchParams(location.search).get('view');createRoot(document.getElementById('app')).render(React.createElement(module.Dashboard,{sessionId:'dashboard-preview',initialTab:['actual','virtual','settings','actions','memory','monitor'].includes(view)?view:'actual',prefs:{enabled:true,showTab:true,showPanel:true,showUsage:true,showLedger:true,events:200,refreshMs:1500}}));}};
 const script=document.createElement('script');script.src='/client.js';document.head.appendChild(script);
 for(const [id,path] of [['page-out','out'],['new-message','new']]) document.getElementById(id).onclick=async()=>{const button=document.getElementById(id);button.disabled=true;document.getElementById('notice').textContent='正在操作隔离会话…';try{const response=await fetch('/preview/'+path,{method:'POST'});const data=await response.json();document.getElementById('notice').textContent=data.ok?'操作已完成，等待看板刷新。':data.error;}catch(error){document.getElementById('notice').textContent=error.message;}finally{button.disabled=false;}};
-document.getElementById('theme').onclick=()=>{document.body.classList.toggle('dark');};`,
+document.getElementById('theme').onclick=()=>{document.body.classList.toggle('dark');};
+if(new URLSearchParams(location.search).get('walk')==='first-page'){
+ let step=0,attempts=0;const walk=setInterval(()=>{
+   if(++attempts>100){clearInterval(walk);return;}
+   const tile=document.querySelector('.cv-tile button');if(!tile)return;
+   tile.click();step++;
+   if(new URLSearchParams(location.search).get('view')==='virtual'||step===2)clearInterval(walk);
+ },150);
+}`,
   resolveDir: dirname(fileURLToPath(new URL('../package.json', import.meta.url))), loader: 'js' }, bundle: true, write: false, format: 'iife' });
 let mutating = false;
 const server = createServer(async (req, res) => {
@@ -112,7 +130,7 @@ const server = createServer(async (req, res) => {
 server.listen(Number(process.env.PORT ?? 0), '127.0.0.1', () => console.log(`Dashboard preview: http://127.0.0.1:${server.address().port}`));
 async function close() {
   server.closeAllConnections(); server.close(); await automation.dispose(); await jobs.dispose(); await tasks.dispose(); await replacement.dispose();
-  await live.dispose(); await evidence.dispose(); await archive.dispose(); await bridge.dispose(); await transport.dispose(); await root.fiber.dispose(); await rm(directory, { recursive: true, force: true });
+  catalog.dispose(); await live.dispose(); await evidence.dispose(); await archive.dispose(); await bridge.dispose(); await transport.dispose(); await root.fiber.dispose(); await rm(directory, { recursive: true, force: true });
 }
 process.once('SIGINT', () => close().finally(() => process.exit()));
 process.once('SIGTERM', () => close().finally(() => process.exit()));

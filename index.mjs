@@ -15,7 +15,7 @@ export const name = 'virtual-context';
 export const inject = ['tools', 'agents', 'systemPrompt'];
 export function apply(ctx, config = {}) {
   const settings = resolveConfig(config);
-  const { transport, diagnostics, sessionAccess, coordinator, requestAdmission, sessionBridge, historyArchive, evidenceDirectory, refresh } = mount(ctx, settings, defineTool);
+  const { transport, diagnostics, sessionAccess, coordinator, requestAdmission, sessionBridge, historyArchive, evidenceDirectory, contextCatalog, refresh } = mount(ctx, settings, defineTool);
   const liveContext = createLiveContext(ctx, { diagnostics, contextIntegration: settings.contextIntegration, access: sessionAccess, admission: requestAdmission });
   const replacement = createReplacement(ctx, diagnostics, { access: sessionAccess, coordinator });
   const resultProjection = createResultProjection(ctx, transport, sessionBridge, diagnostics, settings, { coordinator, requestAdmission });
@@ -31,7 +31,7 @@ export function apply(ctx, config = {}) {
   ctx.effect(() => () => automation.dispose(), 'virtual-context: automatic residency');
   // 客户端通过路由读取看板，命令控制路由所报告的会话显示开关。
   ctx.inject(['webServer'], carrier => {
-    carrier.effect(() => mountRoutes(carrier, settings, transport, liveContext, diagnostics, replacement, sessionBridge, resultProjection, resultJobs, sessionSnapshots, taskController, historyArchive, automation, evidenceDirectory, coordinator), 'virtual-context: dashboard routes');
+    carrier.effect(() => mountRoutes(carrier, settings, transport, liveContext, diagnostics, replacement, sessionBridge, resultProjection, resultJobs, sessionSnapshots, taskController, historyArchive, automation, evidenceDirectory, coordinator, contextCatalog), 'virtual-context: dashboard routes');
   });
   ctx.inject(['commands'], carrier => {
     carrier.effect(() => mountCommand(carrier, settings, transport), 'virtual-context: command');

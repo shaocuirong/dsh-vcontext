@@ -112,7 +112,7 @@ test('adapter contract: tool execution, per-agent snapshots, resume, cleanup', a
   assert.equal(await handlers.get('agent/pre-step')({agent,signal},async()=>accepted),accepted);
   await assert.rejects(tools.get('vctx').execute({operation:'status',input:'{}'},{signal}),/calling agent/);
   await assert.rejects(tools.get('vctx').execute({operation:'state_sync',input:'{}'},{agent,signal}),/host-only/);
-  for (const operation of ['result_store', 'result_get', 'result_verify', 'result_find', 'result_mark', 'result_plan', 'result_plan_list', 'result_plan_finish',
+  for (const operation of ['page_preview', 'result_store', 'result_get', 'result_verify', 'result_find', 'result_mark', 'result_plan', 'result_plan_list', 'result_plan_finish',
     'result_upload_begin', 'result_upload_chunk', 'result_upload_finish', 'result_upload_abort', 'ved_note_store', 'ved_note_read', 'ved_note_list'])
     await assert.rejects(tools.get('vctx').execute({operation,input:'{}'},{agent,signal}),/host-only/);
   await assert.rejects(tools.get('vctx').execute({operation:'resource_store',input:JSON.stringify({source_revision:'working-tree:forged'})},{agent,signal}),/host-owned/);

@@ -6,6 +6,7 @@
 npm ci --ignore-scripts
 python -m unittest discover -s tests -v
 npm test
+npm run check:client
 ```
 
 默认离线核心不依赖模型供应商。请为数据持久化、换页、作用域或触发计数的改动补充回归测试，保留核心页保护、原文不丢失及每轮去重约束。

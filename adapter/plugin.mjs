@@ -326,7 +326,7 @@ export function mount(ctx, config, defineTool) {
       if (args.operation === 'stage_context') {
         return stageController.context(exec, input);
       }
-      if (args.operation.startsWith('source_') || args.operation.startsWith('control_') || args.operation.startsWith('catalog_') || args.operation.startsWith('effects_') || args.operation.startsWith('ved_') || args.operation.startsWith('auto_') || args.operation.startsWith('result_upload_') || ['state_bind', 'state_sync', 'result_store', 'result_get', 'result_verify', 'result_find', 'result_mark', 'result_plan', 'result_plan_list', 'result_plan_finish', 'task_review'].includes(args.operation)) throw new Error('host-only structured state operation');
+      if (args.operation.startsWith('source_') || args.operation.startsWith('control_') || args.operation.startsWith('catalog_') || args.operation.startsWith('effects_') || args.operation.startsWith('ved_') || args.operation.startsWith('auto_') || args.operation.startsWith('result_upload_') || ['page_preview', 'state_bind', 'state_sync', 'result_store', 'result_get', 'result_verify', 'result_find', 'result_mark', 'result_plan', 'result_plan_list', 'result_plan_finish', 'task_review'].includes(args.operation)) throw new Error('host-only structured state operation');
       if (args.operation === 'context_resolve') {
         if (Object.keys(input).some(k => k !== 'ref')) throw new Error('invalid context_resolve input');
         return resolver.resolve(exec.agent, input.ref, exec.signal);

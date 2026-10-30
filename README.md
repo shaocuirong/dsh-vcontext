@@ -50,64 +50,13 @@
 
 ## 界面预览
 
-### v0.14 实时上下文观察台
+开发分支的第一版上下文工作台已重新实现：窗口总览、页面矩形图、正文预览、内容变化、来源恢复与参数设置使用新的客户端模块。完整说明见 [UI 指南](docs/guides/UI.md)。
 
-首页直接显示派生上下文与模型请求趋势、真实替换前后差值、聊天/工具来源和恢复引用。变更记录可筛选、选中并回放，排队与未确认状态不计入收益；操作、任务和诊断独立分组。
+![上下文窗口](docs/images/workbench-actual.png)
 
-![上下文变化与替换过程](docs/images/dashboard-014.png)
+![虚拟上下文页面](docs/images/workbench-virtual.png)
 
-截图来自隔离演示会话，使用真实 SDK Surface 与临时数据库；不是用户会话，也没有真实供应商调用。开发者从源码运行 `npm run preview:dashboard` 可交互验证。
-
-
-以下截图来自独立预览，使用演示数据。它们不代表模型效果或真实供应商缓存收益。
-
-<details open>
-<summary>0.8.0 原生任务状态：目标、有效路径与可追溯进度</summary>
-
-![任务与执行状态](docs/images/tasks-080.png)
-
-0.8.1 修复任务修订不变时的审核过期刷新；列表和明细明确标记为上次手动读取。
-
-![资源变化后的当前审核过期](docs/images/tasks-081.png)
-
-</details>
-
-<details open>
-<summary>0.7.0 原生会话资源快照：固定目标与独立工作集</summary>
-
-![会话资源快照](docs/images/snapshot-070.png)
-
-![版本身份差异与本机诊断](docs/images/snapshot-070-controls.png)
-
-</details>
-
-<details open>
-<summary>0.6.0 原生可恢复投影：排队状态与摘要压缩分开</summary>
-
-![工具结果外置与恢复计划](docs/images/projection-060.png)
-
-</details>
-
-<details open>
-<summary>0.5.0 原生 Harness 结构化状态验收</summary>
-
-![版本化状态与会话索引](docs/images/state-050.png)
-
-</details>
-
-<details open>
-<summary>卡片式上下文缓存看板</summary>
-
-![上下文缓存看板](docs/images/dashboard.png)
-
-</details>
-
-<details>
-<summary>工作页归档设置（旧版截图）</summary>
-
-![上下文缓存设置](docs/images/settings.png)
-
-</details>
+截图使用真实 SDK Surface、合成内容与临时 SQLite，没有供应商调用。`npm run preview:dashboard` 启动隔离预览，`npm run build:client` 构建客户端，`npm run check:client` 校验源码与产物。正式发布版本仍以页面顶部版本为准。
 
 ## 安装到 Harness 桌面端
 

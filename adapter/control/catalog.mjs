@@ -12,6 +12,7 @@ export function adaptCatalog(id, evidence, resources) {
   const entries = evidence.items.filter(i => i.kind !== 'note').map(i => ({
     id: 'page:' + i.ref, kind: 'page', scope, source_ref: i.ref, source_type: i.kind,
     title: short(i.title, 100), excerpt: short(i.excerpt, 240), permission,
+    bytes: i.bytes ?? null,
     version_descriptor: { domain: 'host_history', scope, revision: { source_version: i.source_version,
       source_seq: i.source_seq ?? i.created_seq }, reproducibility: 'stored_snapshot' },
     freshness: 'unknown', applicability: 'historical_evidence',
@@ -23,6 +24,7 @@ export function adaptCatalog(id, evidence, resources) {
     id: 'resource:' + digest([scope.project_id, scope.session_id, resource.path]).slice(7, 39),
     kind: 'resource', scope, source_ref: resource.ref, source_type: 'registered_resource', path: resource.path,
     title: short(resource.path, 100), permission, version_descriptor: resource.version_descriptor,
+    bytes: resource.byte_count ?? resource.bytes ?? null,
     freshness: resource.currentness.freshness, freshness_reason: resource.currentness.reason,
     recovery: { operation: 'resource_read', input: { ref: resource.ref } },
     representations: [], dependencies: [], protection_basis: [],
@@ -158,7 +160,10 @@ export function createContextCatalog(transport, evidence, { guardStage = async (
     return resources;
   };
   const views = new Map();
+  const deliveries = new Map();
   return {
+    delivery(id) { return structuredClone(deliveries.get(id) ?? null); },
+    metrics(id) { return signals?.status(id) ?? { available: false }; },
     async read(id, signal) {
       const [legacy, resources] = await Promise.all([evidence.scan(id, signal), resourcesFor(id, {}, signal)]);
       return adaptCatalog(id, legacy, resources);
@@ -209,14 +214,20 @@ export function createContextCatalog(transport, evidence, { guardStage = async (
         stage_bytes: catalog.current_stage ? Buffer.byteLength(JSON.stringify(catalog.current_stage)) : 0 });
       views.delete(id); views.set(id, { version: baseline.version, text });
       if (views.size > 128) views.delete(views.keys().next().value);
-      return { text, baseline, generation: delivered.generation, refs };
+      return { text, baseline, generation: delivered.generation, refs,
+        sources: Object.fromEntries(catalog.entries.map(e => [e.id, e.version_descriptor.revision.source_version
+          ?? e.version_descriptor.revision.content_hash ?? null])) };
     },
     async delivered(id, prepared, signal) {
       const result = await call(id, 'catalog_delivered', { expected_generation: prepared.generation, baseline: prepared.baseline }, signal);
-      if (result.committed) signals?.delivered(id, prepared.refs ?? []);
+      if (result.committed) {
+        signals?.delivered(id, prepared.refs ?? []);
+        deliveries.delete(id); deliveries.set(id, { at: Date.now(), sources: prepared.sources ?? {}, refs: prepared.refs ?? [], coverage: prepared.baseline.coverage });
+        if (deliveries.size > 128) deliveries.delete(deliveries.keys().next().value);
+      }
       return result;
     },
-    forget(id) { views.delete(id); },
-    dispose() { views.clear(); },
+    forget(id) { views.delete(id); deliveries.delete(id); },
+    dispose() { views.clear(); deliveries.clear(); },
   };
 }
