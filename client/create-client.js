@@ -61,9 +61,9 @@ export default function createClient(resolve) {
     const slots = ctx.get('slots');
     if (!slots) return;
     const register = (name, options, Component) => ctx.effect(() => slots.inject(name, () => slots.register({ name, ...options }, Component)), `上下文工作台：${name}`);
-    register('conversation.view', { id: 'vcontext', order: 25, label: () => '上下文' }, props => h(Surface, props));
+    register('conversation.view', { id: 'vcontext', order: 25, label: () => '上下文工作台' }, props => h(Surface, props));
     register('sidebar.right.pane.tab', { key: 'vcontext' }, props => h(Surface, { ...props, sidebar: true }));
-    register('sidebar.right.pane.tab.title', { key: 'vcontext' }, () => '上下文');
+    register('sidebar.right.pane.tab.title', { key: 'vcontext' }, () => '上下文工作台');
     register('conversation.input.left', { id: 'vcontext', order: 40 }, SessionToggle);
     register('settings.section', { id: 'vcontext', order: 60, label: () => '上下文展示' }, Settings);
   }

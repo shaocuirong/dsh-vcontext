@@ -74,6 +74,19 @@ test('实际窗口展开请求页，捕获与成功交付分别表达', async ()
   assert.equal(map.props.children[0].props.className, 'cv-map-used');
 });
 
+test('低占用窗口默认展开分类，容量条保留真实比例并可切回完整窗口', async () => {
+  const r = renderer(), client = await load(r.React);
+  const live = { last_request: { meter: { composition: { total: 100, system: 20, tools: 30, user: 50 }, pressure: { window: 1000 } } } };
+  const render = () => client.ContextCanvas({ live });
+  let tree = await r.render(render);
+  assert.equal(find(tree, n => n.props.className === 'cv-map-used').props.style.width, '100%');
+  const meter = find(tree, n => n.props.role === 'meter');
+  assert.equal(meter.props['aria-valuenow'], 100); assert.equal(meter.props['aria-valuemax'], 1000);
+  assert.match(text(tree), /已用 10.0%/); assert.match(text(tree), /可用 90.0%/);
+  find(tree, n => n.type === 'button' && text(n) === '查看完整窗口').props.onClick(); tree = await r.render(render);
+  assert.equal(find(tree, n => n.props.className === 'cv-map-used').props.style.width, '10%');
+});
+
 test('统一页查看固定版本并按真实偏移翻页，正文标签按哈希比较', async () => {
   const r = renderer(), client = await load(r.React), calls = [];
   globalThis.fetch = async address => { calls.push(String(address)); const offset = Number(new URL(String(address), 'http://localhost').searchParams.get('offset')); return { ok: true, json: async () => ({ ok: true, result: { content: offset ? '后段' : '前段', offset, next_offset: offset + 3, total_chars: 6, has_more: offset === 0 } }) }; };
@@ -84,4 +97,20 @@ test('统一页查看固定版本并按真实偏移翻页，正文标签按哈�
   pages = [{ ...pages[0], content_hash: 'b'.repeat(64) }]; tree = await r.render(render); assert.match(text(tree), /内容变更/);
   find(tree, n => n.type === 'button' && n.props.title === '甲页').props.onClick(); tree = await r.render(render); assert.match(text(tree), /前段/); assert.match(calls[0], /version=3/);
   find(tree, n => n.type === 'button' && text(n) === '下一段').props.onClick(); tree = await r.render(render); assert.match(text(tree), /后段/); assert.match(calls[1], /offset=3/);
+});
+
+test('重复工具标题显示来源序号，大小未知的页仍可从列表选择读取', async () => {
+  const r = renderer(), client = await load(r.React), calls = [];
+  globalThis.fetch = async address => { calls.push(String(address)); return { ok: true, json: async () => ({ ok: true, result: { content: '固定来源正文', has_more: false } }) }; };
+  const pages = [10, 11].map(seq => ({ id: 'history-' + seq, source_type: 'history', source_seq: seq,
+    source_ref: `vctx://history/${'a'.repeat(16)}/${seq}`, title: 'vctx', bytes: seq === 10 ? 100 : null }));
+  const render = () => client.ContextCanvas({ sessionId: 's', pages, initialMode: 'virtual' });
+  let tree = await r.render(render);
+  assert.match(text(tree), /vctx · #10/);
+  assert.equal(all(tree).filter(n => n?.props?.className === 'cv-tile').length, 1);
+  find(tree, n => n.type === 'button' && text(n) === '页面列表 ☷').props.onClick();
+  tree = await r.render(render);
+  const row = all(tree).find(n => n?.props?.className === 'cv-page-row' && text(n).includes('#11'));
+  assert.ok(row); row.props.onClick(); tree = await r.render(render);
+  assert.match(text(tree), /固定来源正文/); assert.match(decodeURIComponent(calls[0]), /history\/aaaaaaaaaaaaaaaa\/11/);
 });

@@ -2,13 +2,13 @@
 
 **DeepSeek Harness 的虚拟上下文管理插件。** 保留可恢复原文，维护来源、版本和活动状态，按预算选择原文、引用或摘要，并通过圆角空间画布查看上下文。
 
-当前版本：**[v0.18.0](https://github.com/shaocuirong/dsh-vcontext/releases/tag/v0.18.0)** · [安装与升级](docs/INSTALL.md) · [使用说明](docs/guides/USAGE.zh-CN.md) · [API](docs/guides/API.md) · [更新日志](CHANGELOG.md)
+当前版本：**[v0.18.1](https://github.com/shaocuirong/dsh-vcontext/releases/tag/v0.18.1)** · [安装与升级](docs/INSTALL.md) · [使用说明](docs/guides/USAGE.zh-CN.md) · [API](docs/guides/API.md) · [更新日志](CHANGELOG.md)
 
 ![上下文工作台](docs/images/workbench-virtual.png)
 
 ## 这一版包含什么
 
-- **上下文工作台**：单一圆角画布、页级展开、右侧内容检查器、底部变化摘要；窄容器中使用内容抽屉。
+- **上下文工作台**：跟随宿主深浅色、紧凑顶部导航、页级矩形图与可读列表、右侧内容检查器；窄容器中使用模态抽屉。
 - **实际与虚拟上下文**：实际请求和已登记来源分别查看，支持固定版本原文、摘要、历史版本、新收入及内容变更标签。
 - **会话访问层**：统一活跃与冷会话读取、观察租约、取消与宿主写入口，读取不会隐式激活历史 Agent。
 - **上下文控制层**：统一目录、来源版本、依赖失效、保护依据、调度仲裁与提交对账；保留原文和恢复入口。
@@ -22,10 +22,10 @@
 
 要求 Node.js 22+、Python 3.10+ 和支持公开会话/维护接口的 DeepSeek Harness。基础 SDK 回归使用 `0.2.0-rc.2`；桌面可用性还取决于宿主版本。
 
-推荐从 [Release](https://github.com/shaocuirong/dsh-vcontext/releases/tag/v0.18.0) 下载安装包；也可使用固定版本源码：
+推荐从 [Release](https://github.com/shaocuirong/dsh-vcontext/releases/tag/v0.18.1) 下载安装包；也可使用固定版本源码：
 
 ```powershell
-git clone --branch v0.18.0 https://github.com/shaocuirong/dsh-vcontext.git
+git clone --branch v0.18.1 https://github.com/shaocuirong/dsh-vcontext.git
 cd dsh-vcontext
 dsh plugin --profile desktop add "link:$((Get-Location).Path)"
 ```

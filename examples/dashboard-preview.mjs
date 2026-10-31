@@ -72,6 +72,14 @@ for (const [title, tier] of [['任务约束与验收标准', 'core'], ['登录�
   seedPages.push((await transport.call(session.id, 'write', { title, tier, content: (title + ' · 演示证据\n').repeat(100) })).page);
 }
 const bridge = createSessionBridge(root, transport);
+if (process.env.VCTX_PREVIEW_DENSE === '1') {
+  const titles = ['连接层权限', '任务状态恢复', '来源版本核验', '工具结果分页', '配额与准入', '阶段摘要候选', '取消与迟到响应',
+    '变更观察账本', '命名空间隔离', '提交回执对账', '语义评审边界', '历史归档索引', '请求投影', '冷页恢复',
+    '工作树切换', '导航目录预算', '后台轮转', 'Unicode 响应', '资源快照', '原生来源证明', '运行观测'];
+  for (const [index, title] of titles.entries()) await transport.call(session.id, 'write', {
+    title, tier: 'archive', content: (`${title}\n\n记录已观察的证据和版本。固定来源仍可恢复，未验证的结论保持未知。\n`).repeat(4 + index * 2),
+  });
+}
 await bridge.sync(agent);
 const created = await transport.call(session.id, 'task_create', { request_id: 'preview-task', expected_revision: 0, title: '登录状态回归', goal: '确认上下文换出后仍可恢复证据。' });
 await transport.call(session.id, 'task_attach', { request_id: 'preview-attach', expected_revision: created.revision,
@@ -124,7 +132,7 @@ const server = createServer(async (req, res) => {
       } finally { mutating = false; }
     }
     res.setHeader('content-type', 'text/html;charset=utf-8');
-    res.end(`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>上下文观察台 · 隔离预览</title><style>body{margin:0;background:#f5f7fa;color:#172238;font-family:system-ui,'Segoe UI',sans-serif}.preview{max-width:1240px;margin:auto;padding:18px 30px 36px}.sandbox{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:28px;padding-bottom:14px;border-bottom:1px solid #dce3ec;font-size:11px;color:#68758b}.sandbox button{font:inherit;padding:6px 10px;background:white;border:1px solid #dce3ec;border-radius:6px;cursor:pointer}.dark{color-scheme:dark;background:#151a22;--dsh-surface:#1c2330;--dsh-text:#e2e9f2;--dsh-text-secondary:#9aa8ba;--dsh-border:#354052}@media(max-width:600px){.preview{padding:15px}.sandbox{margin-bottom:20px}}</style><body><main class="preview"><div class="sandbox"><span>隔离演示会话 · 原生 Surface + 临时数据库 · 无真实 API 调用</span><span><button id="new-message">增加工具结果</button> <button id="page-out">执行一次历史换出</button> <button id="theme">切换深浅色</button></span><span id="notice" role="status"></span></div><div id="app"></div></main><script src="/preview.js"></script></body></html>`);
+    res.end(`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>上下文观察台 · 隔离预览</title><style>body{margin:0;background:#f5f7fa;color:#172238;font-family:system-ui,'Segoe UI',sans-serif}.preview{max-width:1240px;margin:auto;padding:18px 30px 36px}.sandbox{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:28px;padding-bottom:14px;border-bottom:1px solid #dce3ec;font-size:11px;color:#68758b}.sandbox button{font:inherit;color:#243548;padding:6px 10px;background:white;border:1px solid #dce3ec;border-radius:6px;cursor:pointer}.dark{color-scheme:dark;background:#151a22;--dsh-surface:#1c2330;--dsh-text:#e2e9f2;--dsh-text-secondary:#9aa8ba;--dsh-border:#354052}@media(max-width:600px){.preview{padding:15px}.sandbox{margin-bottom:20px}}</style><body><main class="preview"><div class="sandbox"><span>隔离演示会话 · 原生 Surface + 临时数据库 · 无真实 API 调用</span><span><button id="new-message">增加工具结果</button> <button id="page-out">执行一次历史换出</button> <button id="theme">切换深浅色</button></span><span id="notice" role="status"></span></div><div id="app"></div></main><script src="/preview.js"></script></body></html>`);
   } catch (error) { res.writeHead(500); res.end(JSON.stringify({ ok: false, error: error.message })); }
 });
 server.listen(Number(process.env.PORT ?? 0), '127.0.0.1', () => console.log(`Dashboard preview: http://127.0.0.1:${server.address().port}`));

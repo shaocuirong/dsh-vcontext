@@ -115,7 +115,9 @@ export function createHandler(config, transport, liveContext, diagnostics, repla
           if (pageRef) result = await transport.call(session, 'page_preview', { page_id: pageRef[1], version: Number(pageRef[2]), offset: Number(offset), limit: 4096 });
           else if (/^vctx:\/\/resource\/[a-f0-9]{32}$/u.test(ref))
             result = await transport.call(session, 'resource_read', { ref, offset: Number(offset), limit: 4096 });
-          else if (/^vctx:\/\/(history\/[a-f0-9]{16}\/\d+|result\/[a-f0-9]{32})$/u.test(ref) && evidenceDirectory)
+          else if (/^vctx:\/\/history\/[a-f0-9]{16}\/\d+$/u.test(ref) && historyArchive)
+            result = await historyArchive.read(session, ref, Number(offset), 4096, null, null, true);
+          else if (/^vctx:\/\/result\/[a-f0-9]{32}$/u.test(ref) && evidenceDirectory)
             result = await evidenceDirectory.read(session, { ref, offset: Number(offset), limit: 4096 });
           else if (/^vctx:\/\/(summary|stage|evidence)\/[a-f0-9]{32}$/u.test(ref))
             result = await transport.call(session, 'source_read', { ref, offset: Number(offset), limit: 4096, max_bytes: 32768 });

@@ -8,7 +8,8 @@ export async function workbenchModel(session, dashboard, catalog) {
     for (const entry of directory.entries) {
       const version = entry.version_descriptor?.revision;
       const contentHash = version?.source_version ?? version?.content_hash;
-      pages.push({ id: entry.id, kind: entry.kind, title: entry.title, bytes: entry.bytes,
+      pages.push({ id: entry.id, kind: entry.kind, title: entry.title, excerpt: entry.excerpt, bytes: entry.bytes,
+        source_seq: version?.source_seq,
         content_hash: contentHash?.replace(/^sha256:/u, ''), source_ref: entry.source_ref,
         source_type: entry.source_type, path: entry.path, injection: delivery?.refs?.includes(entry.source_ref) ? 'reference'
           : entry.representations?.some(r => delivery?.refs?.includes(r.id) && r.coverage === 'complete' && !['stale', 'pending'].includes(r.freshness)) ? 'summary' : 'unknown',

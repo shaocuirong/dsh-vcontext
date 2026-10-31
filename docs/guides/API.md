@@ -42,7 +42,7 @@ HTTP 路由由宿主注册，服务于同源本机客户端。需要会话的查
 |---|---|---|
 | `/vctx/dashboard` | GET | `session, events`；当前看板、请求观察、统一目录、配置和回执 |
 | `/vctx/state`、`/vctx/session` | GET / POST | 查询和保存当前会话显示开关 |
-| `/vctx/page-preview` | GET | `session, page_id, version, offset` 或 `session, ref, offset`；固定版本正文，每次最多4096字符 |
+| `/vctx/page-preview` | GET | `session, page_id, version, offset` 或 `session, ref, offset`；固定版本正文，每次最多4096码点；历史归档采用消息阅读投影的独立偏移，不与 history_read 的 JSON 偏移混用 |
 | `/vctx/page-versions` | GET | `session` 加 `page_id` 或资源 `path`；最多32个版本入口 |
 | `/vctx/automation` | GET / POST | 两层开关、聊天预算、工具结果外置、目录注入、自适应策略 |
 | `/vctx/quota` | GET / POST | 会话/项目容量与高低水位 |

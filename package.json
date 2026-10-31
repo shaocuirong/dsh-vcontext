@@ -1,6 +1,6 @@
 {
   "name": "dsh-virtual-context",
-  "version": "0.18.0",
+  "version": "0.18.1",
   "type": "module",
   "private": true,
   "description": "Persistent virtual context, configurable paging and in-session dashboards for DeepSeek Harness",

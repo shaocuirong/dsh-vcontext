@@ -83,6 +83,16 @@ test('native Surface archive removes old chat and tool content while V4 replay k
   await assert.rejects(() => archive.read('different-session', result.ref), { code: 'NOT_FOUND' });
   const slice = await archive.read(agent.id, result.ref, 2, 10);
   assert.equal(slice.content.length, 10);
+  const display = await archive.read(agent.id, result.ref, 0, 65536, null, null, true);
+  assert.match(display.content, /用户 · 事件/);
+  assert.match(display.content, /调用 read/);
+  assert.match(display.content, /private tool result/);
+  assert.equal(display.source_version, read.content_hash);
+  assert.equal(display.display_format, 'messages');
+  const displaySlice = await archive.read(agent.id, result.ref, 2, 10, null, null, true);
+  assert.equal(displaySlice.content, Array.from(display.content).slice(2, 12).join(''));
+  assert.equal((await archive.read(agent.id, result.ref)).content, read.content);
+  assert.equal(JSON.stringify(session.snapshotEvents().slice(0, prefixLength)), prefix);
   const artifact = restoreReleasedV4Artifact({ header: structuredClone(session.header),
     events: structuredClone(session.snapshotEvents()), inheritedEventCount: session.inheritedEventCount },
   KNOWN_SESSION_EVENT_TYPES);

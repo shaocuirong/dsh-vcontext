@@ -21,6 +21,20 @@ test('页面预览只接受固定版本和本机只读请求', async () => {
   assert.equal(calls.length, 1);
 });
 
+test('历史页面预览使用独立阅读投影，固定工具结果仍走原恢复入口', async () => {
+  const calls = [];
+  const archive = { async read(...args) { calls.push(args); return { content: '用户 · 事件 3\n原始消息', next_offset: 20, truncated: true }; } };
+  const handler = createHandler(CONFIG, transport(), null, null, null, null, null, null, null, null, archive);
+  const ref = 'vctx://history/' + 'a'.repeat(16) + '/12';
+  const result = await invoke(handler, 'GET', `/vctx/page-preview?session=s&ref=${encodeURIComponent(ref)}&offset=7`);
+  assert.equal(result.status, 200); assert.equal(result.body.result.has_more, true);
+  assert.deepEqual(calls[0], ['s', ref, 7, 4096, null, null, true]);
+  const req = request('GET', `/vctx/page-preview?session=s&ref=${encodeURIComponent(ref)}`);
+  req.headers = { host: 'public.example' };
+  const res = response(); await handler(req, res);
+  assert.equal(res.captured.status, 403); assert.equal(calls.length, 1);
+});
+
 test('未决操作查询与人工复核只走本机同源入口，复核不执行宿主动作', async () => {
   const calls = [];
   const coordinator = { async status(id) { return { id, pending: [] }; },

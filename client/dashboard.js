@@ -19,12 +19,11 @@ export function createDashboard({ React, h, hooks, ui, views, panels, styles, qu
         : activityTab === 'memory' ? h('div', { className: 'cv-section-stack' }, h(panels.TaskPanel, common), h(panels.Snapshots, common))
           : activityTab === 'diagnostics' ? h('div', { className: 'cv-section-stack' }, ...[['宿主状态', model.session_bridge], ['调度遥测', model.workbench?.control], ['请求准入', model.live_context?.admission], ['供应商实际用量', model.usage], ['覆盖范围', model.workbench?.coverage]].map(([title, value]) => h(ui.Card, { key: title, title }, h(ui.Details, { value })))) : h(panels.Activity, { model }));
     return h('div', { 'data-vctx-dashboard': '', className: prefs.compact ? 'cv-compact' : '' }, h('style', null, styles),
-      h('div', { className: 'cv-layout' }, h('aside', { className: 'cv-sidebar' }, h('div', { className: 'cv-brand' }, h('span', null, '◫'), h('strong', null, 'Context')),
-        h('small', null, '工作空间'), h('nav', { 'aria-label': '工作台主导航' }, ...groups.map(([id, icon, title], index) => h('button', { type: 'button', key: id, 'aria-current': section === id ? 'page' : undefined,
-          onClick: () => setSection(id), onKeyDown: e => { if (!['ArrowDown', 'ArrowUp'].includes(e.key)) return; e.preventDefault(); const next = (index + (e.key === 'ArrowDown' ? 1 : 2)) % 3; setSection(groups[next][0]); e.currentTarget.parentElement.children[next].focus(); } }, h('span', null, icon), h('span', null, title)))),
-        h('div', { className: 'cv-sidebar-note' }, '当前会话', h('strong', null, sessionId))),
-      h('main', { className: 'cv-main' }, h('header', { className: 'cv-head' }, h('div', null, h('span', { className: 'cv-small' }, '工作空间 / 上下文'), h('h2', null, '上下文工作台')),
+      h('div', { className: 'cv-layout' }, h('main', { className: 'cv-main' }, h('header', { className: 'cv-head' }, h('div', null, h('h2', null, '上下文工作台'), h('span', { className: 'cv-small' }, '查看窗口占用，按来源恢复内容')),
         h('div', { className: 'cv-filter' }, h('span', { className: 'cv-small' }, time(state.at)), h(ui.Button, { onClick: state.refresh }, '刷新 ↻'))),
+        h('nav', { className: 'cv-topnav', 'aria-label': '工作台主导航' }, ...groups.map(([id, icon, title], index) => h('button', { type: 'button', key: id, 'aria-current': section === id ? 'page' : undefined,
+          onClick: () => setSection(id), onKeyDown: e => { if (!['ArrowRight', 'ArrowLeft', 'ArrowDown', 'ArrowUp'].includes(e.key)) return; e.preventDefault(); const next = (index + (['ArrowRight', 'ArrowDown'].includes(e.key) ? 1 : 2)) % 3; setSection(groups[next][0]); e.currentTarget.parentElement.children[next].focus(); } }, h('span', { 'aria-hidden': true }, icon), h('span', null, title))),
+          h('span', { className: 'cv-session', title: sessionId }, sessionId)),
         state.error && model && h('p', { className: 'cv-notice', role: 'status' }, `刷新失败，保留上次数据：${state.error}`), content)));
   };
 }

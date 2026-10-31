@@ -3,6 +3,7 @@ import { describeContext } from './live-context.mjs';
 import { segmentHistoryPages } from './history-segmenter.mjs';
 import { planHistoryPageOut, quotaTrial } from './history-planner.mjs';
 import { describeArchive } from './evidence-index.mjs';
+import { historyPreviewText } from './history-preview.mjs';
 
 const MAX_NODES = 256;
 const MAX_BYTES = 8 * 1024 * 1024;
@@ -594,7 +595,7 @@ export function createHistoryArchive(ctx, diagnostics, onAccess, { coordinator }
         }
       });
     },
-    async read(id, ref, offset = 0, limit = MAX_READ, seq = null, expectedContentHash = null) {
+    async read(id, ref, offset = 0, limit = MAX_READ, seq = null, expectedContentHash = null, display = false) {
       if (!validId(id) || typeof ref !== 'string' || !Number.isSafeInteger(offset) || offset < 0
         || !Number.isSafeInteger(limit) || limit < 1 || limit > MAX_READ
         || (seq !== null && seq !== undefined && !validSeq(seq))
@@ -643,11 +644,13 @@ export function createHistoryArchive(ctx, diagnostics, onAccess, { coordinator }
         if (!event || !VISIBLE.has(event.type)) fail('NOT_FOUND');
         return { seq: node, type: event.type, message: agent.session.deriveEventMessage(event) };
       });
-      const content = JSON.stringify({ ref, source });
-      checkHash(content);
+      const original = JSON.stringify({ ref, source });
+      const sourceVersion = checkHash(original);
+      const content = display ? historyPreviewText(source) : original;
       const response = paginateHistoryRead(content, offset, limit, (text, meta) => ({
         ref, offset, total: meta.total, content: text,
         content_hash: meta.contentHash, next_offset: meta.nextOffset, truncated: meta.truncated,
+        ...(display ? { source_version: sourceVersion, display_format: 'messages' } : {}),
       }));
       diagnostics?.record('context.history.read', 'debug', {
         session_hash: hash(id), content_chars: content.length,
