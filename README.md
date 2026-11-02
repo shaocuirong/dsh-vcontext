@@ -2,12 +2,13 @@
 
 **DeepSeek Harness 的虚拟上下文管理插件。** 保留可恢复原文，维护来源、版本和活动状态，按预算选择原文、引用或摘要，并通过圆角空间画布查看上下文。
 
-当前版本：**[v0.18.1](https://github.com/shaocuirong/dsh-vcontext/releases/tag/v0.18.1)** · [安装与升级](docs/INSTALL.md) · [使用说明](docs/guides/USAGE.zh-CN.md) · [API](docs/guides/API.md) · [更新日志](CHANGELOG.md)
+当前版本：**[v0.18.2](https://github.com/shaocuirong/dsh-vcontext/releases/tag/v0.18.2)** · [安装与升级](docs/INSTALL.md) · [使用说明](docs/guides/USAGE.zh-CN.md) · [API](docs/guides/API.md) · [更新日志](CHANGELOG.md)
 
 ![上下文工作台](docs/images/workbench-virtual.png)
 
 ## 这一版包含什么
 
+- **完整中文开发文档**：从零设计说明、每个目录/文件/方法参考、接口与数据定义，以及10篇论文的采纳点和差异；提供自动覆盖检查。
 - **上下文工作台**：跟随宿主深浅色、紧凑顶部导航、页级矩形图与可读列表、右侧内容检查器；窄容器中使用模态抽屉。
 - **实际与虚拟上下文**：实际请求和已登记来源分别查看，支持固定版本原文、摘要、历史版本、新收入及内容变更标签。
 - **会话访问层**：统一活跃与冷会话读取、观察租约、取消与宿主写入口，读取不会隐式激活历史 Agent。
@@ -22,10 +23,10 @@
 
 要求 Node.js 22+、Python 3.10+ 和支持公开会话/维护接口的 DeepSeek Harness。基础 SDK 回归使用 `0.2.0-rc.2`；桌面可用性还取决于宿主版本。
 
-推荐从 [Release](https://github.com/shaocuirong/dsh-vcontext/releases/tag/v0.18.1) 下载安装包；也可使用固定版本源码：
+推荐从 [Release](https://github.com/shaocuirong/dsh-vcontext/releases/tag/v0.18.2) 下载安装包；也可使用固定版本源码：
 
 ```powershell
-git clone --branch v0.18.1 https://github.com/shaocuirong/dsh-vcontext.git
+git clone --branch v0.18.2 https://github.com/shaocuirong/dsh-vcontext.git
 cd dsh-vcontext
 dsh plugin --profile desktop add "link:$((Get-Location).Path)"
 ```
@@ -72,7 +73,11 @@ npm run preview:dashboard
 
 ## 文档
 
+[从零理解设计](docs/DESIGN.md) · [每个目录、文件与方法](docs/reference/README.md) · [方法总索引](docs/reference/SYMBOLS.md) · [论文参考与代码对应](docs/REFERENCES.md)
+
 [架构](docs/ARCHITECTURE.md) · [界面](docs/guides/UI.md) · [当前验证记录](docs/VALIDATION.md) · [文档索引](docs/README.md) · [贡献说明](CONTRIBUTING.md)
+
+接口分为 [模型API](docs/guides/API.md)、[HTTP](docs/interfaces/HTTP.md)、[进程协议](docs/interfaces/PROTOCOL.md)、[配置](docs/interfaces/CONFIGURATION.md) 与 [数据定义](docs/interfaces/DATA.md)。逐文件参考包含内部方法、回调和测试辅助函数，由源码AST与人工中文说明组合，执行 `npm run docs:check` 可核对覆盖。
 
 维护契约保存在 [Session Access skill](skills/dsh-session-access/SKILL.md) 与 [上下文控制 skill](skills/dsh-context-control/SKILL.md)。旧版本记录可从 [GitHub Releases](https://github.com/shaocuirong/dsh-vcontext/releases) 或对应 Git 标签查看。
 
