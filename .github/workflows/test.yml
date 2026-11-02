@@ -25,6 +25,7 @@ jobs:
           cache: npm
       - run: npm ci --ignore-scripts
       - run: npm run check:release
+      - run: npm run docs:check
       - run: npm run doctor
       - run: python -m unittest discover -s tests -v
       - run: npm run check:client

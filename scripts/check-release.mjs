@@ -29,7 +29,11 @@ async function markdown(directory) {
 const files = ['README.md', 'CHANGELOG.md', 'CONTRIBUTING.md'].map(p => resolve(root, p));
 files.push(...await markdown(resolve(root, 'docs')), ...await markdown(resolve(root, 'skills')));
 for (const path of files) {
-  for (const match of (await readFile(path, 'utf8')).matchAll(/\[[^\]]*\]\(([^)]+)\)/gu)) {
+  // Source references include code samples that can look like Markdown links.
+  // Check prose links; do not interpret fenced or inline code as navigation.
+  const prose = (await readFile(path, 'utf8')).replace(/```[^\n]*\n[\s\S]*?```/gu, '')
+    .replace(/`[^`\n]*`/gu, '');
+  for (const match of prose.matchAll(/\[[^\]]*\]\(([^)]+)\)/gu)) {
     const href = match[1].replace(/^<|>$/gu, '').split('#')[0];
     if (!href || /^[a-z][a-z0-9+.-]*:/iu.test(href)) continue;
     await access(resolve(dirname(path), decodeURIComponent(href)));

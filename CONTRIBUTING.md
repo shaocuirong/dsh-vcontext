@@ -7,9 +7,16 @@ npm ci --ignore-scripts
 python -m unittest discover -s tests -v
 npm test
 npm run check:client
+npm run docs:check
 ```
 
 默认离线核心不依赖模型供应商。请为数据持久化、换页、作用域或触发计数的改动补充回归测试，保留核心页保护、原文不丢失及每轮去重约束。
+
+## 文档维护
+
+改动文件或方法后，更新 `scripts/document-notes.mjs` 中的文件职责、方法含义与参数解释，再运行 `npm run docs:build`。签名、直接返回路径、异常及调用从 Acorn/Python AST 提取，生成页在 `docs/reference/`。`npm run docs:check` 会重算并比较文件清单与全部输出，不能手改生成页来绕过源说明。
+
+新增模型操作需同步 API、宿主权限限制与操作实现映射；HTTP、协议、配置、数据字段分别更新 `docs/interfaces/`。设计依据应链接一手论文，标出版本、采用点及工程差异，不将论文实验结果写成本插件收益。当前使用说明可从 [文档入口](docs/README.md) 找到。
 
 界面改动请检查宽屏标签页与窄侧栏，并提供使用演示数据的截图。请勿提交真实会话、数据库、API Key、本地路径配置或模型权重。
 
